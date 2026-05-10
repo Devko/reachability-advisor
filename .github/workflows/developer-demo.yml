@@ -1,0 +1,41 @@
+name: developer-demo
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  reachability-advisor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -e .
+      - run: |
+          reachability-advisor scan \
+            --sbom samples/sboms/payments-api.cdx.json \
+            --sbom samples/sboms/notifier.cdx.json \
+            --sbom samples/sboms/orders-api.cdx.json \
+            --sbom samples/sboms/audit-api.cdx.json \
+            --vulns samples/vulnerabilities.json \
+            --terraform-plan samples/tfplan-multicloud.json \
+            --terraform-coverage-out outputs/terraform-coverage.json \
+            --source-root payments-api=samples/source/payments-api \
+            --source-root notifier=samples/source/notifier \
+            --source-root orders-api=samples/source/orders-api \
+            --source-root audit-api=samples/source/audit-api \
+            --out outputs/findings.json \
+            --sarif-out outputs/findings.sarif \
+            --markdown-out outputs/pr-summary.md \
+            --annotations-out outputs/annotations.txt \
+            --no-table
+      - run: cat outputs/annotations.txt
+      - run: cat outputs/pr-summary.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: outputs/findings.sarif

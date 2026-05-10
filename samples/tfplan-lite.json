@@ -1,0 +1,36 @@
+{
+  "format_version": "1.2",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "aws_ecs_task_definition.payments",
+          "type": "aws_ecs_task_definition",
+          "name": "payments",
+          "values": {
+            "container_definitions": "[{\"name\":\"payments-api\",\"image\":\"ghcr.io/acme/payments-api:1.2.3\"}]",
+            "tags": {"Environment": "prod", "Owner": "@team-payments"}
+          }
+        },
+        {
+          "address": "aws_security_group.public_api",
+          "type": "aws_security_group",
+          "name": "public_api",
+          "values": {"ingress": [{"cidr_blocks": ["0.0.0.0/0"], "from_port": 443, "to_port": 443}]}
+        },
+        {
+          "address": "aws_lambda_function.notifier",
+          "type": "aws_lambda_function",
+          "name": "notifier",
+          "values": {"function_name": "notifier", "image_uri": "ghcr.io/acme/notifier:0.9.0", "tags": {"Environment": "dev", "Owner": "@team-notifications"}}
+        },
+        {
+          "address": "aws_lambda_function_url.notifier",
+          "type": "aws_lambda_function_url",
+          "name": "notifier",
+          "values": {"function_name": "notifier", "authorization_type": "NONE"}
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,84 @@
+{
+  "schema_version": "1.0",
+  "purpose": "External validation corpus for Terraform HCL/static and Terraform-plan reachability coverage.",
+  "note": "The tool does not clone these projects automatically in unit tests. Use scripts/run_external_hcl_audit.sh in an environment with network access to clone and audit them.",
+  "projects": [
+    {
+      "id": "google-terraform-cloud-run-module",
+      "name": "GoogleCloudPlatform terraform-google-cloud-run",
+      "repo": "https://github.com/GoogleCloudPlatform/terraform-google-cloud-run.git",
+      "web": "https://github.com/GoogleCloudPlatform/terraform-google-cloud-run",
+      "path": ".",
+      "provider": "gcp",
+      "why_selected": "Popular Google Cloud Terraform module that creates Cloud Run service, domain mapping, and invoker IAM resources.",
+      "expected_resource_types": [
+        "google_cloud_run_service",
+        "google_cloud_run_domain_mapping",
+        "google_cloud_run_service_iam_member"
+      ],
+      "expected_static_limitations": [
+        "image is commonly a variable such as var.image until a concrete plan is generated",
+        "members may be variable-driven, so public invoker status can be unknown in static HCL mode"
+      ]
+    },
+    {
+      "id": "azure-container-apps-module",
+      "name": "Azure terraform-azure-container-apps",
+      "repo": "https://github.com/Azure/terraform-azure-container-apps.git",
+      "web": "https://github.com/Azure/terraform-azure-container-apps",
+      "path": ".",
+      "provider": "azure",
+      "why_selected": "Official Azure module for Container Apps with container image, ingress, identity, secrets, and environment shapes.",
+      "expected_resource_types": [
+        "azurerm_container_app",
+        "azurerm_container_app_environment",
+        "azurerm_log_analytics_workspace",
+        "azurerm_container_app_environment_dapr_component",
+        "azurerm_container_app_environment_storage"
+      ],
+      "expected_static_limitations": [
+        "container image and ingress usually come from nested each.value objects",
+        "dynamic blocks are not expanded in static HCL mode"
+      ]
+    },
+    {
+      "id": "aws-ia-ecs-fargate-module",
+      "name": "aws-ia terraform-aws-ecs-fargate",
+      "repo": "https://github.com/aws-ia/terraform-aws-ecs-fargate.git",
+      "web": "https://github.com/aws-ia/terraform-aws-ecs-fargate",
+      "path": ".",
+      "provider": "aws",
+      "why_selected": "AWS ECS/Fargate module shape that exercises ECS task/service, ALB, security group, and image URL patterns when planned.",
+      "expected_resource_types": [
+        "aws_ecs_task_definition",
+        "aws_ecs_service",
+        "aws_security_group",
+        "aws_lb",
+        "aws_lb_listener",
+        "aws_iam_role"
+      ],
+      "expected_static_limitations": [
+        "deploy/main.tf calls a local module, so a source-only audit of deploy/ primarily reports module expansion gaps",
+        "a full plan is needed to expand child module resources"
+      ]
+    },
+    {
+      "id": "gcp-ecommerce-gke-jss",
+      "name": "GoogleCloudPlatform terraform-ecommerce-microservices-on-gke",
+      "repo": "https://github.com/GoogleCloudPlatform/terraform-ecommerce-microservices-on-gke.git",
+      "web": "https://github.com/GoogleCloudPlatform/terraform-ecommerce-microservices-on-gke",
+      "path": "infra",
+      "provider": "gcp",
+      "why_selected": "Open Google Cloud Jump Start Solution with GKE clusters, service accounts, IAM grants, and public ecommerce deployment context.",
+      "expected_resource_types": [
+        "google_container_cluster",
+        "google_service_account",
+        "google_project_iam_member"
+      ],
+      "expected_static_limitations": [
+        "the application workloads are Kubernetes YAML / downstream deployment assets, not only Terraform resources",
+        "cluster reachability does not imply package reachability without SBOMs for individual microservices"
+      ]
+    }
+  ]
+}

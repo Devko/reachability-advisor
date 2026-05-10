@@ -1,0 +1,108 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.8.0",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "module.cloud_run.google_project_service.run[0]",
+          "mode": "managed",
+          "type": "google_project_service",
+          "name": "run",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "values": {
+            "service": "run.googleapis.com"
+          }
+        },
+        {
+          "address": "module.cloud_run.google_artifact_registry_repository.repo[0]",
+          "mode": "managed",
+          "type": "google_artifact_registry_repository",
+          "name": "repo",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "values": {
+            "repository_id": "audit-images",
+            "format": "DOCKER"
+          }
+        },
+        {
+          "address": "module.cloud_run.google_service_account.service_account[0]",
+          "mode": "managed",
+          "type": "google_service_account",
+          "name": "service_account",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "values": {
+            "account_id": "audit-api"
+          }
+        },
+        {
+          "address": "module.cloud_run.google_cloud_run_v2_service.this[0]",
+          "mode": "managed",
+          "type": "google_cloud_run_v2_service",
+          "name": "this",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "values": {
+            "name": "audit-api",
+            "ingress": "INGRESS_TRAFFIC_ALL",
+            "template": [
+              {
+                "containers": [
+                  {
+                    "image": "gcr.io/acme/audit-api:3.0.0"
+                  }
+                ]
+              }
+            ],
+            "labels": {
+              "environment": "prod",
+              "owner": "audit"
+            }
+          }
+        },
+        {
+          "address": "module.cloud_run.google_cloud_run_service_iam_member.public[0]",
+          "mode": "managed",
+          "type": "google_cloud_run_service_iam_member",
+          "name": "public",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "values": {
+            "service": "audit-api",
+            "role": "roles/run.invoker",
+            "member": "allUsers"
+          }
+        },
+        {
+          "address": "module.cloud_run.google_project_iam_member.secret_access[0]",
+          "mode": "managed",
+          "type": "google_project_iam_member",
+          "name": "secret_access",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "values": {
+            "role": "roles/secretmanager.secretAccessor",
+            "member": "serviceAccount:audit-api@example.iam.gserviceaccount.com"
+          }
+        },
+        {
+          "address": "module.cloud_run.google_secret_manager_secret.this[0]",
+          "mode": "managed",
+          "type": "google_secret_manager_secret",
+          "name": "this",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "values": {
+            "secret_id": "audit-token"
+          }
+        },
+        {
+          "address": "module.cloud_run.google_cloud_run_domain_mapping.this[0]",
+          "mode": "managed",
+          "type": "google_cloud_run_domain_mapping",
+          "name": "this",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "values": {
+            "name": "audit.example.com"
+          }
+        }
+      ]
+    }
+  }
+}

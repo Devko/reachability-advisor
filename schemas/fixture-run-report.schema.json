@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Reachability Advisor Fixture Run Report",
+  "type": "object",
+  "required": ["schema_version", "status", "fixture_count", "failed_count", "fixtures"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "status": {"type": "string", "enum": ["passed", "failed"]},
+    "fixture_count": {"type": "integer", "minimum": 0},
+    "failed_count": {"type": "integer", "minimum": 0},
+    "fixtures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "status", "coverage_summary", "assertions"],
+        "properties": {
+          "id": {"type": "string"},
+          "name": {"type": "string"},
+          "status": {"type": "string", "enum": ["passed", "failed"]},
+          "provider": {"type": ["string", "null"]},
+          "validation_issues": {"type": "array"},
+          "coverage_summary": {"type": "object"},
+          "finding_count": {"type": "integer", "minimum": 0},
+          "top_findings": {"type": "array"},
+          "assertions": {
+            "type": "object",
+            "required": ["passed", "failed"],
+            "properties": {
+              "passed": {"type": "array"},
+              "failed": {"type": "array"}
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

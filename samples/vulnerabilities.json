@@ -1,0 +1,109 @@
+{
+  "vulnerabilities": [
+    {
+      "id": "CVE-2021-44228",
+      "package": {
+        "name": "log4j-core",
+        "purl": "pkg:maven/org.apache.logging.log4j/log4j-core"
+      },
+      "affected_versions": [
+        "2.14.1"
+      ],
+      "severity": "critical",
+      "cvss": 10.0,
+      "epss": 0.94,
+      "known_exploited": true,
+      "fixed_versions": [
+        "2.17.1"
+      ],
+      "summary": "Log4j vulnerable lookup handling."
+    },
+    {
+      "id": "CVE-2021-23337",
+      "package": {
+        "name": "lodash",
+        "purl": "pkg:npm/lodash"
+      },
+      "affected_versions": [
+        "4.17.20"
+      ],
+      "severity": "high",
+      "cvss": 7.5,
+      "epss": 0.22,
+      "fixed_versions": [
+        "4.17.21"
+      ],
+      "summary": "Lodash command injection/prototype pollution advisory sample."
+    },
+    {
+      "id": "CVE-2020-7598",
+      "package": {
+        "name": "minimist",
+        "purl": "pkg:npm/minimist"
+      },
+      "affected_versions": [
+        "1.2.5"
+      ],
+      "severity": "medium",
+      "cvss": 5.3,
+      "epss": 0.01,
+      "fixed_versions": [
+        "1.2.6"
+      ],
+      "summary": "Minimist prototype pollution sample."
+    },
+    {
+      "id": "CVE-2018-10237",
+      "package": {
+        "name": "guava",
+        "purl": "pkg:maven/com.google.guava/guava"
+      },
+      "affected_versions": [
+        "28.0-jre"
+      ],
+      "severity": "high",
+      "cvss": 7.5,
+      "epss": 0.03,
+      "fixed_versions": [
+        "32.0.0-jre"
+      ],
+      "summary": "Guava sample vulnerability."
+    },
+    {
+      "id": "CVE-2018-18074",
+      "package": {
+        "name": "requests",
+        "purl": "pkg:pypi/requests"
+      },
+      "affected_versions": [
+        "2.19.0"
+      ],
+      "severity": "high",
+      "cvss": 7.5,
+      "epss": 0.15,
+      "known_exploited": false,
+      "fixed_versions": [
+        "2.20.0"
+      ],
+      "summary": "Requests credential disclosure advisory sample."
+    },
+    {
+      "id": "CVE-2019-12384",
+      "package": {
+        "name": "jackson-databind",
+        "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind"
+      },
+      "affected_versions": [
+        "2.9.9"
+      ],
+      "severity": "high",
+      "cvss": 8.1,
+      "epss": 0.31,
+      "known_exploited": false,
+      "fixed_versions": [
+        "2.9.9.1"
+      ],
+      "summary": "Jackson Databind deserialization advisory sample."
+    }
+  ]
+}

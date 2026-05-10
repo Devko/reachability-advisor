@@ -1,0 +1,27 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "name": "audit-api",
+      "version": "2.0.0",
+      "properties": [
+        {"name": "container:image", "value": "ghcr.io/acme/audit-api:2.0.0"},
+        {"name": "environment", "value": "prod"},
+        {"name": "owner", "value": "@team-platform"}
+      ]
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "group": "com.fasterxml.jackson.core",
+      "name": "jackson-databind",
+      "version": "2.9.9",
+      "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.9.9",
+      "scope": "runtime"
+    }
+  ]
+}

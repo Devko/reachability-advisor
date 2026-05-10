@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Reachability Advisor Findings",
+  "type": "object",
+  "required": ["metadata", "findings"],
+  "properties": {
+    "metadata": {"type": "object"},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["key", "artifact", "component", "vulnerability", "score", "tier", "source_reachability"],
+        "properties": {
+          "key": {"type": "string"},
+          "score": {"type": "number", "minimum": 0, "maximum": 100},
+          "tier": {"enum": ["urgent", "high", "medium", "low", "informational"]},
+          "artifact": {"type": "object"},
+          "component": {"type": "object"},
+          "vulnerability": {"type": "object"},
+          "source_reachability": {"type": "object"},
+          "context": {"type": "object"},
+          "rationale": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    }
+  }
+}

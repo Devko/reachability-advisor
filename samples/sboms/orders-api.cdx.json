@@ -1,0 +1,26 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "name": "orders-api",
+      "version": "3.4.0",
+      "properties": [
+        {"name": "container:image", "value": "ghcr.io/acme/orders-api:3.4.0"},
+        {"name": "environment", "value": "prod"},
+        {"name": "owner", "value": "@team-orders"}
+      ]
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "name": "requests",
+      "version": "2.19.0",
+      "purl": "pkg:pypi/requests@2.19.0",
+      "scope": "runtime"
+    }
+  ]
+}

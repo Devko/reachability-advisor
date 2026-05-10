@@ -1,0 +1,22 @@
+{
+  "artifacts": {
+    "payments-api": {
+      "environment": "prod",
+      "exposure": "public",
+      "privilege": "sensitive",
+      "criticality": "high",
+      "owner": "@team-payments",
+      "confidence": "high",
+      "evidence": ["public HTTPS API", "can read payment database secret"]
+    },
+    "notifier": {
+      "environment": "dev",
+      "exposure": "public",
+      "privilege": "limited",
+      "criticality": "medium",
+      "owner": "@team-notifications",
+      "confidence": "medium",
+      "evidence": ["public test Lambda URL"]
+    }
+  }
+}

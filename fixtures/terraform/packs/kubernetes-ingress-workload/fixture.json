@@ -1,0 +1,50 @@
+{
+  "schema_version": "3.0",
+  "id": "kubernetes-ingress-workload",
+  "name": "Kubernetes ingress workload fixture",
+  "provider": "kubernetes",
+  "module_reference": {
+    "name": "generic kubernetes provider ingress/workload pattern",
+    "source": "kubernetes_* provider resources",
+    "registry": "https://registry.terraform.io/providers/hashicorp/kubernetes/latest",
+    "upstream_note": "Reduced Kubernetes provider plan for Deployment, Service, Ingress, and RBAC shapes."
+  },
+  "fixture_kind": "sanitized module-shaped terraform-show-json plan",
+  "terraform_plan": "tfplan.json",
+  "sboms": [
+    "sboms/dashboard-api.cdx.json"
+  ],
+  "vulnerabilities": "../../common/vulnerabilities.json",
+  "source_roots": {
+    "dashboard-api": "source/dashboard-api"
+  },
+  "expected": {
+    "resource_accounting_coverage": 1.0,
+    "semantic_classification_coverage": 1.0,
+    "artifact_match_coverage": 1.0,
+    "min_findings": 1,
+    "must_match_artifacts": [
+      "dashboard-api"
+    ],
+    "required_resource_types": [
+      "kubernetes_deployment",
+      "kubernetes_service",
+      "kubernetes_ingress_v1",
+      "kubernetes_service_account",
+      "kubernetes_cluster_role_binding",
+      "kubernetes_namespace"
+    ],
+    "min_tier_by_finding": [
+      {
+        "artifact": "dashboard-api",
+        "component": "lodash",
+        "vulnerability": "CVE-2019-10744",
+        "tier": "urgent"
+      }
+    ]
+  },
+  "notes": [
+    "This fixture is reduced and sanitized. It models resource shapes emitted by common Terraform modules without vendoring module code.",
+    "It asserts 100% resource accounting and semantic classification for the resources included in the pack."
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Reachability Advisor Context",
+  "type": "object",
+  "properties": {
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "environment": {"type": "string"},
+          "exposure": {"type": "string"},
+          "privilege": {"type": "string"},
+          "criticality": {"type": "string"},
+          "owner": {"type": "string"},
+          "confidence": {"enum": ["high", "medium", "low"]},
+          "evidence": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    }
+  }
+}

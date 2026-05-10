@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Reachability Advisor Terraform Coverage Report",
+  "type": "object",
+  "required": ["schema_version", "summary", "manifest", "resources", "visibility_gaps"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "summary": {
+      "type": "object",
+      "required": ["total_resources", "accounted_resources", "resource_accounting_coverage", "semantic_classification_coverage"],
+      "properties": {
+        "total_resources": {"type": "integer", "minimum": 0},
+        "accounted_resources": {"type": "integer", "minimum": 0},
+        "resource_accounting_coverage": {"type": "number", "minimum": 0, "maximum": 1},
+        "semantically_classified_resources": {"type": "integer", "minimum": 0},
+        "semantic_classification_coverage": {"type": "number", "minimum": 0, "maximum": 1},
+        "unsupported_or_unclassified_resources": {"type": "integer", "minimum": 0},
+        "artifacts_requested": {"type": "integer", "minimum": 0},
+        "artifacts_matched": {"type": "integer", "minimum": 0},
+        "artifact_match_coverage": {"type": "number", "minimum": 0, "maximum": 1},
+        "providers_seen": {"type": "object"},
+        "categories_seen": {"type": "object"}
+      }
+    },
+    "manifest": {"type": "object"},
+    "resource_types_seen": {"type": "array", "items": {"type": "string"}},
+    "artifact_matches": {"type": "array", "items": {"type": "object"}},
+    "matched_artifacts": {"type": "array", "items": {"type": "string"}},
+    "unmatched_artifacts": {"type": "array", "items": {"type": "string"}},
+    "resources": {"type": "array", "items": {"type": "object"}},
+    "visibility_gaps": {"type": "array", "items": {"type": "object"}},
+    "notes": {"type": "array", "items": {"type": "string"}}
+  }
+}

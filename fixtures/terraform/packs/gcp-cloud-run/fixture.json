@@ -1,0 +1,49 @@
+{
+  "schema_version": "3.0",
+  "id": "gcp-cloud-run",
+  "name": "Google Cloud Run module fixture",
+  "provider": "gcp",
+  "module_reference": {
+    "name": "GoogleCloudPlatform/cloud-run/google",
+    "source": "GoogleCloudPlatform/cloud-run/google",
+    "registry": "https://registry.terraform.io/modules/GoogleCloudPlatform/cloud-run/google/latest",
+    "upstream_note": "The public module handles containerized Cloud Run services and IAM policy for the service."
+  },
+  "fixture_kind": "sanitized module-shaped terraform-show-json plan",
+  "terraform_plan": "tfplan.json",
+  "sboms": [
+    "sboms/audit-api.cdx.json"
+  ],
+  "vulnerabilities": "../../common/vulnerabilities.json",
+  "source_roots": {
+    "audit-api": "source/audit-api"
+  },
+  "expected": {
+    "resource_accounting_coverage": 1.0,
+    "semantic_classification_coverage": 1.0,
+    "artifact_match_coverage": 1.0,
+    "min_findings": 1,
+    "must_match_artifacts": [
+      "audit-api"
+    ],
+    "required_resource_types": [
+      "google_cloud_run_v2_service",
+      "google_cloud_run_service_iam_member",
+      "google_project_service",
+      "google_artifact_registry_repository",
+      "google_cloud_run_domain_mapping"
+    ],
+    "min_tier_by_finding": [
+      {
+        "artifact": "audit-api",
+        "component": "requests",
+        "vulnerability": "CVE-2023-32681",
+        "tier": "urgent"
+      }
+    ]
+  },
+  "notes": [
+    "This fixture is reduced and sanitized. It models resource shapes emitted by common Terraform modules without vendoring module code.",
+    "It asserts 100% resource accounting and semantic classification for the resources included in the pack."
+  ]
+}

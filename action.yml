@@ -1,0 +1,40 @@
+name: Reachability Advisor
+summary: Developer-first reachability-aware dependency vulnerability prioritization
+description: Runs Reachability Advisor and emits JSON, SARIF, Markdown, GitHub annotations, and optional Terraform coverage.
+inputs:
+  sbom:
+    description: CycloneDX SBOM path. For multiple SBOMs, call the CLI directly.
+    required: true
+  vulns:
+    description: Vulnerability intelligence JSON path.
+    required: true
+  source-root:
+    description: Optional artifact=path source-root mapping.
+    required: false
+  context:
+    description: Optional context JSON path.
+    required: false
+  terraform-plan:
+    description: Optional terraform show -json plan path.
+    required: false
+  fail-on-tier:
+    description: Optional tier threshold: urgent, high, medium, low, informational.
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: python -m pip install -e .
+    - shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p outputs
+        args=(scan --sbom "${{ inputs.sbom }}" --vulns "${{ inputs.vulns }}" --out outputs/reachability-findings.json --sarif-out outputs/reachability.sarif --markdown-out outputs/reachability-summary.md --annotations-out outputs/reachability-annotations.txt --no-table)
+        if [[ -n "${{ inputs.source-root }}" ]]; then args+=(--source-root "${{ inputs.source-root }}"); fi
+        if [[ -n "${{ inputs.context }}" ]]; then args+=(--context "${{ inputs.context }}"); fi
+        if [[ -n "${{ inputs.terraform-plan }}" ]]; then args+=(--terraform-plan "${{ inputs.terraform-plan }}" --terraform-coverage-out outputs/terraform-coverage.json); fi
+        if [[ -n "${{ inputs.fail-on-tier }}" ]]; then args+=(--fail-on-tier "${{ inputs.fail-on-tier }}"); fi
+        reachability-advisor "${args[@]}"
+        cat outputs/reachability-annotations.txt || true
+        cat outputs/reachability-summary.md >> "$GITHUB_STEP_SUMMARY" || true

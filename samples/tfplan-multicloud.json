@@ -1,0 +1,108 @@
+{
+  "format_version": "1.2",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "aws_ecs_task_definition.payments",
+          "type": "aws_ecs_task_definition",
+          "name": "payments",
+          "values": {
+            "container_definitions": "[{\"name\":\"payments-api\",\"image\":\"ghcr.io/acme/payments-api:1.2.3\"}]",
+            "tags": {"Environment": "prod", "Owner": "@team-payments"}
+          }
+        },
+        {
+          "address": "aws_security_group.public_api",
+          "type": "aws_security_group",
+          "name": "public_api",
+          "values": {"ingress": [{"cidr_blocks": ["0.0.0.0/0"], "from_port": 443, "to_port": 443}]}
+        },
+        {
+          "address": "aws_iam_role_policy.payments_secrets",
+          "type": "aws_iam_role_policy",
+          "name": "payments_secrets",
+          "values": {"name": "payments-secrets", "policy": "{\"Statement\": [{\"Effect\": \"Allow\", \"Action\": [\"secretsmanager:GetSecretValue\", \"s3:GetObject\"], \"Resource\": \"*\"}]}"}
+        },
+        {
+          "address": "aws_lambda_function.notifier",
+          "type": "aws_lambda_function",
+          "name": "notifier",
+          "values": {"function_name": "notifier", "image_uri": "ghcr.io/acme/notifier:0.9.0", "tags": {"Environment": "dev", "Owner": "@team-notifications"}}
+        },
+        {
+          "address": "aws_lambda_function_url.notifier",
+          "type": "aws_lambda_function_url",
+          "name": "notifier",
+          "values": {"function_name": "notifier", "authorization_type": "NONE"}
+        },
+        {
+          "address": "azurerm_container_app.orders",
+          "type": "azurerm_container_app",
+          "name": "orders",
+          "values": {
+            "name": "orders-api",
+            "template": [{"container": [{"name": "orders-api", "image": "ghcr.io/acme/orders-api:3.4.0"}]}],
+            "ingress": [{"external_enabled": true, "target_port": 8080}],
+            "tags": {"environment": "prod", "owner": "@team-orders"}
+          }
+        },
+        {
+          "address": "azurerm_role_assignment.orders_contributor",
+          "type": "azurerm_role_assignment",
+          "name": "orders_contributor",
+          "values": {"role_definition_name": "Contributor"}
+        },
+        {
+          "address": "azurerm_key_vault.orders",
+          "type": "azurerm_key_vault",
+          "name": "orders",
+          "values": {"name": "orders-kv", "tags": {"environment": "prod"}}
+        },
+        {
+          "address": "google_cloud_run_v2_service.audit",
+          "type": "google_cloud_run_v2_service",
+          "name": "audit",
+          "values": {
+            "name": "audit-api",
+            "template": [{"containers": [{"image": "ghcr.io/acme/audit-api:2.0.0"}]}],
+            "labels": {"environment": "prod", "owner": "@team-platform"}
+          }
+        },
+        {
+          "address": "google_cloud_run_service_iam_member.audit_public",
+          "type": "google_cloud_run_service_iam_member",
+          "name": "audit_public",
+          "values": {"service": "audit-api", "role": "roles/run.invoker", "member": "allUsers"}
+        },
+        {
+          "address": "google_project_iam_member.audit_secret",
+          "type": "google_project_iam_member",
+          "name": "audit_secret",
+          "values": {"role": "roles/secretmanager.secretAccessor", "member": "serviceAccount:audit@example.iam.gserviceaccount.com"}
+        },
+        {
+          "address": "google_secret_manager_secret.audit",
+          "type": "google_secret_manager_secret",
+          "name": "audit",
+          "values": {"secret_id": "audit-token"}
+        },
+        {
+          "address": "kubernetes_deployment.notifier",
+          "type": "kubernetes_deployment",
+          "name": "notifier",
+          "values": {
+            "metadata": [{"name": "notifier", "labels": {"environment": "dev", "owner": "@team-notifications"}}],
+            "spec": [{"template": [{"spec": [{"container": [{"name": "notifier", "image": "ghcr.io/acme/notifier:0.9.0"}]}]}]}]
+          }
+        },
+        {
+          "address": "kubernetes_service.notifier_public",
+          "type": "kubernetes_service",
+          "name": "notifier_public",
+          "values": {"type": "LoadBalancer", "metadata": [{"name": "notifier"}]}
+        }
+      ]
+    }
+  }
+}

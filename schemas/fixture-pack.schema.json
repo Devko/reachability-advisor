@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Reachability Advisor Terraform Fixture Pack",
+  "type": "object",
+  "required": ["schema_version", "id", "name", "provider", "terraform_plan", "sboms", "vulnerabilities", "expected"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "id": {"type": "string", "minLength": 1},
+    "name": {"type": "string", "minLength": 1},
+    "provider": {"type": "string", "enum": ["aws", "azure", "gcp", "kubernetes", "multicloud"]},
+    "module_reference": {
+      "type": "object",
+      "properties": {
+        "name": {"type": "string"},
+        "source": {"type": "string"},
+        "registry": {"type": "string"},
+        "upstream_note": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "fixture_kind": {"type": "string"},
+    "terraform_plan": {"type": "string"},
+    "sboms": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    "vulnerabilities": {"type": "string"},
+    "source_roots": {"type": "object", "additionalProperties": {"type": "string"}},
+    "expected": {
+      "type": "object",
+      "properties": {
+        "resource_accounting_coverage": {"type": "number", "minimum": 0, "maximum": 1},
+        "semantic_classification_coverage": {"type": "number", "minimum": 0, "maximum": 1},
+        "artifact_match_coverage": {"type": "number", "minimum": 0, "maximum": 1},
+        "min_findings": {"type": "integer", "minimum": 0},
+        "must_match_artifacts": {"type": "array", "items": {"type": "string"}},
+        "required_resource_types": {"type": "array", "items": {"type": "string"}},
+        "min_tier_by_finding": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["artifact", "component", "vulnerability", "tier"],
+            "properties": {
+              "artifact": {"type": "string"},
+              "component": {"type": "string"},
+              "vulnerability": {"type": "string"},
+              "tier": {"type": "string", "enum": ["informational", "low", "medium", "high", "urgent"]}
+            }
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "notes": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,12 @@
+{
+  "fail_on_tier": "high",
+  "exceptions": [
+    {
+      "vulnerability": "CVE-EXAMPLE-0001",
+      "artifact": "example-service",
+      "component": "example-lib",
+      "expires": "2026-12-31",
+      "reason": "Accepted by service owner while upgrade is validated."
+    }
+  ]
+}

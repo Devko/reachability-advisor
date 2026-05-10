@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/reachability-advisor/hcl-audit-report.schema.json",
+  "title": "Reachability Advisor Terraform HCL Static Audit Report",
+  "type": "object",
+  "required": ["schema_version", "mode", "root", "summary", "resource_types_seen", "coverage"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "mode": {"const": "hcl_static"},
+    "root": {"type": "string"},
+    "files": {"type": "array", "items": {"type": "string"}},
+    "summary": {
+      "type": "object",
+      "required": ["tf_files", "resource_blocks", "module_blocks", "data_blocks"],
+      "properties": {
+        "tf_files": {"type": "integer", "minimum": 0},
+        "resource_blocks": {"type": "integer", "minimum": 0},
+        "module_blocks": {"type": "integer", "minimum": 0},
+        "data_blocks": {"type": "integer", "minimum": 0},
+        "resource_types": {"type": "integer", "minimum": 0},
+        "literal_image_references": {"type": "integer", "minimum": 0},
+        "unresolved_image_references": {"type": "integer", "minimum": 0},
+        "module_expansion_gaps": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": true
+    },
+    "resource_types_seen": {"type": "array", "items": {"type": "string"}},
+    "resources": {"type": "array", "items": {"type": "object"}},
+    "modules": {"type": "array", "items": {"type": "object"}},
+    "data": {"type": "array", "items": {"type": "object"}},
+    "image_references": {
+      "type": "object",
+      "properties": {
+        "literal": {"type": "array", "items": {"type": "object"}},
+        "unresolved": {"type": "array", "items": {"type": "object"}}
+      },
+      "additionalProperties": true
+    },
+    "coverage": {"type": "object"},
+    "warnings": {"type": "array", "items": {"type": "string"}},
+    "notes": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": true
+}

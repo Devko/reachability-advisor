@@ -1,0 +1,30 @@
+{
+  "schema_version": "3.0",
+  "description": "Community Terraform fixture packs for Reachability Advisor. Packs are sanitized module-shaped plans, not vendored upstream Terraform modules.",
+  "packs": [
+    {
+      "id": "aws-ecs-fargate-service",
+      "path": "packs/aws-ecs-fargate-service",
+      "provider": "aws",
+      "name": "AWS ECS/Fargate service module fixture"
+    },
+    {
+      "id": "azure-container-apps",
+      "path": "packs/azure-container-apps",
+      "provider": "azure",
+      "name": "Azure Container Apps module fixture"
+    },
+    {
+      "id": "gcp-cloud-run",
+      "path": "packs/gcp-cloud-run",
+      "provider": "gcp",
+      "name": "Google Cloud Run module fixture"
+    },
+    {
+      "id": "kubernetes-ingress-workload",
+      "path": "packs/kubernetes-ingress-workload",
+      "provider": "kubernetes",
+      "name": "Kubernetes ingress workload fixture"
+    }
+  ]
+}
