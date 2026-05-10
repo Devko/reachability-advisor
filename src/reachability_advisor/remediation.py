@@ -82,6 +82,7 @@ def _group_to_json(key: str, findings: list[Finding]) -> dict[str, Any]:
             "environment": top.context.environment,
             "privilege": top.context.privilege,
             "criticality": top.context.criticality,
+            "iam_impacts": top.context.iam_impacts,
             "owner": top.context.owner,
         },
         "fix_available": bool(suggested_version),

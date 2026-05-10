@@ -46,7 +46,7 @@ Version matching is conservative. If a vulnerability record provides `affected_v
 
 ## Step 3: source reachability
 
-Source reachability is vulnerability-aware in v4. The analyzer receives the component and the matched vulnerability, then selects a rule by ecosystem, package, and optional vulnerability ID.
+Source reachability is vulnerability-aware. The analyzer receives the component and matched vulnerability, then selects a rule by ecosystem, package, and optional vulnerability ID.
 
 States:
 
@@ -113,6 +113,8 @@ Artifact-to-workload matching uses conservative evidence scores:
 | `name` / `artifact-name` | 45-52 | Weak name-only match. |
 
 Low-confidence matches are still visible. They do not silently become proof.
+
+Terraform context also combines network reachability and IAM. The analyzer links workload identities to IAM policies where the plan exposes task roles, instance profiles, service accounts, managed identities, or role assignments. It records impact classes such as `data_access`, `network_control`, `iam_escalation`, and `compute_control`; those impacts raise context criticality only after considering whether the workload is public, external, internal, or private.
 
 ## Step 6: mapping report
 

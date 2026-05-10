@@ -8,9 +8,9 @@ Reachability Advisor is prepared for transfer to an open foundation governance m
 - **Maintainers:** review code, documentation, tests, and release candidates.
 - **Contributors:** submit issues, docs, rules, tests, and code.
 
-## Proposed OWASP leader model
+## Maintainer placeholders
 
-The OWASP application pack proposes 2-5 foundation-recognized leaders, matching the current OWASP project policy requirement. Until accepted, placeholders are used:
+Initial maintainers can be named after the repository is public and the first contributor process is agreed:
 
 - Leader 1: TBD
 - Leader 2: TBD

@@ -6,7 +6,7 @@ The intent is not to become a CNAPP or live cloud inventory product. The tool re
 
 - whether an SBOM artifact appears to be deployed;
 - whether the deployment is likely public, external, internal, private, or unknown;
-- whether provider IAM hints suggest limited, sensitive, or admin blast radius;
+- whether linked workload IAM permissions suggest limited, sensitive, or admin blast radius;
 - whether tags or labels identify environment and owner;
 - which Terraform resources were semantically classified and which became visibility gaps.
 
@@ -14,7 +14,7 @@ The intent is not to become a CNAPP or live cloud inventory product. The tool re
 
 There are thousands of Terraform resource types and modules can create arbitrary provider shapes. A defensible pipeline/IDE tool should not pretend to understand all of them semantically.
 
-This project therefore uses two coverage concepts:
+This project uses two coverage concepts:
 
 1. **Resource accounting coverage:** every resource observed in the plan is parsed and represented in `--terraform-coverage-out`. This is expected to be `1.0` for every valid plan.
 2. **Semantic classification coverage:** the fraction of observed resources whose type appears in the declared support manifest below. Unsupported resources are reported as `visibility_gaps`, not treated as safe.
@@ -83,8 +83,14 @@ terraform show -json tfplan.binary > tfplan.json
 - Unsupported resource types become visibility gaps.
 - Helm and kubectl manifest wrappers are semantically classified as Kubernetes support resources, but still emit `opaque_manifest_wrapper` gaps because rendered child workloads are not inspected.
 - Public exposure is only raised when a supported resource provides a clear public signal linked to the matched workload. A public resource elsewhere in the same provider plan does not create provider-wide public context.
-- Supported linked public exposure currently includes AWS ECS security-group and load-balancer target-group links, AWS Lambda function URLs, GCP Cloud Run and Cloud Functions public invoker grants, Azure Container Apps external ingress, and Kubernetes Service/Ingress name or selector matches.
-- Privilege is coarse and explainable: `unknown`, `none`, `limited`, `sensitive`, `admin`.
+- Restricted external exposure is represented separately from public exposure when ingress is limited to specific public CIDRs or equivalent external-source signals.
+- Internal lateral exposure is raised from bounded graph paths such as security-group hops, private load balancer/application gateway forwarding, Kubernetes ClusterIP service matches, and provider bridge resources such as VPC/VNet peering, VPN, transit gateway, ExpressRoute, and Interconnect.
+- Network-reachable workloads with linked `admin_control`, `network_control`, or `iam_escalation` IAM impacts create an internal provider-control-plane pivot to private same-provider workloads.
+- IAM is evaluated per linked workload identity when Terraform exposes the relationship. The analyzer records impact classes for `data_access`, `network_control`, `iam_escalation`, `compute_control`, and `admin_control`; limited-looking permissions can still raise criticality when they expose secrets/data, network mutation, role escalation, or workload code execution.
+- IAM criticality is mixed with network reachability: critical impacts on public, external, or internal workloads become `high`; the same impact on a private-only workload becomes `medium`.
+- Private exposure means a workload is private-attached or public access is disabled without a detected bridge or ingress path.
+- Supported linked public exposure currently includes AWS ECS security-group and load-balancer target-group links, AWS target-group attachments, Azure application gateway/load-balancer backend pool paths through network interfaces, GCP forwarding-rule/backend-service/NEG paths, AWS Lambda function URLs, GCP Cloud Run and Cloud Functions public invoker grants, Azure Container Apps external ingress, and Kubernetes Service/Ingress name or selector matches.
+- Privilege is coarse and explainable: `unknown`, `none`, `limited`, `sensitive`, `admin`. Direct workload identity links and IAM impacts are recorded when visible; unrelated provider-level IAM no longer raises every workload in the same plan.
 - The tool never emits automatic `not_affected` claims.
 
 

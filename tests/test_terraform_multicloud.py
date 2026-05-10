@@ -17,6 +17,7 @@ from reachability_advisor.terraform import (
     classify_role_text,
     coverage_report,
     empty_coverage_report,
+    exposure_for_resource,
     extract_resources,
     find_image_references,
     image_matches,
@@ -145,14 +146,41 @@ class TerraformExposureTests(unittest.TestCase):
     def test_aws_security_group_private(self) -> None:
         r = self._tf_resource("aws_security_group", {"ingress": [{"cidr_blocks": ["10.0.0.0/8"]}]})
         self.assertFalse(is_public_exposure(r))
+        self.assertEqual(exposure_for_resource(r), "internal")
+
+    def test_aws_security_group_restricted_external_source(self) -> None:
+        r = self._tf_resource("aws_security_group", {"ingress": [{"cidr_blocks": ["8.8.8.8/32"]}]})
+        self.assertFalse(is_public_exposure(r))
+        self.assertEqual(exposure_for_resource(r), "external")
+
+    def test_aws_security_group_uses_highest_exposure_across_rules(self) -> None:
+        r = self._tf_resource(
+            "aws_security_group",
+            {"ingress": [{"cidr_blocks": ["10.0.0.0/8"]}, {"cidr_blocks": ["0.0.0.0/0"]}]},
+        )
+        self.assertTrue(is_public_exposure(r))
+        self.assertEqual(exposure_for_resource(r), "public")
 
     def test_azure_nsg_public(self) -> None:
         r = self._tf_resource("azurerm_network_security_rule", {"source_address_prefix": "Internet", "direction": "Inbound", "access": "Allow"})
         self.assertTrue(is_public_exposure(r))
 
+    def test_azure_nsg_uses_highest_exposure_across_rules(self) -> None:
+        r = self._tf_resource(
+            "azurerm_network_security_group",
+            {"security_rule": [{"source_address_prefix": "VirtualNetwork"}, {"source_address_prefix": "8.8.8.8/32"}]},
+        )
+        self.assertFalse(is_public_exposure(r))
+        self.assertEqual(exposure_for_resource(r), "external")
+
     def test_azure_nsg_deny_not_public(self) -> None:
         r = self._tf_resource("azurerm_network_security_rule", {"source_address_prefix": "*", "direction": "Inbound", "access": "Deny"})
         self.assertFalse(is_public_exposure(r))
+
+    def test_private_application_gateway_is_internal_not_public(self) -> None:
+        r = self._tf_resource("azurerm_application_gateway", {"frontend_ip_configuration": [{"private_ip_address": "10.0.1.5", "subnet_id": "subnet-appgw"}]})
+        self.assertFalse(is_public_exposure(r))
+        self.assertEqual(exposure_for_resource(r), "internal")
 
     def test_gcp_firewall_public(self) -> None:
         r = self._tf_resource("google_compute_firewall", {"source_ranges": ["0.0.0.0/0"], "direction": "INGRESS"})
@@ -161,6 +189,11 @@ class TerraformExposureTests(unittest.TestCase):
     def test_gcp_firewall_disabled_not_public(self) -> None:
         r = self._tf_resource("google_compute_firewall", {"source_ranges": ["0.0.0.0/0"], "disabled": True})
         self.assertFalse(is_public_exposure(r))
+
+    def test_gcp_internal_forwarding_rule_is_internal(self) -> None:
+        r = self._tf_resource("google_compute_forwarding_rule", {"load_balancing_scheme": "INTERNAL"})
+        self.assertFalse(is_public_exposure(r))
+        self.assertEqual(exposure_for_resource(r), "internal")
 
     def test_lambda_function_url_public(self) -> None:
         r = self._tf_resource("aws_lambda_function_url", {"function_name": "fn", "authorization_type": "NONE"})
@@ -173,6 +206,11 @@ class TerraformExposureTests(unittest.TestCase):
     def test_kubernetes_load_balancer_public(self) -> None:
         r = self._tf_resource("kubernetes_service", {"type": "LoadBalancer"})
         self.assertTrue(is_public_exposure(r))
+
+    def test_kubernetes_cluster_ip_internal(self) -> None:
+        r = self._tf_resource("kubernetes_service", {"type": "ClusterIP", "metadata": [{"name": "api"}]})
+        self.assertFalse(is_public_exposure(r))
+        self.assertEqual(exposure_for_resource(r), "internal")
 
 
 class TerraformPrivilegeTests(unittest.TestCase):
@@ -333,13 +371,13 @@ class TerraformBranchCoverageTests(unittest.TestCase):
         analysis = TerraformAnalyzer(data, [Artifact(name="orders-api")]).analyze()
         self.assertIn("orders-api", analysis.contexts)
 
-    def test_sensitive_resource_sets_limited_when_no_privilege_policy(self) -> None:
+    def test_sensitive_resource_without_linked_identity_does_not_raise_privilege(self) -> None:
         data = plan([
             resource("aws_lambda_function.app", "aws_lambda_function", {"function_name": "app", "image_uri": "repo/app:1"}),
             resource("aws_secretsmanager_secret.app", "aws_secretsmanager_secret", {"name": "secret"}),
         ])
         analysis = TerraformAnalyzer(data, [Artifact(name="app", reference="repo/app:1")]).analyze()
-        self.assertEqual(analysis.contexts["app"].privilege, "limited")
+        self.assertEqual(analysis.contexts["app"].privilege, "unknown")
 
     def test_unlinked_public_api_does_not_mark_lambda_public(self) -> None:
         data = plan([
@@ -357,6 +395,365 @@ class TerraformBranchCoverageTests(unittest.TestCase):
         analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
         self.assertEqual(analysis.contexts["app"].exposure, "public")
 
+    def test_ecs_service_linked_to_restricted_external_security_group_is_external(self) -> None:
+        data = plan([
+            resource("aws_security_group.external", "aws_security_group", {"id": "sg-external", "ingress": [{"cidr_blocks": ["8.8.8.8/32"]}]}),
+            resource("aws_ecs_service.app", "aws_ecs_service", {"name": "app", "network_configuration": [{"security_groups": ["sg-external"]}]}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "external")
+
+    def test_ecs_service_linked_to_private_security_group_is_internal(self) -> None:
+        data = plan([
+            resource("aws_security_group.internal", "aws_security_group", {"id": "sg-internal", "ingress": [{"cidr_blocks": ["10.0.0.0/8"]}]}),
+            resource("aws_ecs_service.app", "aws_ecs_service", {"name": "app", "network_configuration": [{"security_groups": ["sg-internal"]}]}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "internal")
+
+    def test_ecs_service_uses_security_group_rule_exposure(self) -> None:
+        cases = [
+            ("public", "0.0.0.0/0", "public"),
+            ("external", "8.8.8.8/32", "external"),
+            ("internal", "10.0.0.0/8", "internal"),
+        ]
+        for name, cidr, expected in cases:
+            with self.subTest(name=name):
+                data = plan([
+                    resource(f"aws_security_group_rule.{name}", "aws_security_group_rule", {"type": "ingress", "security_group_id": f"sg-{name}", "cidr_blocks": [cidr]}),
+                    resource("aws_ecs_service.app", "aws_ecs_service", {"name": "app", "network_configuration": [{"security_groups": [f"sg-{name}"]}]}),
+                ])
+                analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+                self.assertEqual(analysis.contexts["app"].exposure, expected)
+
+    def test_ecs_service_uses_public_and_internal_target_groups(self) -> None:
+        cases = [
+            ("public", False, "public"),
+            ("internal", True, "internal"),
+        ]
+        for name, internal, expected in cases:
+            with self.subTest(name=name):
+                data = plan([
+                    resource(f"aws_lb.{name}", "aws_lb", {"name": f"lb-{name}", "arn": f"lb-{name}", "internal": internal}),
+                    resource(f"aws_lb_target_group.{name}", "aws_lb_target_group", {"name": f"tg-{name}", "arn": f"tg-{name}"}),
+                    resource(f"aws_lb_listener.{name}", "aws_lb_listener", {"load_balancer_arn": f"lb-{name}", "default_action": [{"target_group_arn": f"tg-{name}"}]}),
+                    resource("aws_ecs_service.app", "aws_ecs_service", {"name": "app", "load_balancer": [{"target_group_arn": f"tg-{name}"}]}),
+                ])
+                analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+                self.assertEqual(analysis.contexts["app"].exposure, expected)
+
+    def test_public_lb_reaches_instance_through_target_group_attachment(self) -> None:
+        data = plan([
+            resource("aws_lb.public", "aws_lb", {"name": "lb-public", "arn": "lb-public", "internal": False}),
+            resource("aws_lb_target_group.app", "aws_lb_target_group", {"name": "tg-app", "arn": "tg-app"}),
+            resource("aws_lb_listener.app", "aws_lb_listener", {"load_balancer_arn": "lb-public", "default_action": [{"target_group_arn": "tg-app"}]}),
+            resource("aws_lb_target_group_attachment.app", "aws_lb_target_group_attachment", {"target_group_arn": "tg-app", "target_id": "i-app"}),
+            resource("aws_instance.app", "aws_instance", {"id": "i-app", "ami": "ami-1", "subnet_id": "subnet-private", "private_ip": "10.0.1.10"}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "public")
+        self.assertTrue(any("terraform network path: public" in item for item in analysis.contexts["app"].evidence))
+
+    def test_lambda_function_url_marks_matching_lambda_public(self) -> None:
+        data = plan([
+            resource("aws_lambda_function.app", "aws_lambda_function", {"function_name": "app", "image_uri": "repo/app:1"}),
+            resource("aws_lambda_function_url.app", "aws_lambda_function_url", {"function_name": "app", "authorization_type": "NONE"}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app", reference="repo/app:1")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "public")
+
+    def test_app_runner_false_public_access_is_internal(self) -> None:
+        data = plan([resource("aws_apprunner_service.app", "aws_apprunner_service", {"service_name": "app", "publicly_accessible": False})])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "internal")
+
+    def test_app_runner_default_public_access_is_public(self) -> None:
+        data = plan([resource("aws_apprunner_service.app", "aws_apprunner_service", {"service_name": "app"})])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "public")
+
+    def test_private_instance_with_vpc_peering_is_internal_lateral(self) -> None:
+        data = plan([
+            resource("aws_vpc_peering_connection.peer", "aws_vpc_peering_connection", {"id": "pcx-1"}),
+            resource("aws_instance.app", "aws_instance", {"ami": "ami-1", "subnet_id": "subnet-private", "private_ip": "10.0.1.10"}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "internal")
+
+    def test_private_instance_with_vpn_or_transit_is_internal_lateral(self) -> None:
+        for bridge_type in ("aws_vpn_connection", "aws_ec2_transit_gateway_vpc_attachment"):
+            with self.subTest(bridge_type=bridge_type):
+                data = plan([
+                    resource(f"{bridge_type}.bridge", bridge_type, {"id": "bridge-1"}),
+                    resource("aws_instance.app", "aws_instance", {"ami": "ami-1", "subnet_id": "subnet-private", "private_ip": "10.0.1.10"}),
+                ])
+                analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+                self.assertEqual(analysis.contexts["app"].exposure, "internal")
+
+    def test_private_instance_without_bridge_stays_private(self) -> None:
+        data = plan([
+            resource("aws_instance.app", "aws_instance", {"ami": "ami-1", "subnet_id": "subnet-private", "private_ip": "10.0.1.10"}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "private")
+
+    def test_unlinked_private_security_group_does_not_raise_private_instance(self) -> None:
+        data = plan([
+            resource("aws_security_group.internal", "aws_security_group", {"id": "sg-internal", "ingress": [{"cidr_blocks": ["10.0.0.0/8"]}]}),
+            resource("aws_instance.app", "aws_instance", {"ami": "ami-1", "subnet_id": "subnet-private", "private_ip": "10.0.1.10"}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "private")
+
+    def test_security_group_hop_from_public_host_is_internal_lateral(self) -> None:
+        data = plan([
+            resource("aws_security_group.web", "aws_security_group", {"id": "sg-web", "ingress": [{"cidr_blocks": ["0.0.0.0/0"]}]}),
+            resource("aws_security_group.db", "aws_security_group", {"id": "sg-db", "ingress": [{"source_security_group_id": "sg-web"}]}),
+            resource("aws_instance.web", "aws_instance", {"ami": "ami-1", "associate_public_ip_address": True, "security_group_ids": ["sg-web"]}),
+            resource("aws_instance.app", "aws_instance", {"ami": "ami-2", "security_group_ids": ["sg-db"]}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "internal")
+        self.assertTrue(any("terraform network path: internal" in item for item in analysis.contexts["app"].evidence))
+
+    def test_public_admin_workload_can_raise_private_peer_to_internal(self) -> None:
+        data = plan([
+            resource("aws_iam_role.admin", "aws_iam_role", {"name": "admin-role", "managed_policy_arns": ["arn:aws:iam::aws:policy/AdministratorAccess"]}),
+            resource("aws_instance.bastion", "aws_instance", {"ami": "ami-1", "associate_public_ip_address": True, "iam_instance_profile": "admin-role"}),
+            resource("aws_instance.app", "aws_instance", {"ami": "ami-2", "subnet_id": "subnet-private", "private_ip": "10.0.1.20"}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "internal")
+        self.assertTrue(any("IAM impact admin_control can alter provider network reachability" in item for item in analysis.contexts["app"].evidence))
+
+    def test_public_workload_with_limited_secret_read_is_critical_data_access(self) -> None:
+        data = plan([
+            resource("aws_secretsmanager_secret.db", "aws_secretsmanager_secret", {"name": "db", "arn": "arn:aws:secretsmanager:eu:123:secret:db"}),
+            resource("aws_iam_role.app", "aws_iam_role", {"name": "app-role"}),
+            resource(
+                "aws_iam_role_policy.secret",
+                "aws_iam_role_policy",
+                {
+                    "role": "app-role",
+                    "policy": {
+                        "Statement": [
+                            {
+                                "Effect": "Allow",
+                                "Action": "secretsmanager:GetSecretValue",
+                                "Resource": "arn:aws:secretsmanager:eu:123:secret:db",
+                            }
+                        ]
+                    },
+                },
+            ),
+            resource("aws_instance.app", "aws_instance", {"ami": "ami-1", "associate_public_ip_address": True, "iam_instance_profile": "app-role"}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        context = analysis.contexts["app"]
+        self.assertEqual(context.exposure, "public")
+        self.assertEqual(context.privilege, "sensitive")
+        self.assertEqual(context.criticality, "high")
+        self.assertIn("data_access", context.iam_impacts)
+        self.assertTrue(any("targets aws_secretsmanager_secret.db" in item for item in context.evidence))
+
+    def test_attached_customer_policy_inherits_per_resource_secret_access(self) -> None:
+        data = plan([
+            resource("aws_secretsmanager_secret.db", "aws_secretsmanager_secret", {"name": "db", "arn": "arn:aws:secretsmanager:eu:123:secret:db"}),
+            resource(
+                "aws_iam_policy.secret",
+                "aws_iam_policy",
+                {
+                    "name": "secret-read",
+                    "arn": "arn:aws:iam::123:policy/secret-read",
+                    "policy": {
+                        "Statement": [
+                            {
+                                "Effect": "Allow",
+                                "Action": "secretsmanager:GetSecretValue",
+                                "Resource": "arn:aws:secretsmanager:eu:123:secret:db",
+                            }
+                        ]
+                    },
+                },
+            ),
+            resource("aws_iam_role.app", "aws_iam_role", {"name": "app-role"}),
+            resource("aws_iam_role_policy_attachment.secret", "aws_iam_role_policy_attachment", {"role": "app-role", "policy_arn": "arn:aws:iam::123:policy/secret-read"}),
+            resource("aws_instance.app", "aws_instance", {"ami": "ami-1", "associate_public_ip_address": True, "iam_instance_profile": "app-role"}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        context = analysis.contexts["app"]
+        self.assertEqual(context.privilege, "sensitive")
+        self.assertEqual(context.criticality, "high")
+        self.assertTrue(any("aws_iam_policy.secret" in item and "targets aws_secretsmanager_secret.db" in item for item in context.evidence))
+
+    def test_limited_network_control_identity_creates_internal_pivot(self) -> None:
+        data = plan([
+            resource("aws_iam_role.net", "aws_iam_role", {"name": "net-role"}),
+            resource(
+                "aws_iam_role_policy.net",
+                "aws_iam_role_policy",
+                {
+                    "role": "net-role",
+                    "policy": {
+                        "Statement": [
+                            {
+                                "Effect": "Allow",
+                                "Action": "ec2:AuthorizeSecurityGroupIngress",
+                                "Resource": "*",
+                            }
+                        ]
+                    },
+                },
+            ),
+            resource("aws_instance.bastion", "aws_instance", {"ami": "ami-1", "associate_public_ip_address": True, "iam_instance_profile": "net-role"}),
+            resource("aws_instance.app", "aws_instance", {"ami": "ami-2", "subnet_id": "subnet-private", "private_ip": "10.0.1.20"}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="bastion"), Artifact(name="app")]).analyze()
+        self.assertEqual(analysis.contexts["bastion"].privilege, "sensitive")
+        self.assertEqual(analysis.contexts["bastion"].criticality, "high")
+        self.assertIn("network_control", analysis.contexts["bastion"].iam_impacts)
+        self.assertEqual(analysis.contexts["app"].exposure, "internal")
+        self.assertTrue(any("IAM impact network_control can alter provider network reachability" in item for item in analysis.contexts["app"].evidence))
+
+    def test_azure_application_gateway_reaches_vm_through_backend_pool_and_nic(self) -> None:
+        data = plan([
+            resource("azurerm_application_gateway.public", "azurerm_application_gateway", {"name": "gw", "backend_address_pool": [{"name": "pool-app"}]}),
+            resource(
+                "azurerm_network_interface_application_gateway_backend_address_pool_association.app",
+                "azurerm_network_interface_application_gateway_backend_address_pool_association",
+                {
+                    "backend_address_pool_id": "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/applicationGateways/gw/backendAddressPools/pool-app",
+                    "network_interface_id": "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkInterfaces/nic-app",
+                },
+            ),
+            resource("azurerm_linux_virtual_machine.app", "azurerm_linux_virtual_machine", {"name": "app", "network_interface_ids": ["/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkInterfaces/nic-app"]}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "public")
+
+    def test_gcp_global_forwarding_rule_reaches_cloud_run_through_backend_and_neg(self) -> None:
+        data = plan([
+            resource("google_compute_global_forwarding_rule.public", "google_compute_global_forwarding_rule", {"name": "fr", "target": "google_compute_backend_service.app"}),
+            resource("google_compute_backend_service.app", "google_compute_backend_service", {"name": "backend-app", "id": "google_compute_backend_service.app", "backend": [{"group": "google_compute_region_network_endpoint_group.app"}]}),
+            resource("google_compute_region_network_endpoint_group.app", "google_compute_region_network_endpoint_group", {"name": "neg-app", "id": "google_compute_region_network_endpoint_group.app", "cloud_run": {"service": "app"}}),
+            resource("google_cloud_run_v2_service.app", "google_cloud_run_v2_service", {"name": "app", "template": [{"containers": [{"image": "repo/app:1"}]}]}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app", reference="repo/app:1")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "public")
+
+    def test_azure_workload_identity_links_role_assignment_privilege(self) -> None:
+        data = plan([
+            resource("azurerm_linux_web_app.app", "azurerm_linux_web_app", {"name": "app", "identity": [{"type": "SystemAssigned", "principal_id": "pid-app"}]}),
+            resource("azurerm_role_assignment.app", "azurerm_role_assignment", {"principal_id": "pid-app", "role_definition_name": "Key Vault Secrets User"}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        self.assertEqual(analysis.contexts["app"].privilege, "sensitive")
+        self.assertTrue(any("terraform identity path" in item for item in analysis.contexts["app"].evidence))
+
+    def test_unlinked_identity_resource_name_does_not_grant_workload(self) -> None:
+        data = plan([
+            resource("azurerm_linux_web_app.owner", "azurerm_linux_web_app", {"name": "owner", "public_network_access_enabled": True}),
+            resource("azurerm_role_assignment.owner", "azurerm_role_assignment", {"role_definition_name": "Owner"}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="owner")]).analyze()
+        self.assertEqual(analysis.contexts["owner"].privilege, "unknown")
+        self.assertEqual(analysis.contexts["owner"].criticality, "unknown")
+
+    def test_aws_role_name_without_policy_does_not_grant_workload(self) -> None:
+        data = plan([
+            resource("aws_iam_role.admin", "aws_iam_role", {"name": "AdministratorAccess"}),
+            resource("aws_instance.app", "aws_instance", {"ami": "ami-1", "associate_public_ip_address": True, "iam_instance_profile": "AdministratorAccess"}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        self.assertEqual(analysis.contexts["app"].privilege, "unknown")
+        self.assertEqual(analysis.contexts["app"].criticality, "unknown")
+
+    def test_aws_role_inline_policy_grants_workload(self) -> None:
+        data = plan([
+            resource(
+                "aws_iam_role.app",
+                "aws_iam_role",
+                {
+                    "name": "app-role",
+                    "inline_policy": [
+                        {
+                            "name": "secret-read",
+                            "policy": {
+                                "Statement": [
+                                    {
+                                        "Effect": "Allow",
+                                        "Action": "secretsmanager:GetSecretValue",
+                                        "Resource": "*",
+                                    }
+                                ]
+                            },
+                        }
+                    ],
+                },
+            ),
+            resource("aws_instance.app", "aws_instance", {"ami": "ami-1", "associate_public_ip_address": True, "iam_instance_profile": "app-role"}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        self.assertEqual(analysis.contexts["app"].privilege, "sensitive")
+        self.assertIn("data_access", analysis.contexts["app"].iam_impacts)
+
+    def test_kubernetes_role_binding_name_without_subject_does_not_grant_workload(self) -> None:
+        data = plan([
+            resource(
+                "kubernetes_deployment.app",
+                "kubernetes_deployment",
+                {"metadata": [{"name": "app"}], "spec": [{"template": [{"spec": [{"container": [{"name": "app", "image": "repo/app:1"}]}]}]}]},
+            ),
+            resource(
+                "kubernetes_cluster_role_binding.app",
+                "kubernetes_cluster_role_binding",
+                {"metadata": [{"name": "app"}], "role_ref": {"name": "cluster-admin"}},
+            ),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app", reference="repo/app:1")]).analyze()
+        self.assertEqual(analysis.contexts["app"].privilege, "unknown")
+        self.assertEqual(analysis.contexts["app"].criticality, "unknown")
+
+    def test_azure_key_vault_policy_links_object_identity_and_target(self) -> None:
+        data = plan([
+            resource("azurerm_key_vault.vault", "azurerm_key_vault", {"name": "vault", "id": "/kv/vault"}),
+            resource("azurerm_linux_web_app.app", "azurerm_linux_web_app", {"name": "app", "identity": [{"type": "SystemAssigned", "principal_id": "pid-app"}], "public_network_access_enabled": True}),
+            resource(
+                "azurerm_key_vault_access_policy.app",
+                "azurerm_key_vault_access_policy",
+                {"object_id": "pid-app", "key_vault_id": "/kv/vault", "secret_permissions": ["Get"]},
+            ),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        context = analysis.contexts["app"]
+        self.assertEqual(context.privilege, "sensitive")
+        self.assertEqual(context.criticality, "high")
+        self.assertIn("data_access", context.iam_impacts)
+        self.assertTrue(any("targets azurerm_key_vault.vault" in item for item in context.evidence))
+
+    def test_instance_with_public_ip_is_public(self) -> None:
+        data = plan([
+            resource("aws_instance.app", "aws_instance", {"ami": "ami-1", "associate_public_ip_address": True, "subnet_id": "subnet-public"}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "public")
+
+    def test_instance_linked_to_private_security_group_is_internal(self) -> None:
+        data = plan([
+            resource("aws_security_group.internal", "aws_security_group", {"id": "sg-internal", "ingress": [{"cidr_blocks": ["10.0.0.0/8"]}]}),
+            resource("aws_instance.app", "aws_instance", {"ami": "ami-1", "security_group_ids": ["sg-internal"]}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "internal")
+
+    def test_launch_template_linked_to_restricted_external_security_group(self) -> None:
+        data = plan([
+            resource("aws_security_group.external", "aws_security_group", {"id": "sg-external", "ingress": [{"cidr_blocks": ["8.8.8.8/32"]}]}),
+            resource("aws_launch_template.app", "aws_launch_template", {"name": "app", "vpc_security_group_ids": ["sg-external"]}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "external")
+
     def test_ecs_task_definition_uses_linked_public_service(self) -> None:
         data = plan([
             resource("aws_security_group.public", "aws_security_group", {"id": "sg-public", "ingress": [{"cidr_blocks": ["0.0.0.0/0"]}]}),
@@ -365,6 +762,15 @@ class TerraformBranchCoverageTests(unittest.TestCase):
         ])
         analysis = TerraformAnalyzer(data, [Artifact(name="app", reference="repo/app:1")]).analyze()
         self.assertEqual(analysis.contexts["app"].exposure, "public")
+
+    def test_ecs_task_definition_uses_linked_internal_service(self) -> None:
+        data = plan([
+            resource("aws_security_group.internal", "aws_security_group", {"id": "sg-internal", "ingress": [{"cidr_blocks": ["10.0.0.0/8"]}]}),
+            resource("aws_ecs_task_definition.app", "aws_ecs_task_definition", {"family": "app", "container_definitions": "[{\"name\":\"app\",\"image\":\"repo/app:1\"}]"}),
+            resource("aws_ecs_service.app", "aws_ecs_service", {"name": "service", "task_definition": "app", "network_configuration": [{"security_groups": ["sg-internal"]}]}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app", reference="repo/app:1")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "internal")
 
     def test_aws_lb_internal_and_public(self) -> None:
         public = self._tf_resource("aws_lb", {"internal": False})
@@ -403,6 +809,16 @@ class TerraformBranchCoverageTests(unittest.TestCase):
         self.assertEqual(analysis.contexts["api"].exposure, "unknown")
         self.assertEqual(analysis.contexts["worker"].exposure, "unknown")
 
+    def test_kubernetes_cluster_ip_service_marks_matching_workload_internal(self) -> None:
+        service = resource("kubernetes_service.api", "kubernetes_service", {"type": "ClusterIP", "metadata": [{"name": "api"}], "selector": {"app": "api"}})
+        deployment = resource(
+            "kubernetes_deployment.api",
+            "kubernetes_deployment",
+            {"metadata": [{"name": "api"}], "spec": [{"template": [{"spec": [{"container": [{"name": "api", "image": "repo/api:1"}]}]}]}]},
+        )
+        analysis = TerraformAnalyzer(plan([service, deployment]), [Artifact(name="api", reference="repo/api:1")]).analyze()
+        self.assertEqual(analysis.contexts["api"].exposure, "internal")
+
     def test_azure_public_resources(self) -> None:
         for rtype in ("azurerm_public_ip", "azurerm_application_gateway", "azurerm_frontdoor_endpoint", "azurerm_cdn_frontdoor_endpoint"):
             self.assertTrue(is_public_exposure(self._tf_resource(rtype, {})))
@@ -411,6 +827,24 @@ class TerraformBranchCoverageTests(unittest.TestCase):
         data = plan([resource("azurerm_container_app.app", "azurerm_container_app", {"name": "app", "template": [{"container": [{"image": "repo/app:1"}]}], "ingress": {"external_enabled": True}})])
         analysis = TerraformAnalyzer(data, [Artifact(name="app", reference="repo/app:1")]).analyze()
         self.assertEqual(analysis.contexts["app"].exposure, "public")
+
+    def test_azure_container_app_internal_ingress(self) -> None:
+        data = plan([resource("azurerm_container_app.app", "azurerm_container_app", {"name": "app", "template": [{"container": [{"image": "repo/app:1"}]}], "ingress": {"external_enabled": False}})])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app", reference="repo/app:1")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "internal")
+
+    def test_azure_container_app_list_ingress_and_no_ingress(self) -> None:
+        cases = [
+            ("list", {"ingress": [{"external_enabled": False}]}, "internal"),
+            ("none", {"virtual_network_subnet_id": "subnet-private"}, "private"),
+        ]
+        for name, extra_values, expected in cases:
+            with self.subTest(name=name):
+                values = {"name": "app", "template": [{"container": [{"image": "repo/app:1"}]}]}
+                values.update(extra_values)
+                data = plan([resource("azurerm_container_app.app", "azurerm_container_app", values)])
+                analysis = TerraformAnalyzer(data, [Artifact(name="app", reference="repo/app:1")]).analyze()
+                self.assertEqual(analysis.contexts["app"].exposure, expected)
 
     def test_azapi_container_app_classifies_and_scores_context(self) -> None:
         data = plan(
@@ -426,8 +860,53 @@ class TerraformBranchCoverageTests(unittest.TestCase):
         self.assertEqual(analysis.coverage["summary"]["unsupported_or_unclassified_resources"], 0)
         self.assertEqual(analysis.contexts["app"].exposure, "public")
 
-    def test_azure_web_app_internal_when_public_access_disabled(self) -> None:
+    def test_azapi_container_app_internal_ingress(self) -> None:
+        data = plan(
+            [
+                resource(
+                    "azapi_resource.app",
+                    "azapi_resource",
+                    {"type": "Microsoft.App/containerApps@2023-05-01", "name": "app", "properties": {"template": {"containers": [{"image": "repo/app:1"}]}}, "ingress": {"external": False}},
+                )
+            ]
+        )
+        analysis = TerraformAnalyzer(data, [Artifact(name="app", reference="repo/app:1")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "internal")
+
+    def test_azapi_container_app_without_ingress_is_unknown_without_network_hint(self) -> None:
+        data = plan(
+            [
+                resource(
+                    "azapi_resource.app",
+                    "azapi_resource",
+                    {"type": "Microsoft.App/containerApps@2023-05-01", "name": "app", "properties": {"template": {"containers": [{"image": "repo/app:1"}]}}},
+                )
+            ]
+        )
+        analysis = TerraformAnalyzer(data, [Artifact(name="app", reference="repo/app:1")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "unknown")
+
+    def test_azure_vm_public_and_private(self) -> None:
+        cases = [
+            ("public", {"name": "app", "public_ip_address": "52.1.1.1"}, "public"),
+            ("private", {"name": "app", "virtual_network_subnet_id": "subnet-1"}, "private"),
+        ]
+        for name, values, expected in cases:
+            with self.subTest(name=name):
+                data = plan([resource("azurerm_linux_virtual_machine.app", "azurerm_linux_virtual_machine", values)])
+                analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+                self.assertEqual(analysis.contexts["app"].exposure, expected)
+
+    def test_azure_web_app_private_when_public_access_disabled_without_bridge(self) -> None:
         data = plan([resource("azurerm_linux_web_app.app", "azurerm_linux_web_app", {"name": "app", "public_network_access_enabled": False})])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "private")
+
+    def test_azure_web_app_internal_when_public_access_disabled_with_vnet_peering(self) -> None:
+        data = plan([
+            resource("azurerm_virtual_network_peering.peer", "azurerm_virtual_network_peering", {"name": "peer"}),
+            resource("azurerm_linux_web_app.app", "azurerm_linux_web_app", {"name": "app", "public_network_access_enabled": False}),
+        ])
         analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
         self.assertEqual(analysis.contexts["app"].exposure, "internal")
 
@@ -435,6 +914,52 @@ class TerraformBranchCoverageTests(unittest.TestCase):
         data = plan([resource("google_cloud_run_v2_service.app", "google_cloud_run_v2_service", {"name": "app", "template": [{"containers": [{"image": "repo/app:1"}]}], "ingress": "INGRESS_TRAFFIC_ALL"})])
         analysis = TerraformAnalyzer(data, [Artifact(name="app", reference="repo/app:1")]).analyze()
         self.assertEqual(analysis.contexts["app"].exposure, "external")
+
+    def test_gcp_cloud_run_ingress_internal(self) -> None:
+        data = plan([resource("google_cloud_run_v2_service.app", "google_cloud_run_v2_service", {"name": "app", "template": [{"containers": [{"image": "repo/app:1"}]}], "ingress": "INGRESS_TRAFFIC_INTERNAL_ONLY"})])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app", reference="repo/app:1")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "internal")
+
+    def test_gcp_cloud_run_public_invoker_and_private_fallback(self) -> None:
+        public_data = plan([
+            resource("google_cloud_run_v2_service.app", "google_cloud_run_v2_service", {"name": "app", "template": [{"containers": [{"image": "repo/app:1"}]}]}),
+            resource("google_cloud_run_v2_service_iam_member.app", "google_cloud_run_v2_service_iam_member", {"service": "app", "role": "roles/run.invoker", "member": "allUsers"}),
+        ])
+        public_analysis = TerraformAnalyzer(public_data, [Artifact(name="app", reference="repo/app:1")]).analyze()
+        self.assertEqual(public_analysis.contexts["app"].exposure, "public")
+
+        private_data = plan([resource("google_cloud_run_v2_service.app", "google_cloud_run_v2_service", {"name": "app", "template": [{"containers": [{"image": "repo/app:1"}]}], "vpc_access": {"connector": "projects/p/locations/r/connectors/c"}})])
+        private_analysis = TerraformAnalyzer(private_data, [Artifact(name="app", reference="repo/app:1")]).analyze()
+        self.assertEqual(private_analysis.contexts["app"].exposure, "private")
+
+    def test_gcp_cloud_run_links_service_account_iam_privilege(self) -> None:
+        data = plan([
+            resource("google_cloud_run_v2_service.app", "google_cloud_run_v2_service", {"name": "app", "template": [{"service_account": "svc@example.iam.gserviceaccount.com", "containers": [{"image": "repo/app:1"}]}]}),
+            resource("google_project_iam_member.secret", "google_project_iam_member", {"role": "roles/secretmanager.secretAccessor", "member": "serviceAccount:svc@example.iam.gserviceaccount.com"}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app", reference="repo/app:1")]).analyze()
+        self.assertEqual(analysis.contexts["app"].privilege, "sensitive")
+        self.assertTrue(any("terraform identity path" in item for item in analysis.contexts["app"].evidence))
+
+    def test_gcp_compute_instance_public_and_private(self) -> None:
+        cases = [
+            ("public", {"name": "app", "boot_disk": [], "network_interface": [{"access_config": [{}]}]}, "public"),
+            ("private", {"name": "app", "network_interface": [{"network": "default"}]}, "private"),
+        ]
+        for name, values, expected in cases:
+            with self.subTest(name=name):
+                data = plan([resource("google_compute_instance.app", "google_compute_instance", values)])
+                analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+                self.assertEqual(analysis.contexts["app"].exposure, expected)
+
+    def test_gcp_function_and_cluster_private_fallback(self) -> None:
+        function_data = plan([resource("google_cloudfunctions2_function.app", "google_cloudfunctions2_function", {"name": "app", "docker_repository": "repo/app:1", "vpc_connector": "connector-1"})])
+        function_analysis = TerraformAnalyzer(function_data, [Artifact(name="app", reference="repo/app:1")]).analyze()
+        self.assertEqual(function_analysis.contexts["app"].exposure, "private")
+
+        cluster_data = plan([resource("google_container_cluster.app", "google_container_cluster", {"name": "app", "network": "default"})])
+        cluster_analysis = TerraformAnalyzer(cluster_data, [Artifact(name="app")]).analyze()
+        self.assertEqual(cluster_analysis.contexts["app"].exposure, "private")
 
     def test_gcp_cloud_function_public_name(self) -> None:
         data = plan([

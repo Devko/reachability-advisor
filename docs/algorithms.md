@@ -109,9 +109,10 @@ Terraform evidence is derived from a local `terraform show -json` plan. The anal
 3. Classify the resource category if it appears in `TERRAFORM_COVERAGE_MANIFEST`: `workload`, `exposure`, `identity`, `sensitive_data`, or supporting context.
 4. Extract likely container image or artifact references from provider-specific and generic fields.
 5. Match those references against SBOM artifact candidates.
-6. Infer exposure from public network/API resources linked to the matched workload.
-7. Infer coarse privilege from IAM/role/policy resources.
-8. Emit coverage and mapping reports.
+6. Build a bounded network graph from ingress, load balancer, target attachment, gateway backend, service, security-group, private-network, and provider bridge edges.
+7. Infer exposure from graph paths linked to the matched workload.
+8. Infer direct workload identity privilege and IAM impact classes from IAM/role/policy resources, including targeted sensitive resources where visible. Unrelated provider-level IAM is not applied to every workload.
+9. Emit coverage and mapping reports.
 
 Helm and kubectl wrapper resources are classified as Kubernetes supporting
 resources, but they still emit `opaque_manifest_wrapper` visibility gaps because
@@ -128,7 +129,25 @@ Match scoring:
 | `repository-leaf` | 58 | low/medium | Last repository segment matches. |
 | `name` / `artifact-name` | 45-52 | low | Weak name-only match. |
 
-Exposure inference is deliberately linked instead of provider-wide. A public load balancer, API gateway, or ingress in the same Terraform plan does not automatically make every matched artifact public. Supported public links include AWS ECS services through public security groups or public load balancer target groups, AWS Lambda function URLs, GCP Cloud Run and Cloud Functions public invoker grants, Azure Container Apps external ingress, and Kubernetes Service/Ingress names or selectors.
+Exposure inference is deliberately linked instead of provider-wide. A public load balancer, API gateway, or ingress in the same Terraform plan does not automatically make every matched artifact public.
+
+Exposure tiers:
+
+| Tier | Meaning | Examples |
+|---|---|---|
+| `public` | Direct internet entrypoint. | Public IP assignment, public security group, internet-facing load balancer or application gateway, API gateway, CDN, unauthenticated Lambda function URL, public Cloud Run/Cloud Functions invoker, Kubernetes LoadBalancer/Ingress. |
+| `external` | Internet-routable or external-source access, but not open to the whole internet. | Security group or firewall restricted to a specific public CIDR, Cloud Run ingress that allows external traffic without public invoker evidence. |
+| `internal` | Private-network or lateral-movement path is visible. | Private CIDR/security-group ingress linked to the workload, internal load balancer or application gateway, Kubernetes ClusterIP linked by name or selector, VPC/VNet peering, VPN, transit gateway, ExpressRoute, or Interconnect. |
+| `private` | Workload has private network attachment or public access is disabled, but no bridge or ingress path is visible. | Private subnet-only VM, VPC-attached Lambda, Azure App Service with public network access disabled and no detected VNet bridge. |
+| `unknown` | The plan does not contain enough linked evidence. | Opaque module output, rendered Helm child resources unavailable, unsupported resource type. |
+
+The graph walks directed paths such as internet -> public security group -> workload, public load balancer -> target group -> target attachment -> workload, Azure application gateway -> backend pool -> network interface -> VM, GCP forwarding rule -> backend service -> network endpoint group -> Cloud Run service, Kubernetes Service/Ingress selector -> workload, and security group -> security group -> workload. Edges can cap exposure: a direct internet edge remains `public`, while a path that requires compromising one reachable workload before reaching another is capped at `internal`.
+
+IAM is combined with network reachability in three ways. First, workload identity references such as task roles, instance profiles, service accounts, managed identities, and role bindings add `limited`, `sensitive`, or `admin` privilege evidence to the matched artifact. Second, policies are classified into impact classes: `data_access`, `network_control`, `iam_escalation`, `compute_control`, and `admin_control`. Limited-looking permissions such as `secretsmanager:GetSecretValue`, `ec2:AuthorizeSecurityGroupIngress`, `iam:PassRole`, or workload update permissions can raise context criticality when the workload is reachable. Third, a network-reachable workload with `admin_control`, `network_control`, or `iam_escalation` can create an internal provider-control-plane pivot, raising private same-provider workloads to `internal` when the compromised identity can alter routes, security groups, policies, or attachments.
+
+IAM criticality is network-aware. Critical IAM impacts on public, external, or internal workloads raise context `criticality` to `high`; the same impact on a private-only workload raises it to `medium` because the blast radius is serious but the entry path is weaker. Targeted sensitive resources are recorded as evidence when Terraform exposes both the policy resource ARN/name and the sensitive resource. Identity resource names alone are not treated as permission evidence.
+
+Supported public links include AWS ECS services through public security groups or public load balancer target groups and target attachments, AWS Lambda function URLs, Azure application gateway or load balancer backend pool paths, GCP forwarding rule/backend service/NEG paths, GCP Cloud Run and Cloud Functions public invoker grants, Azure Container Apps external ingress, and Kubernetes Service/Ingress names or selectors. Provider-bridge lateral inference is limited to bridge resources such as peering, VPN, transit, ExpressRoute, and Interconnect; unrelated private resources do not make every workload internal.
 
 This is deployment context, not exploit proof. Unsupported resources and opaque rendered-manifest wrappers do not lower risk; they are reported as gaps.
 
@@ -144,6 +163,7 @@ Context may come from a small JSON file or from Terraform inference. The JSON fo
       "exposure": "public",
       "privilege": "sensitive",
       "criticality": "high",
+      "iam_impacts": ["data_access"],
       "owner": "@team-payments",
       "confidence": "high"
     }
@@ -166,7 +186,7 @@ score = severity
       + exposure points
       + environment points
       + privilege points
-      + criticality points
+      + network/IAM-derived criticality points
       - weak-evidence penalty
 ```
 

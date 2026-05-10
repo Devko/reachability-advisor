@@ -16,6 +16,7 @@ Design guarantees:
 from __future__ import annotations
 
 import json
+import ipaddress
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -122,13 +123,23 @@ TERRAFORM_COVERAGE_MANIFEST: tuple[ResourceSupport, ...] = (
             "aws_codedeploy_deployment_group",
             "aws_codepipeline",
             "aws_ecr_repository",
+            "aws_network_interface",
             "aws_lb_target_group",
+            "aws_lb_target_group_attachment",
             "aws_alb_target_group",
+            "aws_alb_target_group_attachment",
             "aws_vpc",
+            "aws_vpc_peering_connection",
             "aws_subnet",
             "aws_internet_gateway",
             "aws_nat_gateway",
             "aws_eip",
+            "aws_customer_gateway",
+            "aws_vpn_gateway",
+            "aws_vpn_connection",
+            "aws_ec2_transit_gateway",
+            "aws_ec2_transit_gateway_vpc_attachment",
+            "aws_ec2_transit_gateway_peering_attachment",
             "aws_route",
             "aws_route_table",
             "aws_default_route_table",
@@ -222,7 +233,15 @@ TERRAFORM_COVERAGE_MANIFEST: tuple[ResourceSupport, ...] = (
             "azurerm_private_dns_zone_virtual_network_link",
             "azurerm_private_dns_a_record",
             "azurerm_virtual_network",
+            "azurerm_virtual_network_peering",
+            "azurerm_virtual_network_gateway",
+            "azurerm_virtual_network_gateway_connection",
+            "azurerm_express_route_circuit",
+            "azurerm_express_route_connection",
             "azurerm_subnet",
+            "azurerm_network_interface",
+            "azurerm_network_interface_backend_address_pool_association",
+            "azurerm_network_interface_application_gateway_backend_address_pool_association",
             "azurerm_container_app_environment_dapr_component",
             "azurerm_container_app_environment_storage",
             "azurerm_log_analytics_solution",
@@ -308,12 +327,18 @@ TERRAFORM_COVERAGE_MANIFEST: tuple[ResourceSupport, ...] = (
             "google_project",
             "google_folder",
             "google_compute_network",
+            "google_compute_network_peering",
             "google_compute_subnetwork",
             "google_compute_global_address",
             "google_compute_region_network_endpoint_group",
             "google_compute_security_policy",
             "google_compute_shared_vpc_service_project",
+            "google_compute_vpn_gateway",
+            "google_compute_ha_vpn_gateway",
+            "google_compute_vpn_tunnel",
+            "google_compute_interconnect_attachment",
             "google_compute_router",
+            "google_compute_router_peer",
             "google_compute_router_nat",
             "google_dns_policy",
             "google_gke_hub_feature",
@@ -413,6 +438,55 @@ SENSITIVE_RESOURCE_TYPES = {
 OPAQUE_MANIFEST_WRAPPER_TYPES = {"helm_release", "kubectl_manifest"}
 
 PUBLIC_TOKEN_VALUES = {"0.0.0.0/0", "::/0", "*", "internet", "all", "allusers", "allauthenticatedusers"}
+INTERNAL_TOKEN_VALUES = {
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "virtualnetwork",
+    "vnet",
+    "vpc",
+    "private",
+    "privatelink",
+    "azureloadbalancer",
+    "vpn",
+    "onprem",
+    "on-prem",
+}
+NETWORK_BRIDGE_RESOURCE_TYPES = {
+    "aws_vpc_peering_connection",
+    "aws_customer_gateway",
+    "aws_vpn_gateway",
+    "aws_vpn_connection",
+    "aws_ec2_transit_gateway",
+    "aws_ec2_transit_gateway_vpc_attachment",
+    "aws_ec2_transit_gateway_peering_attachment",
+    "azurerm_virtual_network_peering",
+    "azurerm_virtual_network_gateway",
+    "azurerm_virtual_network_gateway_connection",
+    "azurerm_express_route_circuit",
+    "azurerm_express_route_connection",
+    "google_compute_network_peering",
+    "google_compute_shared_vpc_service_project",
+    "google_compute_vpn_gateway",
+    "google_compute_ha_vpn_gateway",
+    "google_compute_vpn_tunnel",
+    "google_compute_interconnect_attachment",
+    "google_compute_router_peer",
+}
+PRIVATE_NETWORK_RESOURCE_TYPES = {
+    "aws_vpc",
+    "aws_subnet",
+    "aws_network_interface",
+    "azurerm_virtual_network",
+    "azurerm_subnet",
+    "azurerm_network_interface",
+    "azurerm_private_endpoint",
+    "google_compute_network",
+    "google_compute_subnetwork",
+    "google_vpc_access_connector",
+}
+CRITICAL_IAM_IMPACTS = {"admin_control", "iam_escalation", "network_control", "compute_control", "data_access"}
+NETWORK_PIVOT_IAM_IMPACTS = {"admin_control", "iam_escalation", "network_control"}
 ADMIN_ROLE_TOKENS = (
     "administratoraccess",
     "owner",
@@ -510,6 +584,7 @@ class ArtifactContextAccumulator:
     evidence: list[str] = field(default_factory=list)
     matched_resources: list[str] = field(default_factory=list)
     providers: set[str] = field(default_factory=set)
+    iam_impacts: set[str] = field(default_factory=set)
 
     def add_resource(self, resource: TerraformResource, image: str | None = None, match_method: str = "unknown", match_score: int = 0) -> None:
         self.providers.add(resource.provider)
@@ -537,6 +612,7 @@ class ArtifactContextAccumulator:
             exposure=self.exposure,
             privilege=self.privilege,
             criticality=self.criticality,
+            iam_impacts=sorted(self.iam_impacts),
             owner=self.owner,
             source=source,
             confidence=self.confidence,
@@ -550,6 +626,378 @@ class TerraformAnalysis:
     coverage: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class IamGrant:
+    privilege: str
+    impacts: tuple[str, ...] = ()
+    resource_refs: tuple[str, ...] = ()
+    evidence: str = ""
+
+
+@dataclass(frozen=True)
+class NetworkPathEdge:
+    target: str
+    reason: str
+    exposure_cap: str | None = None
+    hidden: bool = False
+
+
+@dataclass
+class NetworkPathAnalysis:
+    exposure_by_address: dict[str, str] = field(default_factory=dict)
+    evidence_by_address: dict[str, list[str]] = field(default_factory=dict)
+    privilege_by_address: dict[str, str] = field(default_factory=dict)
+    privilege_evidence_by_address: dict[str, list[str]] = field(default_factory=dict)
+    iam_impacts_by_address: dict[str, set[str]] = field(default_factory=dict)
+    iam_target_evidence_by_address: dict[str, list[str]] = field(default_factory=dict)
+
+
+class TerraformNetworkGraph:
+    """Directed network reachability graph derived from Terraform resources."""
+
+    def __init__(self, resources: list[TerraformResource]) -> None:
+        self.resources = resources
+        self.edges: dict[str, list[NetworkPathEdge]] = {}
+        self.seeds: dict[str, tuple[str, list[str]]] = {}
+        self.identity_privilege_by_ref: dict[str, str] = {}
+        self.identity_evidence_by_ref: dict[str, list[str]] = {}
+        self.identity_grants_by_ref: dict[str, list[IamGrant]] = {}
+        self.sensitive_resources = [resource for resource in resources if resource.category == "sensitive_data"]
+        self.privilege_by_address: dict[str, str] = {}
+        self.privilege_evidence_by_address: dict[str, list[str]] = {}
+        self.iam_impacts_by_address: dict[str, set[str]] = {}
+        self.iam_target_evidence_by_address: dict[str, list[str]] = {}
+
+    def analyze(self) -> NetworkPathAnalysis:
+        self._build_identity_index()
+        self._build_graph()
+        exposure_by_node, evidence_by_node = self._walk()
+        exposure_by_address: dict[str, str] = {}
+        evidence_by_address: dict[str, list[str]] = {}
+        for resource in self.resources:
+            node = self._resource_node(resource)
+            exposure = exposure_by_node.get(node, "unknown")
+            if exposure != "unknown":
+                exposure_by_address[resource.address] = exposure
+                path = evidence_by_node.get(node, [])
+                if path:
+                    evidence_by_address[resource.address] = [f"terraform network path: {exposure} via {' -> '.join(path)}"]
+        return NetworkPathAnalysis(
+            exposure_by_address=exposure_by_address,
+            evidence_by_address=evidence_by_address,
+            privilege_by_address=self.privilege_by_address,
+            privilege_evidence_by_address=self.privilege_evidence_by_address,
+            iam_impacts_by_address=self.iam_impacts_by_address,
+            iam_target_evidence_by_address=self.iam_target_evidence_by_address,
+        )
+
+    def _build_identity_index(self) -> None:
+        for resource in self.resources:
+            grant = iam_grant_for_resource(resource)
+            if grant.privilege == "unknown":
+                continue
+            for ref in self._identity_refs_for_resource(resource):
+                self._record_identity_grant(ref, grant)
+
+        for resource in self.resources:
+            if resource.type != "aws_iam_role_policy_attachment":
+                continue
+            role_refs = _value_reference_candidates(resource.values.get("role")) | _value_reference_candidates(resource.values.get("roles"))
+            policy_refs = _value_reference_candidates(resource.values.get("policy_arn")) | _value_reference_candidates(resource.values.get("policy"))
+            inherited_grants: list[IamGrant] = []
+            for policy_ref in policy_refs:
+                inherited_grants.extend(self.identity_grants_by_ref.get(policy_ref, []))
+            for role_ref in role_refs:
+                for grant in inherited_grants:
+                    self._record_identity_grant(role_ref, grant)
+
+        for resource in self.resources:
+            if resource.category != "workload":
+                continue
+            privilege = "unknown"
+            evidence: list[str] = []
+            impacts: set[str] = set()
+            target_evidence: list[str] = []
+            for ref in self._workload_identity_refs(resource):
+                ref_privilege = self.identity_privilege_by_ref.get(ref, "unknown")
+                if ref_privilege == "unknown":
+                    continue
+                privilege = max_privilege(privilege, ref_privilege)
+                evidence.extend(self.identity_evidence_by_ref.get(ref, []))
+                for grant in self.identity_grants_by_ref.get(ref, []):
+                    impacts.update(grant.impacts)
+                    target_evidence.extend(self._target_evidence_for_grant(grant))
+            if privilege != "unknown":
+                self.privilege_by_address[resource.address] = privilege
+                self.privilege_evidence_by_address[resource.address] = list(dict.fromkeys(evidence))
+            if impacts:
+                self.iam_impacts_by_address[resource.address] = impacts
+            if target_evidence:
+                self.iam_target_evidence_by_address[resource.address] = list(dict.fromkeys(target_evidence))
+
+    def _build_graph(self) -> None:
+        for resource in self.resources:
+            self._add_resource_aliases(resource)
+            if resource.type in {"aws_security_group", "aws_security_group_rule"}:
+                self._add_aws_security_group(resource)
+            elif resource.type in {"aws_lb", "aws_alb"}:
+                self._add_aws_load_balancer(resource)
+            elif resource.type in {"aws_lb_listener", "aws_alb_listener", "aws_lb_listener_rule", "aws_alb_listener_rule"}:
+                self._add_aws_listener(resource)
+            elif resource.type in {"aws_lb_target_group_attachment", "aws_alb_target_group_attachment"}:
+                self._add_aws_target_group_attachment(resource)
+            elif resource.type in {
+                "azurerm_network_interface_backend_address_pool_association",
+                "azurerm_network_interface_application_gateway_backend_address_pool_association",
+            }:
+                self._add_azure_backend_pool_association(resource)
+            elif resource.type in {"kubernetes_service", "kubernetes_ingress", "kubernetes_ingress_v1"}:
+                self._add_kubernetes_exposure(resource)
+            else:
+                self._add_generic_exposure(resource)
+            self._add_cloud_backend_edges(resource)
+
+        for resource in self.resources:
+            if resource.category == "workload":
+                self._add_workload_edges(resource)
+            if resource.type in NETWORK_BRIDGE_RESOURCE_TYPES:
+                self._seed(self._provider_bridge_node(resource.provider), "internal", f"{resource.address} network bridge")
+
+    def _walk(self) -> tuple[dict[str, str], dict[str, list[str]]]:
+        exposure_by_node: dict[str, str] = {}
+        evidence_by_node: dict[str, list[str]] = {}
+        queue: list[str] = []
+        for node, (exposure, evidence) in self.seeds.items():
+            if exposure_rank(exposure) > exposure_rank(exposure_by_node.get(node, "unknown")):
+                exposure_by_node[node] = exposure
+                evidence_by_node[node] = evidence
+                queue.append(node)
+        while queue:
+            source = queue.pop(0)
+            source_exposure = exposure_by_node[source]
+            for edge in self.edges.get(source, []):
+                candidate = _cap_exposure(source_exposure, edge.exposure_cap)
+                if exposure_rank(candidate) <= exposure_rank(exposure_by_node.get(edge.target, "unknown")):
+                    continue
+                exposure_by_node[edge.target] = candidate
+                if edge.hidden:
+                    evidence_by_node[edge.target] = list(evidence_by_node.get(source, []))
+                else:
+                    evidence_by_node[edge.target] = list(evidence_by_node.get(source, [])) + [edge.reason]
+                queue.append(edge.target)
+        return exposure_by_node, evidence_by_node
+
+    def _add_resource_aliases(self, resource: TerraformResource) -> None:
+        resource_node = self._resource_node(resource)
+        for ref in _resource_identifiers(resource):
+            self._add_edge(self._ref_node(ref), resource_node, f"{ref} identifies {resource.address}", hidden=True)
+
+    def _add_aws_security_group(self, resource: TerraformResource) -> None:
+        exposure = exposure_for_resource(resource)
+        target_refs = _resource_identifiers(resource) if resource.type == "aws_security_group" else _value_reference_candidates(resource.values.get("security_group_id"))
+        if exposure in {"public", "external", "internal"}:
+            for ref in target_refs:
+                self._seed(self._sg_node(ref), exposure, f"{resource.address} {exposure} ingress")
+        for source_ref in _security_group_source_refs(resource.values):
+            for target_ref in target_refs:
+                self._add_edge(self._sg_node(source_ref), self._sg_node(target_ref), f"{resource.address} allows traffic from {source_ref}", exposure_cap="internal")
+
+    def _add_aws_load_balancer(self, resource: TerraformResource) -> None:
+        exposure = exposure_for_resource(resource)
+        if exposure in {"public", "internal"}:
+            for ref in _resource_identifiers(resource):
+                self._seed(self._lb_node(ref), exposure, f"{resource.address} {exposure} load balancer")
+
+    def _add_aws_listener(self, resource: TerraformResource) -> None:
+        lb_refs = _load_balancer_refs(resource.values)
+        target_group_refs = _target_group_refs(resource.values)
+        if not target_group_refs:
+            return
+        if not lb_refs:
+            lb_refs = _value_reference_candidates(resource.values)
+        for lb_ref in lb_refs:
+            for target_group_ref in target_group_refs:
+                self._add_edge(self._lb_node(lb_ref), self._target_group_node(target_group_ref), f"{resource.address} forwards to {target_group_ref}")
+
+    def _add_aws_target_group_attachment(self, resource: TerraformResource) -> None:
+        target_group_refs = _target_group_refs(resource.values)
+        target_refs = _value_reference_candidates(resource.values.get("target_id"))
+        target_refs.update(_value_reference_candidates(resource.values.get("target_ids")))
+        target_refs.update(_value_reference_candidates(resource.values.get("instance_id")))
+        if not target_group_refs or not target_refs:
+            return
+        for target_group_ref in target_group_refs:
+            for target_ref in target_refs:
+                self._add_edge(self._target_group_node(target_group_ref), self._ref_node(target_ref), f"{resource.address} attaches target {target_ref}")
+
+    def _add_azure_backend_pool_association(self, resource: TerraformResource) -> None:
+        pool_refs = _value_reference_candidates(resource.values.get("backend_address_pool_id"))
+        pool_refs.update(_value_reference_candidates(resource.values.get("backend_address_pool_ids")))
+        nic_refs = _network_interface_refs(resource.values)
+        if not pool_refs or not nic_refs:
+            return
+        for pool_ref in pool_refs:
+            for nic_ref in nic_refs:
+                self._add_edge(self._ref_node(pool_ref), self._ref_node(nic_ref), f"{resource.address} attaches network interface {nic_ref}")
+
+    def _add_kubernetes_exposure(self, resource: TerraformResource) -> None:
+        exposure = exposure_for_resource(resource)
+        if is_public_exposure(resource):
+            exposure = "public"
+        elif exposure == "unknown":
+            exposure = "internal"
+        if exposure == "unknown":
+            return
+        for name in _kubernetes_names_and_selectors(resource):
+            self._seed(self._kubernetes_name_node(name), exposure, f"{resource.address} selects {name}")
+
+    def _add_generic_exposure(self, resource: TerraformResource) -> None:
+        exposure = exposure_for_resource(resource)
+        if exposure == "unknown":
+            return
+        node = self._resource_node(resource)
+        if resource.type in NETWORK_BRIDGE_RESOURCE_TYPES:
+            self._seed(self._provider_bridge_node(resource.provider), "internal", f"{resource.address} network bridge")
+        elif resource.category == "exposure" and resource.provider in {"azure", "gcp"}:
+            self._seed(node, exposure, f"{resource.address} {exposure} exposure")
+            for ref in _exposure_backend_refs(resource.values):
+                self._add_edge(node, self._ref_node(ref), f"{resource.address} forwards to {ref}")
+        elif exposure in {"public", "external", "internal"}:
+            self._seed(node, exposure, f"{resource.address} {exposure} exposure")
+
+    def _add_cloud_backend_edges(self, resource: TerraformResource) -> None:
+        if resource.provider not in {"azure", "gcp"}:
+            return
+        if resource.category not in {"exposure", "supporting"} and resource.type not in {
+            "google_compute_backend_service",
+            "google_compute_region_network_endpoint_group",
+        }:
+            return
+        node = self._resource_node(resource)
+        for ref in _exposure_backend_refs(resource.values):
+            self._add_edge(node, self._ref_node(ref), f"{resource.address} forwards to {ref}")
+
+    def _add_workload_edges(self, resource: TerraformResource) -> None:
+        resource_node = self._resource_node(resource)
+        for sg_ref in _security_group_refs(resource.values):
+            self._add_edge(self._sg_node(sg_ref), resource_node, f"{sg_ref} reaches {resource.address}")
+            self._add_edge(resource_node, self._sg_node(sg_ref), f"{resource.address} can originate from {sg_ref}", exposure_cap="internal")
+        for nic_ref in _network_interface_refs(resource.values):
+            self._add_edge(self._ref_node(nic_ref), resource_node, f"{nic_ref} attaches to {resource.address}")
+        for target_group_ref in _target_group_refs(resource.values):
+            self._add_edge(self._target_group_node(target_group_ref), resource_node, f"{target_group_ref} targets {resource.address}")
+        for task_def_ref in _value_reference_candidates(resource.values.get("task_definition")):
+            self._add_edge(resource_node, self._ref_node(task_def_ref), f"{resource.address} runs task definition {task_def_ref}")
+        for name in _kubernetes_names_and_selectors(resource):
+            self._add_edge(self._kubernetes_name_node(name), resource_node, f"{name} selects {resource.address}")
+            self._add_edge(resource_node, self._kubernetes_name_node(name), f"{resource.address} can reach cluster service {name}", exposure_cap="internal")
+        if _has_private_network_attachment(resource.values):
+            self._add_edge(self._provider_bridge_node(resource.provider), resource_node, f"{resource.provider} private network reaches {resource.address}", exposure_cap="internal")
+        if _has_direct_public_address(resource.values):
+            self._seed(resource_node, "public", f"{resource.address} direct public address")
+        privilege = self.privilege_by_address.get(resource.address, "unknown")
+        impacts = self.iam_impacts_by_address.get(resource.address, set())
+        if privilege == "admin" or impacts & NETWORK_PIVOT_IAM_IMPACTS:
+            impact_text = ",".join(sorted(impacts & NETWORK_PIVOT_IAM_IMPACTS)) or "admin_control"
+            self._add_edge(resource_node, self._provider_bridge_node(resource.provider), f"{resource.address} IAM impact {impact_text} can alter provider network reachability", exposure_cap="internal")
+
+    def _identity_refs_for_resource(self, resource: TerraformResource) -> set[str]:
+        values = resource.values
+        refs: set[str] = set()
+        if resource.type in {"aws_iam_role", "aws_iam_policy"}:
+            refs.update(_resource_identifiers(resource))
+        if resource.type in {"aws_iam_role_policy", "aws_iam_role_policy_attachment"}:
+            refs.update(_value_reference_candidates(values.get("role")))
+            refs.update(_value_reference_candidates(values.get("roles")))
+        if resource.type == "azurerm_role_assignment":
+            refs.update(_value_reference_candidates(values.get("principal_id")))
+            refs.update(_value_reference_candidates(values.get("principal_ids")))
+        if resource.type == "azurerm_key_vault_access_policy":
+            refs.update(_value_reference_candidates(values.get("object_id")))
+            refs.update(_value_reference_candidates(values.get("application_id")))
+            refs.update(_value_reference_candidates(values.get("principal_id")))
+        if resource.type == "azurerm_user_assigned_identity":
+            refs.update(_value_reference_candidates(values.get("principal_id")))
+            refs.update(_value_reference_candidates(values.get("client_id")))
+        if resource.type.startswith("google_") and "_iam_" in resource.type:
+            refs.update(_member_identity_refs(values.get("member")))
+            refs.update(_member_identity_refs(values.get("members")))
+        if resource.type == "google_service_account":
+            refs.update(_value_reference_candidates(values.get("account_id")))
+            refs.update(_value_reference_candidates(values.get("email")))
+        if resource.type in {"kubernetes_role_binding", "kubernetes_cluster_role_binding", "kubernetes_role_binding_v1", "kubernetes_cluster_role_binding_v1"}:
+            refs.update(_kubernetes_subject_refs(values))
+        return {ref for ref in refs if ref}
+
+    def _workload_identity_refs(self, resource: TerraformResource) -> set[str]:
+        refs = set(_resource_identifiers(resource))
+        refs.update(_identity_value_refs(resource.values))
+        if resource.type.startswith("kubernetes_"):
+            refs.update(_kubernetes_names_and_selectors(resource))
+        return {ref for ref in refs if ref}
+
+    def _record_identity_grant(self, ref: str, grant: IamGrant) -> None:
+        if not ref:
+            return
+        key = str(ref).lower()
+        self.identity_privilege_by_ref[key] = max_privilege(self.identity_privilege_by_ref.get(key, "unknown"), grant.privilege)
+        self.identity_evidence_by_ref.setdefault(key, []).append(grant.evidence)
+        self.identity_grants_by_ref.setdefault(key, []).append(grant)
+
+    def _target_evidence_for_grant(self, grant: IamGrant) -> list[str]:
+        if not grant.resource_refs:
+            return []
+        target_resources: list[str] = []
+        grant_refs = set(grant.resource_refs)
+        for resource in self.sensitive_resources:
+            if _references_any(grant_refs, _resource_identifiers(resource)):
+                target_resources.append(resource.address)
+        if target_resources:
+            return [f"{grant.evidence} targets {address}" for address in sorted(set(target_resources))]
+        if "*" in grant_refs and "data_access" in grant.impacts:
+            return [f"{grant.evidence} targets any sensitive resource"]
+        return []
+
+    def _seed(self, node: str, exposure: str, evidence: str) -> None:
+        current = self.seeds.get(node)
+        if current and exposure_rank(current[0]) >= exposure_rank(exposure):
+            return
+        self.seeds[node] = (exposure, [evidence])
+
+    def _add_edge(self, source: str, target: str, reason: str, exposure_cap: str | None = None, hidden: bool = False) -> None:
+        if not source or not target:
+            return
+        self.edges.setdefault(source, []).append(NetworkPathEdge(target=target, reason=reason, exposure_cap=exposure_cap, hidden=hidden))
+
+    @staticmethod
+    def _resource_node(resource: TerraformResource) -> str:
+        return f"resource:{resource.address.lower()}"
+
+    @staticmethod
+    def _ref_node(ref: str) -> str:
+        return f"ref:{str(ref).lower()}"
+
+    @staticmethod
+    def _sg_node(ref: str) -> str:
+        return f"aws:sg:{str(ref).lower()}"
+
+    @staticmethod
+    def _target_group_node(ref: str) -> str:
+        return f"aws:tg:{str(ref).lower()}"
+
+    @staticmethod
+    def _lb_node(ref: str) -> str:
+        return f"aws:lb:{str(ref).lower()}"
+
+    @staticmethod
+    def _provider_bridge_node(provider: str) -> str:
+        return f"provider:{provider}:network-bridge"
+
+    @staticmethod
+    def _kubernetes_name_node(name: str) -> str:
+        return f"kubernetes:name:{str(name).lower()}"
+
+
 class TerraformAnalyzer:
     """Analyze Terraform plan JSON and infer conservative artifact context."""
 
@@ -561,13 +1009,16 @@ class TerraformAnalyzer:
         self._resource_by_address = {resource.address: resource for resource in self.resources}
         self._global_exposure_by_provider = self._global_exposure()
         self._public_security_groups = self._public_security_group_refs()
+        self._external_security_groups = self._external_security_group_refs()
+        self._internal_security_groups = self._internal_security_group_refs()
         self._public_target_groups = self._public_target_group_refs()
+        self._internal_target_groups = self._internal_target_group_refs()
         self._public_ecs_task_definitions = self._public_ecs_task_definition_refs()
+        self._ecs_task_definition_exposure = self._ecs_task_definition_exposure_refs()
         self._public_functions = self._public_function_names()
         self._public_cloud_run_services = self._public_cloud_run_services()
-        self._public_kubernetes_workload_names = self._public_kubernetes_names()
-        self._privilege_by_provider = self._provider_privileges()
-        self._has_sensitive_by_provider = self._sensitive_resources_by_provider()
+        self._kubernetes_workload_exposure = self._kubernetes_workload_exposure()
+        self._network_paths = TerraformNetworkGraph(self.resources).analyze()
 
     def analyze(self) -> TerraformAnalysis:
         contexts: dict[str, ContextEvidence] = {}
@@ -602,30 +1053,45 @@ class TerraformAnalyzer:
                     self._public_functions,
                     self._public_cloud_run_services,
                     self._public_security_groups,
+                    self._external_security_groups,
+                    self._internal_security_groups,
                     self._public_target_groups,
+                    self._internal_target_groups,
                     self._public_ecs_task_definitions,
-                    self._public_kubernetes_workload_names,
+                    self._ecs_task_definition_exposure,
+                    self._kubernetes_workload_exposure,
                 )
+                path_exposure = self._network_paths.exposure_by_address.get(resource.address, "unknown")
+                exposure = max_exposure(exposure, path_exposure)
                 accumulator.exposure = max_exposure(accumulator.exposure, exposure)
-                accumulator.privilege = max_privilege(accumulator.privilege, self._privilege_by_provider.get(resource.provider, "unknown"))
-                if self._has_sensitive_by_provider.get(resource.provider) and accumulator.privilege == "unknown":
-                    accumulator.privilege = "limited"
+                for item in self._network_paths.evidence_by_address.get(resource.address, []):
+                    accumulator.evidence.append(item)
+                if exposure != "unknown":
+                    accumulator.evidence.append(f"terraform exposure inference: {exposure} via {resource.address}")
+                path_privilege = self._network_paths.privilege_by_address.get(resource.address, "unknown")
+                accumulator.privilege = max_privilege(accumulator.privilege, path_privilege)
+                for item in self._network_paths.privilege_evidence_by_address.get(resource.address, []):
+                    accumulator.evidence.append(f"terraform identity path: {item}")
+                for item in self._network_paths.iam_target_evidence_by_address.get(resource.address, []):
+                    accumulator.evidence.append(f"terraform identity target: {item}")
+                iam_impacts = self._network_paths.iam_impacts_by_address.get(resource.address, set())
+                accumulator.iam_impacts.update(iam_impacts)
+                iam_criticality = _network_iam_criticality(exposure, path_privilege, iam_impacts)
+                accumulator.criticality = max_criticality(accumulator.criticality, iam_criticality)
+                if iam_criticality != "unknown":
+                    accumulator.evidence.append(f"terraform IAM impact criticality: {iam_criticality} via {resource.address} impacts={','.join(sorted(iam_impacts)) or path_privilege}")
                 match_rows.append({"artifact": artifact.name, "resource": resource.address, "type": resource.type, "provider": resource.provider, "image": matched_image, "match_method": match_method, "match_score": match_score})
             if accumulator.matched_resources:
-                if accumulator.privilege == "unknown":
-                    accumulator.privilege = self._privilege_by_provider.get("all", "unknown")
                 contexts[artifact.name] = accumulator.as_context(source=f"terraform:{self.source_name}")
         return TerraformAnalysis(contexts=contexts, coverage=coverage_report(self.resources, self.artifacts, match_rows))
 
     def _global_exposure(self) -> dict[str, str]:
         exposure: dict[str, str] = {}
         for resource in self.resources:
-            current = exposure.get(resource.provider, "unknown")
-            if resource.category == "exposure" and is_public_exposure(resource):
-                exposure[resource.provider] = max_exposure(current, "public")
-                exposure["all"] = max_exposure(exposure.get("all", "unknown"), "public")
-            elif resource.category == "exposure":
-                exposure[resource.provider] = max_exposure(current, "internal")
+            if resource.type not in NETWORK_BRIDGE_RESOURCE_TYPES:
+                continue
+            exposure[resource.provider] = max_exposure(exposure.get(resource.provider, "unknown"), "internal")
+            exposure["all"] = max_exposure(exposure.get("all", "unknown"), "internal")
         return exposure
 
     def _public_function_names(self) -> set[str]:
@@ -652,17 +1118,41 @@ class TerraformAnalyzer:
             if resource.type == "aws_security_group_rule" and is_public_exposure(resource):
                 public.update(_value_reference_candidates(resource.values.get("security_group_id")))
 
+        return public
+
+    def _internal_security_group_refs(self) -> set[str]:
+        internal: set[str] = set()
+        security_groups = [resource for resource in self.resources if resource.type == "aws_security_group"]
+        for resource in security_groups:
+            if not is_public_exposure(resource) and _aws_security_group_has_internal_ingress(resource.values):
+                internal.update(_resource_identifiers(resource))
+        for resource in self.resources:
+            if resource.type == "aws_security_group_rule" and not is_public_exposure(resource) and _aws_security_group_has_internal_ingress(resource.values):
+                internal.update(_value_reference_candidates(resource.values.get("security_group_id")))
+
         changed = True
         while changed:
             changed = False
             for resource in security_groups:
                 identifiers = _resource_identifiers(resource)
-                if identifiers & public:
+                if identifiers & internal or identifiers & self._public_security_groups:
                     continue
-                if _references_any(_security_group_source_refs(resource.values), public):
-                    public.update(identifiers)
+                source_refs = _security_group_source_refs(resource.values)
+                if _references_any(source_refs, internal) or _references_any(source_refs, self._external_security_groups) or _references_any(source_refs, self._public_security_groups):
+                    internal.update(identifiers)
                     changed = True
-        return public
+        return internal
+
+    def _external_security_group_refs(self) -> set[str]:
+        external: set[str] = set()
+        security_groups = [resource for resource in self.resources if resource.type == "aws_security_group"]
+        for resource in security_groups:
+            if _aws_security_group_ingress_exposure(resource.values) == "external":
+                external.update(_resource_identifiers(resource))
+        for resource in self.resources:
+            if resource.type == "aws_security_group_rule" and _aws_security_group_ingress_exposure(resource.values) == "external":
+                external.update(_value_reference_candidates(resource.values.get("security_group_id")))
+        return external
 
     def _public_load_balancer_refs(self) -> set[str]:
         public: set[str] = set()
@@ -670,6 +1160,13 @@ class TerraformAnalyzer:
             if resource.type in {"aws_lb", "aws_alb"} and is_public_exposure(resource):
                 public.update(_resource_identifiers(resource))
         return public
+
+    def _internal_load_balancer_refs(self) -> set[str]:
+        internal: set[str] = set()
+        for resource in self.resources:
+            if resource.type in {"aws_lb", "aws_alb"} and not is_public_exposure(resource):
+                internal.update(_resource_identifiers(resource))
+        return internal
 
     def _public_target_group_refs(self) -> set[str]:
         public_lbs = self._public_load_balancer_refs()
@@ -686,6 +1183,21 @@ class TerraformAnalyzer:
                 public_tgs.update(_resource_identifiers(target_group))
         return public_tgs
 
+    def _internal_target_group_refs(self) -> set[str]:
+        internal_lbs = self._internal_load_balancer_refs()
+        internal_tgs: set[str] = set()
+        target_groups = [resource for resource in self.resources if resource.type in {"aws_lb_target_group", "aws_alb_target_group"}]
+        for resource in self.resources:
+            if resource.type not in {"aws_lb_listener", "aws_alb_listener", "aws_lb_listener_rule", "aws_alb_listener_rule"}:
+                continue
+            if resource.type in {"aws_lb_listener", "aws_alb_listener"} and not _references_any(_load_balancer_refs(resource.values), internal_lbs):
+                continue
+            internal_tgs.update(_value_reference_candidates(_target_group_refs(resource.values)))
+        for target_group in target_groups:
+            if _references_any(_resource_identifiers(target_group), internal_tgs):
+                internal_tgs.update(_resource_identifiers(target_group))
+        return internal_tgs
+
     def _public_ecs_task_definition_refs(self) -> set[str]:
         public_task_defs: set[str] = set()
         for resource in self.resources:
@@ -699,6 +1211,34 @@ class TerraformAnalyzer:
                 public_task_defs.update(_resource_identifiers(resource))
         return public_task_defs
 
+    def _ecs_task_definition_exposure_refs(self) -> dict[str, str]:
+        exposure_by_ref: dict[str, str] = {}
+        for resource in self.resources:
+            if resource.type != "aws_ecs_service":
+                continue
+            exposure = _ecs_service_exposure(
+                resource.values,
+                self._public_security_groups,
+                self._external_security_groups,
+                self._internal_security_groups,
+                self._public_target_groups,
+                self._internal_target_groups,
+                self._provider_network_fallback(resource.provider),
+            )
+            if exposure == "unknown":
+                continue
+            for ref in _value_reference_candidates(resource.values.get("task_definition")):
+                exposure_by_ref[ref] = max_exposure(exposure_by_ref.get(ref, "unknown"), exposure)
+        for resource in self.resources:
+            if resource.type != "aws_ecs_task_definition":
+                continue
+            identifiers = _resource_identifiers(resource)
+            matched = [level for ref, level in exposure_by_ref.items() if _references_any(identifiers, {ref})]
+            for level in matched:
+                for identifier in identifiers:
+                    exposure_by_ref[identifier] = max_exposure(exposure_by_ref.get(identifier, "unknown"), level)
+        return exposure_by_ref
+
     def _public_cloud_run_services(self) -> set[str]:
         public: set[str] = set()
         for resource in self.resources:
@@ -711,33 +1251,22 @@ class TerraformAnalyzer:
                 public.add(str(service))
         return public
 
-    def _public_kubernetes_names(self) -> set[str]:
-        public: set[str] = set()
+    def _kubernetes_workload_exposure(self) -> dict[str, str]:
+        exposure_by_name: dict[str, str] = {}
         for resource in self.resources:
             if resource.type not in {"kubernetes_service", "kubernetes_ingress", "kubernetes_ingress_v1"}:
                 continue
+            exposure = exposure_for_resource(resource)
             if is_public_exposure(resource):
-                public.update(_kubernetes_names_and_selectors(resource))
-        return public
+                exposure = "public"
+            elif exposure == "unknown":
+                exposure = "internal"
+            for name in _kubernetes_names_and_selectors(resource):
+                exposure_by_name[name] = max_exposure(exposure_by_name.get(name, "unknown"), exposure)
+        return exposure_by_name
 
-    def _provider_privileges(self) -> dict[str, str]:
-        privileges: dict[str, str] = {}
-        for resource in self.resources:
-            privilege = privilege_for_resource(resource)
-            if privilege == "unknown":
-                continue
-            privileges[resource.provider] = max_privilege(privileges.get(resource.provider, "unknown"), privilege)
-            privileges["all"] = max_privilege(privileges.get("all", "unknown"), privilege)
-        return privileges
-
-    def _sensitive_resources_by_provider(self) -> dict[str, bool]:
-        result: dict[str, bool] = {}
-        for resource in self.resources:
-            if resource.category == "sensitive_data":
-                result[resource.provider] = True
-                result["all"] = True
-        return result
-
+    def _provider_network_fallback(self, provider: str) -> str:
+        return self._global_exposure_by_provider.get(provider, "unknown")
 
 def load_terraform_plan(path: str | Path) -> dict[str, Any]:
     plan_path = Path(path)
@@ -941,39 +1470,70 @@ def exposure_for_matched_workload(
     public_functions: set[str],
     public_cloud_run_services: set[str],
     public_security_groups: set[str] | None = None,
+    external_security_groups: set[str] | None = None,
+    internal_security_groups: set[str] | None = None,
     public_target_groups: set[str] | None = None,
+    internal_target_groups: set[str] | None = None,
     public_ecs_task_definitions: set[str] | None = None,
-    public_kubernetes_names: set[str] | None = None,
+    ecs_task_definition_exposure: dict[str, str] | None = None,
+    kubernetes_workload_exposure: dict[str, str] | None = None,
 ) -> str:
     values = resource.values
     public_security_groups = public_security_groups or set()
+    external_security_groups = external_security_groups or set()
+    internal_security_groups = internal_security_groups or set()
     public_target_groups = public_target_groups or set()
+    internal_target_groups = internal_target_groups or set()
     public_ecs_task_definitions = public_ecs_task_definitions or set()
-    public_kubernetes_names = public_kubernetes_names or set()
+    ecs_task_definition_exposure = ecs_task_definition_exposure or {}
+    kubernetes_workload_exposure = kubernetes_workload_exposure or {}
+    provider_fallback = _provider_network_fallback(global_exposure_by_provider.get(resource.provider, "unknown"))
     if resource.type == "aws_apprunner_service":
-        return "public"
+        public_network = values.get("publicly_accessible")
+        if public_network is None:
+            public_network = values.get("is_publicly_accessible")
+        return "public" if public_network is not False else "internal"
     if resource.type == "aws_ecs_service":
-        if _ecs_service_is_public(values, public_security_groups, public_target_groups):
-            return "public"
-        return "unknown"
+        return _ecs_service_exposure(values, public_security_groups, external_security_groups, internal_security_groups, public_target_groups, internal_target_groups, provider_fallback)
     if resource.type == "aws_ecs_task_definition":
         if _references_any(_resource_identifiers(resource), public_ecs_task_definitions):
             return "public"
-        return "unknown"
+        exposure = _max_referenced_exposure(_resource_identifiers(resource), ecs_task_definition_exposure)
+        return exposure if exposure != "unknown" else _workload_network_exposure(values, provider_fallback)
     if resource.type == "aws_lambda_function":
         names = {str(values.get("function_name") or ""), str(values.get("name") or ""), str(values.get("arn") or "")}
         if any(name in public_functions for name in names if name):
             return "public"
-        return "unknown"
+        return _workload_network_exposure(values, provider_fallback)
+    if resource.type in {"aws_instance", "aws_launch_template", "aws_batch_job_definition", "aws_eks_cluster"}:
+        if _has_direct_public_address(values) or _references_any(_security_group_refs(values), public_security_groups):
+            return "public"
+        if _references_any(_security_group_refs(values), external_security_groups):
+            return "external"
+        if _references_any(_security_group_refs(values), internal_security_groups):
+            return "internal"
+        return _workload_network_exposure(values, provider_fallback)
     if resource.type in {"azurerm_linux_web_app", "azurerm_windows_web_app", "azurerm_app_service", "azurerm_function_app", "azurerm_linux_function_app", "azurerm_windows_function_app"}:
         public_network = values.get("public_network_access_enabled")
-        return "internal" if public_network is False else "public"
+        if public_network is False:
+            return "internal" if provider_fallback == "internal" else "private"
+        return "public"
     if resource.type == "azurerm_container_app":
         if _azure_container_app_external_ingress(values):
             return "public"
+        if _azure_container_app_has_ingress(values):
+            return "internal"
+        return _workload_network_exposure(values, provider_fallback)
     if resource.type.startswith("azapi_") and _normalized_arm_type(values.get("type")) == "microsoft.app/containerapps":
         if _azure_container_app_external_ingress(values):
             return "public"
+        if _azure_container_app_has_ingress(values):
+            return "internal"
+        return _workload_network_exposure(values, provider_fallback)
+    if resource.type in {"azurerm_container_group", "azurerm_kubernetes_cluster", "azurerm_linux_virtual_machine", "azurerm_windows_virtual_machine", "azurerm_virtual_machine"}:
+        if _has_direct_public_address(values):
+            return "public"
+        return _workload_network_exposure(values, provider_fallback)
     if resource.type in {"google_cloud_run_service", "google_cloud_run_v2_service"}:
         names = {str(values.get("name") or ""), str(resource.name or "")}
         if any(name in public_cloud_run_services for name in names if name):
@@ -981,15 +1541,21 @@ def exposure_for_matched_workload(
         ingress = str(values.get("ingress") or "").lower()
         if ingress in {"all", "ingress_traffic_all", "all_traffic"}:
             return "external"
+        if "internal" in ingress:
+            return "internal"
+        return _workload_network_exposure(values, provider_fallback)
     if resource.type in {"google_cloudfunctions_function", "google_cloudfunctions2_function"}:
         if _references_any(_resource_identifiers(resource), public_functions):
             return "public"
-        return "unknown"
-    if resource.type.startswith("kubernetes_") and resource.type != "kubernetes_manifest":
-        if _kubernetes_names_and_selectors(resource) & public_kubernetes_names:
+        return _workload_network_exposure(values, provider_fallback)
+    if resource.type in {"google_container_cluster", "google_compute_instance", "google_compute_instance_template"}:
+        if _has_direct_public_address(values):
             return "public"
-        return "unknown"
-    return "unknown"
+        return _workload_network_exposure(values, provider_fallback)
+    if resource.type.startswith("kubernetes_") and resource.type != "kubernetes_manifest":
+        exposure = _max_referenced_exposure(_kubernetes_names_and_selectors(resource), kubernetes_workload_exposure)
+        return exposure if exposure != "unknown" else _workload_network_exposure(values, provider_fallback)
+    return _workload_network_exposure(values, provider_fallback)
 
 
 def _azure_container_app_external_ingress(values: dict[str, Any]) -> bool:
@@ -1001,11 +1567,50 @@ def _azure_container_app_external_ingress(values: dict[str, Any]) -> bool:
     return False
 
 
+def _azure_container_app_has_ingress(values: dict[str, Any]) -> bool:
+    ingress = values.get("ingress")
+    if isinstance(ingress, list):
+        return any(isinstance(item, dict) for item in ingress)
+    return isinstance(ingress, dict)
+
+
+def exposure_for_resource(resource: TerraformResource) -> str:
+    """Classify a resource's network exposure without assigning it to an artifact."""
+
+    values = resource.values
+    rtype = resource.type
+    if is_public_exposure(resource):
+        return "public"
+    if _has_direct_public_address(values):
+        return "public"
+    if rtype in NETWORK_BRIDGE_RESOURCE_TYPES:
+        return "internal"
+    if rtype in {"aws_security_group", "aws_security_group_rule"}:
+        return _aws_security_group_ingress_exposure(values)
+    if rtype in {"azurerm_network_security_group", "azurerm_network_security_rule"}:
+        return _azure_nsg_ingress_exposure(values)
+    if rtype == "google_compute_firewall":
+        return _gcp_firewall_exposure(values)
+    if rtype in {"aws_lb", "aws_alb", "azurerm_lb", "azurerm_application_gateway"}:
+        return "internal"
+    if rtype in {"google_compute_forwarding_rule", "google_compute_global_forwarding_rule"} and str(values.get("load_balancing_scheme") or "").lower().startswith("internal"):
+        return "internal"
+    if rtype in {"kubernetes_service", "kubernetes_ingress", "kubernetes_ingress_v1"}:
+        return _kubernetes_exposure_level(values)
+    if rtype in PRIVATE_NETWORK_RESOURCE_TYPES or _has_private_network_attachment(values):
+        return "private"
+    return "unknown"
+
+
 def is_public_exposure(resource: TerraformResource) -> bool:
     values = resource.values
     rtype = resource.type
-    if rtype in {"aws_lb", "aws_alb", "azurerm_public_ip", "azurerm_application_gateway", "azurerm_frontdoor_endpoint", "azurerm_cdn_frontdoor_endpoint", "google_compute_forwarding_rule", "google_compute_global_forwarding_rule"}:
+    if rtype in {"aws_lb", "aws_alb", "azurerm_public_ip", "azurerm_application_gateway", "azurerm_lb", "azurerm_frontdoor_endpoint", "azurerm_cdn_frontdoor_endpoint", "google_compute_forwarding_rule", "google_compute_global_forwarding_rule"}:
         if str(values.get("internal") or "").lower() == "true":
+            return False
+        if rtype in {"azurerm_application_gateway", "azurerm_lb"} and _azure_has_private_frontend_only(values):
+            return False
+        if rtype in {"google_compute_forwarding_rule", "google_compute_global_forwarding_rule"} and str(values.get("load_balancing_scheme") or "").lower().startswith("internal"):
             return False
         return True
     if rtype in {"aws_security_group", "aws_security_group_rule"}:
@@ -1028,6 +1633,14 @@ def is_public_exposure(resource: TerraformResource) -> bool:
 
 
 def _aws_security_group_is_public(values: dict[str, Any]) -> bool:
+    return _aws_security_group_ingress_exposure(values) == "public"
+
+
+def _aws_security_group_has_internal_ingress(values: dict[str, Any]) -> bool:
+    return _aws_security_group_ingress_exposure(values) == "internal"
+
+
+def _aws_security_group_ingress_exposure(values: dict[str, Any]) -> str:
     rules: list[Any] = []
     for key in ("ingress", "ingress_with_cidr_blocks"):
         item = values.get(key)
@@ -1037,16 +1650,25 @@ def _aws_security_group_is_public(values: dict[str, Any]) -> bool:
             rules.append(item)
     if values.get("type") == "ingress":
         rules.append(values)
+    result = "unknown"
     for rule in rules:
         if not isinstance(rule, dict):
             continue
         cidrs = _listify(rule.get("cidr_blocks")) + _listify(rule.get("ipv6_cidr_blocks"))
-        if any(str(cidr).lower() in PUBLIC_TOKEN_VALUES for cidr in cidrs):
-            return True
-    return False
+        sources = cidrs + _listify(rule.get("source_security_group_id")) + _listify(rule.get("source_security_group_ids")) + _listify(rule.get("security_groups"))
+        exposure = "unknown"
+        for source in sources:
+            exposure = max_exposure(exposure, _network_source_exposure(source))
+        if exposure != "unknown":
+            result = max_exposure(result, exposure)
+    return result
 
 
 def _azure_nsg_is_public(values: dict[str, Any]) -> bool:
+    return _azure_nsg_ingress_exposure(values) == "public"
+
+
+def _azure_nsg_ingress_exposure(values: dict[str, Any]) -> str:
     rules: list[Any] = []
     for key in ("security_rule", "security_rules"):
         item = values.get(key)
@@ -1056,6 +1678,7 @@ def _azure_nsg_is_public(values: dict[str, Any]) -> bool:
             rules.append(item)
     if values.get("source_address_prefix") or values.get("source_address_prefixes"):
         rules.append(values)
+    result = "unknown"
     for rule in rules:
         if not isinstance(rule, dict):
             continue
@@ -1064,16 +1687,28 @@ def _azure_nsg_is_public(values: dict[str, Any]) -> bool:
         if direction != "inbound" or access != "allow":
             continue
         sources = _listify(rule.get("source_address_prefix")) + _listify(rule.get("source_address_prefixes"))
-        if any(str(source).lower() in PUBLIC_TOKEN_VALUES for source in sources):
-            return True
-    return False
+        exposure = "unknown"
+        for source in sources:
+            exposure = max_exposure(exposure, _network_source_exposure(source))
+        if exposure != "unknown":
+            result = max_exposure(result, exposure)
+    return result
 
 
 def _gcp_firewall_is_public(values: dict[str, Any]) -> bool:
+    return _gcp_firewall_exposure(values) == "public"
+
+
+def _gcp_firewall_exposure(values: dict[str, Any]) -> str:
     ranges = _listify(values.get("source_ranges"))
     direction = str(values.get("direction") or "INGRESS").lower()
     disabled = bool(values.get("disabled"))
-    return not disabled and direction == "ingress" and any(str(item).lower() in PUBLIC_TOKEN_VALUES for item in ranges)
+    if disabled or direction != "ingress":
+        return "unknown"
+    exposure = "unknown"
+    for item in ranges:
+        exposure = max_exposure(exposure, _network_source_exposure(item))
+    return exposure
 
 
 def _iam_member_is_public_invoker(values: dict[str, Any]) -> bool:
@@ -1083,17 +1718,297 @@ def _iam_member_is_public_invoker(values: dict[str, Any]) -> bool:
 
 
 def _kubernetes_exposure_is_public(values: dict[str, Any]) -> bool:
+    return _kubernetes_exposure_level(values) == "public"
+
+
+def _kubernetes_exposure_level(values: dict[str, Any]) -> str:
     service_type = str(values.get("type") or "").lower()
     if service_type == "loadbalancer":
-        return True
+        return "public"
+    if service_type in {"clusterip", "nodeport"}:
+        return "internal"
     annotations = values.get("annotations") if isinstance(values.get("annotations"), dict) else {}
     if any("ingress" in str(key).lower() for key in annotations):
-        return True
-    return bool(values.get("rules") or values.get("spec"))
+        return "public"
+    if values.get("rules") or values.get("spec"):
+        return "public"
+    return "unknown"
 
 
 def _ecs_service_is_public(values: dict[str, Any], public_security_groups: set[str], public_target_groups: set[str]) -> bool:
     return _references_any(_security_group_refs(values), public_security_groups) or _references_any(_target_group_refs(values), public_target_groups)
+
+
+def _ecs_service_exposure(
+    values: dict[str, Any],
+    public_security_groups: set[str],
+    external_security_groups: set[str],
+    internal_security_groups: set[str],
+    public_target_groups: set[str],
+    internal_target_groups: set[str],
+    provider_fallback: str,
+) -> str:
+    security_group_refs = _security_group_refs(values)
+    target_group_refs = _target_group_refs(values)
+    if _references_any(security_group_refs, public_security_groups) or _references_any(target_group_refs, public_target_groups):
+        return "public"
+    if _references_any(security_group_refs, external_security_groups):
+        return "external"
+    if _references_any(security_group_refs, internal_security_groups) or _references_any(target_group_refs, internal_target_groups):
+        return "internal"
+    if security_group_refs or target_group_refs or _has_private_network_attachment(values):
+        return max_exposure("private", provider_fallback)
+    return _workload_network_exposure(values, provider_fallback)
+
+
+def _provider_network_fallback(exposure: str) -> str:
+    return exposure if exposure == "internal" else "unknown"
+
+
+def _workload_network_exposure(values: dict[str, Any], provider_fallback: str) -> str:
+    if _has_direct_public_address(values):
+        return "public"
+    if _has_private_network_attachment(values):
+        return max_exposure("private", provider_fallback)
+    return "unknown"
+
+
+def _cap_exposure(value: str, cap: str | None) -> str:
+    if not cap or exposure_rank(value) <= exposure_rank(cap):
+        return value
+    return cap
+
+
+def _exposure_backend_refs(values: Any) -> set[str]:
+    refs: set[str] = set()
+    backend_tokens = {
+        "backend",
+        "target",
+        "target_group",
+        "pool",
+        "endpoint",
+        "network_endpoint_group",
+        "instance_group",
+        "service",
+    }
+
+    def walk(value: Any, key_hint: str = "") -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                key_l = str(key).lower()
+                if any(token in key_l for token in backend_tokens):
+                    refs.update(_value_reference_candidates(item))
+                if isinstance(item, (dict, list)):
+                    walk(item, key_l)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item, key_hint)
+
+    walk(values)
+    return refs
+
+
+def _identity_value_refs(values: Any) -> set[str]:
+    refs: set[str] = set()
+    identity_keys = {
+        "role",
+        "role_arn",
+        "task_role_arn",
+        "execution_role_arn",
+        "iam_role",
+        "iam_instance_profile",
+        "instance_profile",
+        "service_account",
+        "service_account_name",
+        "service_account_email",
+        "service_account_id",
+        "serviceaccountname",
+        "identity",
+        "identity_id",
+        "identity_ids",
+        "principal_id",
+        "principal_ids",
+        "client_id",
+        "managed_identity_id",
+        "user_assigned_identity_id",
+        "user_assigned_identity_ids",
+    }
+    if isinstance(values, dict):
+        for key, value in values.items():
+            key_l = str(key).lower()
+            if key_l in identity_keys or "identity" in key_l or "service_account" in key_l:
+                refs.update(_value_reference_candidates(value))
+                refs.update(_member_identity_refs(value))
+            if key_l in {"annotations", "metadata"}:
+                refs.update(_value_reference_candidates(value))
+            if isinstance(value, (dict, list)):
+                refs.update(_identity_value_refs(value))
+    elif isinstance(values, list):
+        for item in values:
+            refs.update(_identity_value_refs(item))
+    return refs
+
+
+def _member_identity_refs(value: Any) -> set[str]:
+    refs: set[str] = set()
+    if isinstance(value, dict):
+        for item in value.values():
+            refs.update(_member_identity_refs(item))
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            refs.update(_member_identity_refs(item))
+    elif value is not None:
+        text = str(value).strip().strip('"').strip("'").lower()
+        if not text:
+            return refs
+        refs.update(_value_reference_candidates(text))
+        if text.startswith("serviceaccount:"):
+            text = text.split(":", 1)[1]
+            refs.add(text)
+        if "@" in text:
+            refs.add(text.split("@", 1)[0])
+    return refs
+
+
+def _kubernetes_subject_refs(values: Any) -> set[str]:
+    refs: set[str] = set()
+
+    def add_subject(value: Any) -> None:
+        if isinstance(value, dict):
+            name = value.get("name")
+            namespace = value.get("namespace")
+            refs.update(_value_reference_candidates(name))
+            if name and namespace:
+                refs.add(f"{namespace}/{name}".lower())
+            for key in ("service_account", "serviceaccount", "service_account_name"):
+                refs.update(_value_reference_candidates(value.get(key)))
+        elif isinstance(value, list):
+            for item in value:
+                add_subject(item)
+
+    if isinstance(values, dict):
+        for key, value in values.items():
+            key_l = str(key).lower()
+            if key_l in {"subject", "subjects"}:
+                add_subject(value)
+            elif key_l in {"service_account", "serviceaccount", "service_account_name"}:
+                refs.update(_value_reference_candidates(value))
+            if isinstance(value, (dict, list)):
+                refs.update(_kubernetes_subject_refs(value))
+    elif isinstance(values, list):
+        for item in values:
+            refs.update(_kubernetes_subject_refs(item))
+    return refs
+
+
+def _max_referenced_exposure(candidates: set[str], exposure_by_ref: dict[str, str]) -> str:
+    exposure = "unknown"
+    for reference, level in exposure_by_ref.items():
+        if _references_any(candidates, {reference}):
+            exposure = max_exposure(exposure, level)
+    return exposure
+
+
+def _has_direct_public_address(values: Any) -> bool:
+    if isinstance(values, dict):
+        for key, value in values.items():
+            key_l = str(key).lower()
+            if key_l in {"associate_public_ip_address", "assign_public_ip", "map_public_ip_on_launch"} and bool(value):
+                return True
+            if key_l in {"public_ip", "public_ip_address", "public_ips", "nat_ip", "nat_ips"} and _has_truthy_public_value(value):
+                return True
+            if key_l == "access_config" and value not in (None, [], {}):
+                return True
+            if isinstance(value, (dict, list)) and _has_direct_public_address(value):
+                return True
+    elif isinstance(values, list):
+        return any(_has_direct_public_address(item) for item in values)
+    return False
+
+
+def _has_truthy_public_value(value: Any) -> bool:
+    if isinstance(value, list):
+        return any(_has_truthy_public_value(item) for item in value)
+    if isinstance(value, dict):
+        return any(_has_truthy_public_value(item) for item in value.values())
+    if value is None or value is False:
+        return False
+    text = str(value).strip().lower()
+    return bool(text and text not in {"false", "none", "null", "0.0.0.0", "::"})
+
+
+def _azure_has_private_frontend_only(values: dict[str, Any]) -> bool:
+    frontends = values.get("frontend_ip_configuration") or values.get("frontend_ip_configurations")
+    if isinstance(frontends, dict):
+        frontends = [frontends]
+    if not isinstance(frontends, list) or not frontends:
+        return False
+    saw_private = False
+    for frontend in frontends:
+        if not isinstance(frontend, dict):
+            continue
+        if frontend.get("public_ip_address_id") or frontend.get("public_ip_address"):
+            return False
+        if frontend.get("private_ip_address") or frontend.get("subnet_id"):
+            saw_private = True
+    return saw_private
+
+
+def _has_private_network_attachment(values: Any) -> bool:
+    private_keys = {
+        "subnet",
+        "subnets",
+        "subnet_id",
+        "subnet_ids",
+        "vpc_id",
+        "vpc_config",
+        "network",
+        "networks",
+        "network_interface",
+        "network_interfaces",
+        "network_configuration",
+        "security_group",
+        "security_groups",
+        "security_group_ids",
+        "vpc_security_group_ids",
+        "virtual_network_subnet_id",
+        "private_endpoint",
+        "private_ip_address",
+        "private_ip_addresses",
+        "private_cluster_config",
+        "connector",
+        "vpc_connector",
+        "vpc_access",
+    }
+    if isinstance(values, dict):
+        for key, value in values.items():
+            key_l = str(key).lower()
+            if key_l in private_keys and value not in (None, [], {}, ""):
+                return True
+            if isinstance(value, (dict, list)) and _has_private_network_attachment(value):
+                return True
+    elif isinstance(values, list):
+        return any(_has_private_network_attachment(item) for item in values)
+    return False
+
+
+def _network_source_exposure(value: Any) -> str:
+    if value is None:
+        return "unknown"
+    text = str(value).strip().strip('"').strip("'").lower()
+    if not text:
+        return "unknown"
+    if text in PUBLIC_TOKEN_VALUES:
+        return "public"
+    if text in INTERNAL_TOKEN_VALUES or text.startswith("sg-"):
+        return "internal"
+    try:
+        network = ipaddress.ip_network(text, strict=False)
+    except ValueError:
+        return "unknown"
+    if network.version in {4, 6} and network.is_global:
+        return "external"
+    return "internal"
 
 
 def _resource_identifiers(resource: TerraformResource) -> set[str]:
@@ -1141,6 +2056,18 @@ def _value_reference_candidates(values: Any) -> set[str]:
             return
         lower = text.lower()
         candidates.add(lower)
+        path_parts = [part for part in re.split(r"[/\\]", lower) if part]
+        cloud_path_markers = (
+            "/backendaddresspools/",
+            "/networkinterfaces/",
+            "/targetgroup/",
+            "/services/",
+            "/locations/",
+            "/regions/",
+            "/zones/",
+        )
+        if len(path_parts) > 1 and any(marker in lower for marker in cloud_path_markers):
+            candidates.add(path_parts[-1])
         for token in re.findall(r"[A-Za-z0-9_:\-/]+(?:\.[A-Za-z0-9_\-]+)+|sg-[A-Za-z0-9]+|arn:[^\s,\]\}]+", text):
             candidates.add(token.strip().strip('"').strip("'").lower())
 
@@ -1167,6 +2094,21 @@ def _security_group_refs(values: dict[str, Any]) -> set[str]:
         for item in network_configuration:
             if isinstance(item, dict):
                 refs.update(_security_group_refs(item))
+    return refs
+
+
+def _network_interface_refs(values: dict[str, Any]) -> set[str]:
+    refs: set[str] = set()
+    for key in ("network_interface_id", "network_interface_ids", "network_interface", "network_interfaces"):
+        if key in values:
+            refs.update(_value_reference_candidates(values.get(key)))
+    network_configuration = values.get("network_configuration")
+    if isinstance(network_configuration, dict):
+        refs.update(_network_interface_refs(network_configuration))
+    elif isinstance(network_configuration, list):
+        for item in network_configuration:
+            if isinstance(item, dict):
+                refs.update(_network_interface_refs(item))
     return refs
 
 
@@ -1237,18 +2179,30 @@ def _kubernetes_names_and_selectors(resource: TerraformResource) -> set[str]:
 
 
 def privilege_for_resource(resource: TerraformResource) -> str:
+    return iam_grant_for_resource(resource).privilege
+
+
+def iam_grant_for_resource(resource: TerraformResource) -> IamGrant:
     values = resource.values
     rtype = resource.type
     if rtype in {"aws_iam_policy", "aws_iam_role_policy", "aws_iam_user_policy", "aws_iam_group_policy"}:
-        return classify_policy(values.get("policy"))
+        privilege, impacts, resource_refs = classify_policy_details(values.get("policy"))
+        return IamGrant(privilege=privilege, impacts=tuple(sorted(impacts)), resource_refs=tuple(sorted(resource_refs)), evidence=_iam_grant_evidence(resource, privilege, impacts))
     if rtype == "aws_iam_role_policy_attachment":
-        return classify_role_text(values.get("policy_arn") or values.get("policy"))
+        privilege, impacts = classify_role_text_details(values.get("policy_arn") or values.get("policy"))
+        return IamGrant(privilege=privilege, impacts=tuple(sorted(impacts)), evidence=_iam_grant_evidence(resource, privilege, impacts))
     if rtype == "aws_iam_role":
-        return classify_role_text(values.get("managed_policy_arns") or values.get("name") or values.get("arn"))
+        if values.get("managed_policy_arns"):
+            privilege, impacts = classify_role_text_details(values.get("managed_policy_arns"))
+            return IamGrant(privilege=privilege, impacts=tuple(sorted(impacts)), evidence=_iam_grant_evidence(resource, privilege, impacts))
+        privilege, impacts, resource_refs = _embedded_policy_details(values.get("inline_policy") or values.get("inline_policies"))
+        return IamGrant(privilege=privilege, impacts=tuple(sorted(impacts)), resource_refs=tuple(sorted(resource_refs)), evidence=_iam_grant_evidence(resource, privilege, impacts))
     if rtype == "azurerm_role_assignment":
-        return classify_role_text(values.get("role_definition_name") or values.get("role_definition_id"))
+        privilege, impacts = classify_role_text_details(values.get("role_definition_name") or values.get("role_definition_id"))
+        return IamGrant(privilege=privilege, impacts=tuple(sorted(impacts)), evidence=_iam_grant_evidence(resource, privilege, impacts))
     if rtype == "azurerm_key_vault_access_policy":
-        return _azure_key_vault_privilege(values)
+        privilege, impacts = _azure_key_vault_privilege_details(values)
+        return IamGrant(privilege=privilege, impacts=tuple(sorted(impacts)), resource_refs=tuple(sorted(_value_reference_candidates(values.get("key_vault_id")))), evidence=_iam_grant_evidence(resource, privilege, impacts))
     if rtype in {
         "google_project_iam_member",
         "google_project_iam_binding",
@@ -1263,51 +2217,133 @@ def privilege_for_resource(resource: TerraformResource) -> str:
         "google_secret_manager_secret_iam_member",
         "google_iap_web_cloud_run_service_iam_member",
     }:
-        return classify_role_text(values.get("role"))
+        privilege, impacts = classify_role_text_details(values.get("role"))
+        resource_refs = _value_reference_candidates(values.get("project")) | _value_reference_candidates(values.get("secret_id")) | _value_reference_candidates(values.get("resource")) | _value_reference_candidates(values.get("name"))
+        return IamGrant(privilege=privilege, impacts=tuple(sorted(impacts)), resource_refs=tuple(sorted(resource_refs)), evidence=_iam_grant_evidence(resource, privilege, impacts))
     if rtype in {"kubernetes_role_binding", "kubernetes_cluster_role_binding", "kubernetes_role_binding_v1", "kubernetes_cluster_role_binding_v1", "kubernetes_role_v1", "kubernetes_cluster_role_v1"}:
-        return classify_role_text(values.get("role_ref") or values.get("metadata"))
-    return "unknown"
+        privilege, impacts = classify_role_text_details(values.get("role_ref") or values.get("metadata"))
+        return IamGrant(privilege=privilege, impacts=tuple(sorted(impacts)), evidence=_iam_grant_evidence(resource, privilege, impacts))
+    return IamGrant(privilege="unknown", evidence=f"unknown IAM on {resource.address}")
+
+
+def _iam_grant_evidence(resource: TerraformResource, privilege: str, impacts: set[str]) -> str:
+    impact_text = ",".join(sorted(impacts)) if impacts else "none"
+    return f"{privilege} IAM on {resource.address} impact={impact_text}"
 
 
 def classify_policy(policy: Any) -> str:
+    return classify_policy_details(policy)[0]
+
+
+def classify_policy_details(policy: Any) -> tuple[str, set[str], set[str]]:
     if not policy:
-        return "unknown"
+        return "unknown", set(), set()
     if isinstance(policy, str):
         try:
             policy = json.loads(policy)
         except json.JSONDecodeError:
-            return classify_role_text(policy)
+            privilege, impacts = classify_role_text_details(policy)
+            return privilege, impacts, set()
     statements = policy.get("Statement", []) if isinstance(policy, dict) else []
     if isinstance(statements, dict):
         statements = [statements]
     best = "unknown"
+    impacts: set[str] = set()
+    resource_refs: set[str] = set()
     for statement in statements:
         if not isinstance(statement, dict) or str(statement.get("Effect", "Allow")).lower() != "allow":
             continue
+        resource_refs.update(_value_reference_candidates(statement.get("Resource")))
+        resource_refs.update(_value_reference_candidates(statement.get("NotResource")))
         if "NotAction" in statement:
             best = max_privilege(best, "admin")
+            impacts.add("admin_control")
             continue
         actions = [str(action).lower() for action in _listify(statement.get("Action"))]
         if "*" in actions or any(action.endswith(":*") for action in actions):
             best = max_privilege(best, "admin")
-        elif any(_is_sensitive_action(action) for action in actions):
+            impacts.add("admin_control")
+            for action in actions:
+                impacts.update(_iam_action_impacts(action))
+        else:
+            for action in actions:
+                impacts.update(_iam_action_impacts(action))
+        if impacts & CRITICAL_IAM_IMPACTS and best != "admin":
             best = max_privilege(best, "sensitive")
         elif actions:
             best = max_privilege(best, "limited")
-    return best
+    return best, impacts, resource_refs
+
+
+def _embedded_policy_details(value: Any) -> tuple[str, set[str], set[str]]:
+    best = "unknown"
+    impacts: set[str] = set()
+    resource_refs: set[str] = set()
+    for item in _listify(value):
+        policy = item.get("policy") if isinstance(item, dict) else item
+        privilege, policy_impacts, policy_refs = classify_policy_details(policy)
+        best = max_privilege(best, privilege)
+        impacts.update(policy_impacts)
+        resource_refs.update(policy_refs)
+    return best, impacts, resource_refs
 
 
 def classify_role_text(value: Any) -> str:
+    return classify_role_text_details(value)[0]
+
+
+def classify_role_text_details(value: Any) -> tuple[str, set[str]]:
     text = json.dumps(value, sort_keys=True).lower() if isinstance(value, (dict, list)) else str(value or "").lower()
     if not text:
-        return "unknown"
+        return "unknown", set()
+    impacts = _iam_text_impacts(text)
     if any(token in text for token in ADMIN_ROLE_TOKENS):
-        return "admin"
-    if any(token in text for token in SENSITIVE_ROLE_TOKENS):
-        return "sensitive"
+        impacts.add("admin_control")
+        return "admin", impacts
+    if any(token in text for token in SENSITIVE_ROLE_TOKENS) or impacts & CRITICAL_IAM_IMPACTS:
+        return "sensitive", impacts
     if "role" in text or "policy" in text or ":" in text:
-        return "limited"
-    return "unknown"
+        return "limited", impacts
+    return "unknown", impacts
+
+
+def _iam_action_impacts(action: str) -> set[str]:
+    action = action.lower()
+    impacts: set[str] = set()
+    if action in {"*", "*:*"}:
+        impacts.add("admin_control")
+        return impacts
+    if _is_sensitive_action(action):
+        impacts.add("data_access")
+    if action.startswith("iam:") or action.startswith("sts:"):
+        if any(token in action for token in ("passrole", "assumerole", "attach", "putrolepolicy", "createpolicyversion", "setdefaultpolicyversion", "updateassumerolepolicy", "createaccesskey", "serviceaccount")):
+            impacts.add("iam_escalation")
+    if action.startswith(("ec2:", "elasticloadbalancing:", "route53:")):
+        if any(token in action for token in ("securitygroup", "authorize", "revoke", "route", "vpc", "subnet", "transitgateway", "vpn", "peering", "networkinterface", "loadbalancer", "listener", "targetgroup", "*")):
+            impacts.add("network_control")
+    if action.startswith(("lambda:", "ecs:", "eks:", "ssm:", "apprunner:", "run.", "cloudfunctions.", "container.")):
+        if any(token in action for token in ("update", "create", "run", "execute", "sendcommand", "invoke", "admin", "*")):
+            impacts.add("compute_control")
+    if action.startswith(("compute.firewalls", "compute.routes", "compute.networks", "compute.subnetworks", "compute.vpn", "compute.interconnect", "networkmanagement.")):
+        impacts.add("network_control")
+    if action.startswith(("microsoft.network/", "network.")) or "/network/" in action:
+        impacts.add("network_control")
+    if "serviceaccounts.actas" in action or "iam.serviceaccounts" in action:
+        impacts.add("iam_escalation")
+    return impacts
+
+
+def _iam_text_impacts(text: str) -> set[str]:
+    impacts: set[str] = set()
+    if any(token in text for token in ("network contributor", "networkadmin", "compute.networkadmin", "securityadmin", "firewall", "route", "vpc", "vnet", "load balancer", "application gateway")):
+        impacts.add("network_control")
+    if any(token in text for token in ("user access administrator", "serviceaccounttokencreator", "serviceaccountuser", "iam.serviceaccount", "iam.serviceaccountadmin", "projectiambindingadmin", "passrole")):
+        impacts.add("iam_escalation")
+    if any(token in text for token in ("secret", "key vault", "keyvault", "kms", "decrypt", "sql", "database", "cloudsql", "bigquery", "storage", "s3", "dynamodb")):
+        impacts.add("data_access")
+    if any(token in text for token in ("run.admin", "cloudfunctions.admin", "container.admin", "lambda", "ecs", "eks", "compute.admin", "virtual machine contributor", "vm contributor")):
+        impacts.add("compute_control")
+    return impacts
 
 
 def _is_sensitive_action(action: str) -> bool:
@@ -1327,12 +2363,37 @@ def _is_sensitive_action(action: str) -> bool:
 
 
 def _azure_key_vault_privilege(values: dict[str, Any]) -> str:
+    return _azure_key_vault_privilege_details(values)[0]
+
+
+def _azure_key_vault_privilege_details(values: dict[str, Any]) -> tuple[str, set[str]]:
     permissions = json.dumps(values.get("secret_permissions") or values.get("key_permissions") or values.get("certificate_permissions") or [], sort_keys=True).lower()
     if any(word in permissions for word in ("all", "purge", "delete", "set")):
-        return "admin"
+        return "admin", {"admin_control", "data_access"}
     if any(word in permissions for word in ("get", "list", "decrypt")):
-        return "sensitive"
-    return "unknown"
+        return "sensitive", {"data_access"}
+    return "unknown", set()
+
+
+def _network_iam_criticality(exposure: str, privilege: str, impacts: set[str]) -> str:
+    critical_impacts = impacts & CRITICAL_IAM_IMPACTS
+    if privilege == "admin":
+        critical_impacts.add("admin_control")
+    if not critical_impacts:
+        return "medium" if privilege == "sensitive" and exposure in {"public", "external", "internal"} else "unknown"
+    if exposure in {"public", "external", "internal"}:
+        return "high"
+    if exposure == "private":
+        return "medium"
+    return "medium" if critical_impacts - {"admin_control"} else "unknown"
+
+
+def max_criticality(left: str, right: str) -> str:
+    return left if criticality_rank(left) >= criticality_rank(right) else right
+
+
+def criticality_rank(value: str) -> int:
+    return {"unknown": 0, "low": 1, "medium": 2, "high": 3}.get(value, 0)
 
 
 def max_privilege(left: str, right: str) -> str:
@@ -1506,6 +2567,7 @@ __all__ = [
     "classify_role_text",
     "coverage_report",
     "empty_coverage_report",
+    "exposure_for_resource",
     "extract_resources",
     "find_image_references",
     "image_matches",

@@ -36,6 +36,7 @@
                   {
                     "spec": [
                       {
+                        "service_account_name": "dashboard-api",
                         "container": [
                           {
                             "name": "dashboard-api",
@@ -105,7 +106,14 @@
             "role_ref": {
               "name": "cluster-admin",
               "kind": "ClusterRole"
-            }
+            },
+            "subject": [
+              {
+                "kind": "ServiceAccount",
+                "name": "dashboard-api",
+                "namespace": "apps"
+              }
+            ]
           }
         }
       ]

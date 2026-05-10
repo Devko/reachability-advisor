@@ -203,8 +203,10 @@ def _remediation_markdown(index: int, remediation: dict[str, Any]) -> list[str]:
         f"- Max score: `{float(remediation['max_score']):.1f}`; confidence: `{remediation['confidence']}`",
         f"- Owner: `{owner}`",
         f"- Source signal: `{remediation['reachability']}`",
-        f"- Context: exposure=`{context['exposure']}`, environment=`{context['environment']}`, privilege=`{context['privilege']}`",
+        f"- Context: exposure=`{context['exposure']}`, environment=`{context['environment']}`, privilege=`{context['privilege']}`, criticality=`{context.get('criticality', 'unknown')}`",
     ]
+    if context.get("iam_impacts"):
+        lines.append(f"- IAM impacts: `{', '.join(context['iam_impacts'])}`")
     if remediation.get("suggested_fix"):
         lines.append(f"- Suggested fix: `{remediation['suggested_fix']}`")
     elif not remediation.get("fix_available"):
@@ -233,8 +235,10 @@ def _finding_markdown(index: int, finding: Finding) -> list[str]:
         f"- Score: `{finding.score:.1f}`; confidence: `{finding.confidence.value}`",
         f"- Owner: `{owner}`",
         f"- Source signal: `{finding.source.reachability.value}` ({finding.source.reason})",
-        f"- Context: exposure=`{finding.context.exposure}`, environment=`{finding.context.environment}`, privilege=`{finding.context.privilege}`",
+        f"- Context: exposure=`{finding.context.exposure}`, environment=`{finding.context.environment}`, privilege=`{finding.context.privilege}`, criticality=`{finding.context.criticality}`",
     ]
+    if finding.context.iam_impacts:
+        lines.append(f"- IAM impacts: `{', '.join(finding.context.iam_impacts)}`")
     if finding.fix_commands:
         lines.append("- Suggested fix:")
         for command in finding.fix_commands:
@@ -316,10 +320,11 @@ def explain_finding(data: dict[str, Any], key: str | None = None, artifact: str 
         "",
         "## Evidence",
         f"- Source reachability: `{selected['source_reachability']['state']}` - {selected['source_reachability']['reason']}",
-        f"- Context: exposure=`{selected['context']['exposure']}`, environment=`{selected['context']['environment']}`, privilege=`{selected['context']['privilege']}`",
-        "",
-        "## Rationale",
+        f"- Context: exposure=`{selected['context']['exposure']}`, environment=`{selected['context']['environment']}`, privilege=`{selected['context']['privilege']}`, criticality=`{selected['context'].get('criticality', 'unknown')}`",
     ]
+    if selected["context"].get("iam_impacts"):
+        lines.append(f"- IAM impacts: `{', '.join(selected['context']['iam_impacts'])}`")
+    lines.extend(["", "## Rationale"])
     for reason in selected.get("rationale", []):
         lines.append(f"- {reason}")
     if selected.get("fix_commands"):

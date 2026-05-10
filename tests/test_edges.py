@@ -239,6 +239,23 @@ class SourceAndScoringEdgeTests(unittest.TestCase):
         self.assertGreater(finding.score, 0)
         self.assertIn("dependency scope", " ".join(finding.rationale))
 
+    def test_network_iam_criticality_contributes_to_score(self) -> None:
+        sbom_like = type("SbomLike", (), {"artifact": Artifact(name="app")})()
+        component = Component(name="lib", version="1")
+        vuln = VulnerabilityRecord(id="CVE-X", package_name="lib", severity="medium")
+        source = SourceEvidence(reachability=Reachability.IMPORTED, confidence=Confidence.MEDIUM)
+        base = score_finding(sbom_like, component, vuln, source, ContextEvidence(exposure="public", privilege="sensitive"), ScorePolicy())
+        critical = score_finding(
+            sbom_like,
+            component,
+            vuln,
+            source,
+            ContextEvidence(exposure="public", privilege="sensitive", criticality="high", iam_impacts=["data_access"], confidence=Confidence.MEDIUM),
+            ScorePolicy(),
+        )
+        self.assertGreater(critical.score, base.score)
+        self.assertIn("criticality high contributes", " ".join(critical.rationale))
+
     def test_high_source_confidence_is_not_downgraded_to_low(self) -> None:
         sbom_like = type("SbomLike", (), {"artifact": Artifact(name="app")})()
         finding = score_finding(

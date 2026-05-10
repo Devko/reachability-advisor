@@ -9,6 +9,7 @@
           "name": "payments",
           "values": {
             "container_definitions": "[{\"name\":\"payments-api\",\"image\":\"ghcr.io/acme/payments-api:1.2.3\"}]",
+            "task_role_arn": "payments-task-role",
             "tags": {"Environment": "prod", "Owner": "@team-payments"}
           }
         },
@@ -33,7 +34,7 @@
           "address": "aws_iam_role_policy.payments_secrets",
           "type": "aws_iam_role_policy",
           "name": "payments_secrets",
-          "values": {"name": "payments-secrets", "policy": "{\"Statement\": [{\"Effect\": \"Allow\", \"Action\": [\"secretsmanager:GetSecretValue\", \"s3:GetObject\"], \"Resource\": \"*\"}]}"}
+          "values": {"name": "payments-secrets", "role": "payments-task-role", "policy": "{\"Statement\": [{\"Effect\": \"Allow\", \"Action\": [\"secretsmanager:GetSecretValue\", \"s3:GetObject\"], \"Resource\": \"*\"}]}"}
         },
         {
           "address": "aws_lambda_function.notifier",
@@ -54,6 +55,7 @@
           "values": {
             "name": "orders-api",
             "template": [{"container": [{"name": "orders-api", "image": "ghcr.io/acme/orders-api:3.4.0"}]}],
+            "identity": [{"type": "SystemAssigned", "principal_id": "orders-principal"}],
             "ingress": [{"external_enabled": true, "target_port": 8080}],
             "tags": {"environment": "prod", "owner": "@team-orders"}
           }
@@ -62,7 +64,7 @@
           "address": "azurerm_role_assignment.orders_contributor",
           "type": "azurerm_role_assignment",
           "name": "orders_contributor",
-          "values": {"role_definition_name": "Contributor"}
+          "values": {"role_definition_name": "Contributor", "principal_id": "orders-principal"}
         },
         {
           "address": "azurerm_key_vault.orders",
@@ -76,7 +78,7 @@
           "name": "audit",
           "values": {
             "name": "audit-api",
-            "template": [{"containers": [{"image": "ghcr.io/acme/audit-api:2.0.0"}]}],
+            "template": [{"service_account": "audit@example.iam.gserviceaccount.com", "containers": [{"image": "ghcr.io/acme/audit-api:2.0.0"}]}],
             "labels": {"environment": "prod", "owner": "@team-platform"}
           }
         },

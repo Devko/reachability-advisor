@@ -143,6 +143,7 @@ Schema draft: `schemas/runtime-policy.schema.json`.
       "exposure": "public",
       "privilege": "sensitive",
       "criticality": "high",
+      "iam_impacts": ["data_access"],
       "owner": "@team-name",
       "confidence": "high",
       "evidence": ["public API", "secrets access"]

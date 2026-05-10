@@ -26,6 +26,7 @@
           "provider_name": "registry.terraform.io/hashicorp/aws",
           "values": {
             "family": "payments-api",
+            "task_role_arn": "payments-task-role",
             "container_definitions": "[{\"name\": \"payments-api\", \"image\": \"ghcr.io/acme/payments-api:1.0.0\"}]",
             "tags": {
               "environment": "prod",
@@ -140,6 +141,7 @@
           "name": "task",
           "provider_name": "registry.terraform.io/hashicorp/aws",
           "values": {
+            "role": "payments-task-role",
             "policy": "{\"Statement\": [{\"Effect\": \"Allow\", \"Action\": [\"secretsmanager:GetSecretValue\", \"s3:GetObject\"], \"Resource\": \"*\"}]}"
           }
         },

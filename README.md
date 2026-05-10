@@ -137,7 +137,7 @@ SBOM artifact
   -> score and developer output
 ```
 
-v4 improves the logic in three places:
+The mapper uses three guardrails:
 
 | Area | Improvement |
 |---|---|
@@ -329,7 +329,7 @@ make package
 Current validation snapshot:
 
 ```text
-Ran 269 tests: OK
+Ran 318 tests: OK
 Coverage: 93%
 Coverage gate: 93% passed
 Fixture packs: 4 passed, 0 failed

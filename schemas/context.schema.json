@@ -12,6 +12,7 @@
           "exposure": {"type": "string"},
           "privilege": {"type": "string"},
           "criticality": {"type": "string"},
+          "iam_impacts": {"type": "array", "items": {"type": "string"}},
           "owner": {"type": "string"},
           "confidence": {"enum": ["high", "medium", "low"]},
           "evidence": {"type": "array", "items": {"type": "string"}}

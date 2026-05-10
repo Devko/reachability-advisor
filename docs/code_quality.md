@@ -2,7 +2,7 @@
 
 ## Current gates
 
-- Unit and workflow tests: 269.
+- Unit and workflow tests: 318.
 - Coverage threshold: 93%.
 - Current measured coverage: 93% line/branch-aware coverage report.
 - Compile check: `python -m compileall`.
@@ -25,7 +25,7 @@
 
 ## Logic quality bar
 
-The v4 logic layer has tests for:
+The logic layer has tests for:
 
 - CycloneDX metadata component properties and external references.
 - Explicit artifact aliases from `--artifact-alias`.
@@ -47,9 +47,9 @@ The Terraform layer has tests for:
 - Manifest uniqueness and manifest accounting.
 - Plan parsing from `planned_values` and `resource_changes`.
 - Container image extraction across ECS/Lambda/App Runner, Azure Container Apps/App Service, GCP Cloud Run, and Kubernetes resources.
-- Public exposure detection for AWS security groups/load balancers/API resources, Azure NSGs/public resources, GCP firewalls/public invoker IAM, and Kubernetes services/ingresses.
-- Linked public exposure inference for AWS ECS security groups/target groups, AWS Lambda URLs, GCP Cloud Run/Cloud Functions public invokers, Azure Container Apps ingress, and Kubernetes Service/Ingress names or selectors.
-- IAM blast-radius classification across AWS IAM, Azure role assignments and Key Vault policies, GCP IAM, and Kubernetes role bindings.
+- Public, restricted external, internal lateral, private-only, and unknown exposure detection across AWS, Azure, GCP, and Kubernetes resources.
+- Bounded graph pathfinding for AWS ECS security groups/target groups, AWS target attachments, AWS Lambda URLs, Azure application gateway/load-balancer backend paths, GCP forwarding-rule/backend-service/NEG paths, GCP Cloud Run/Cloud Functions public invokers, Azure Container Apps ingress, Kubernetes Service/Ingress names or selectors, security-group hops, and lateral bridge resources such as peering, VPN, transit, ExpressRoute, and Interconnect.
+- IAM blast-radius classification, per-workload identity linkage, IAM impact classes, targeted sensitive-resource evidence, and network-aware criticality across AWS IAM, Azure role assignments and Key Vault policies, GCP IAM, and Kubernetes role bindings.
 - CLI generation of `--terraform-coverage-out`.
 
 ## Fixture-pack quality bar

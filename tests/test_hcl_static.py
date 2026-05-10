@@ -104,9 +104,14 @@ class HclStaticAuditTests(unittest.TestCase):
                 resource "azurerm_container_app" "orders" {
                   name = "orders-api"
                   template { container { image = "mcr.microsoft.com/acme/orders-api:2" } }
+                  identity {
+                    type = "SystemAssigned"
+                    principal_id = "pid-orders"
+                  }
                   ingress { external_enabled = true }
                 }
                 resource "azurerm_role_assignment" "owner" {
+                  principal_id = "pid-orders"
                   role_definition_name = "Contributor"
                 }
                 ''',
@@ -228,7 +233,7 @@ class HclStaticCoverageBoostTests(unittest.TestCase):
         self.assertTrue(is_public_exposure(resources[0]))
         self.assertIn("ghcr.io/acme/app:1", find_image_references(resources[1].values))
 
-    def test_hcl_static_preserves_security_group_reference_for_exposure_linking(self) -> None:
+    def test_hcl_static_preserves_security_group_reference_as_lateral_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "main.tf").write_text(
@@ -247,7 +252,7 @@ class HclStaticCoverageBoostTests(unittest.TestCase):
                 encoding="utf-8",
             )
             analysis = analyze_terraform_source(root, [Artifact(name="app")])
-        self.assertEqual(analysis.contexts["app"].exposure, "public")
+        self.assertEqual(analysis.contexts["app"].exposure, "internal")
 
     def test_hcl_static_preserves_interpolated_image_value(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

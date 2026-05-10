@@ -36,6 +36,7 @@ def _context_from_mapping(raw: dict[str, Any], source: str) -> ContextEvidence:
         exposure=str(raw.get("exposure") or "unknown").lower(),
         privilege=str(raw.get("privilege") or "unknown").lower(),
         criticality=str(raw.get("criticality") or "unknown").lower(),
+        iam_impacts=[str(item).lower() for item in raw.get("iam_impacts", [])] if isinstance(raw.get("iam_impacts"), list) else [],
         owner=str(raw.get("owner")) if raw.get("owner") else None,
         source=source,
         confidence=Confidence(confidence),
