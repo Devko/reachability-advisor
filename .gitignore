@@ -1,4 +1,5 @@
 .venv/
+/.tools/
 __pycache__/
 *.pyc
 .coverage
@@ -9,6 +10,8 @@ build/
 outputs/*.json
 outputs/*.sarif
 outputs/*.md
+outputs/
+external_corpus/worktrees/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

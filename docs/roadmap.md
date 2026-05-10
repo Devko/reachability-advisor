@@ -1,18 +1,20 @@
 # Roadmap
 
-## v1.0: OWASP candidate-quality focused edition
+## Stable v1.0 release baseline
 
 - Local-first CLI.
 - CycloneDX JSON ingestion.
-- Local vulnerability intelligence and OSV-style parser.
-- Java, Node, and Python source heuristics.
-- Context JSON and Terraform-lite hints.
+- Grype, local vulnerability intelligence, and OSV-style parsers.
+- Java, Node, Python, and basic Go source heuristics.
+- Context JSON, Terraform plan context, and conservative HCL static context.
 - JSON, SARIF, diagnostics, Markdown, and annotation outputs.
+- Mapping reports, Terraform coverage reports, HCL audit reports, SBOM planning, and remediation groups.
 - PR delta workflow.
+- Release validation against repository JSON schemas.
 - VS Code extension skeleton.
-- Governance, contribution, security, and OWASP application docs.
+- Governance, contribution, and security docs.
 
-## v2.0: Multi-cloud Terraform developer context
+## Completed milestone: Multi-cloud Terraform developer context
 
 - AWS, Azure, GCP, and Kubernetes Terraform plan support.
 - Manifest-driven resource coverage.
@@ -23,7 +25,7 @@
 - Coarse IAM blast-radius classification across providers.
 - Expanded sample data, 134 tests, and 90%+ coverage gate.
 
-## v3.0: Community Terraform fixture packs
+## Completed milestone: Community Terraform fixture packs
 
 - Fixture harness with `fixtures list`, `fixtures validate`, and `fixtures run`.
 - Sanitized module-shaped fixture packs for AWS ECS/Fargate, Azure Container Apps, GCP Cloud Run, and Kubernetes ingress workloads.
@@ -32,7 +34,7 @@
 - Fixture pack and fixture report schemas.
 - Expanded test suite to 174 tests and raised the coverage gate to 92%.
 
-## v4.0: Logic verification and mapping hardening
+## Completed milestone: Logic verification and mapping hardening
 
 - `sbom-plan` command for SBOM acquisition guidance.
 - Stronger CycloneDX metadata parsing, including metadata component properties and external references.
@@ -45,15 +47,24 @@
 - Basic Go import evidence.
 - Expanded test suite to 224 tests and raised the coverage gate to 93%.
 
-## v4.1 candidates
+## Completed milestone: Grype handoff and real-world validation
 
-- Schema validation in tests for every output format.
+- Grype JSON parser for using Grype as the vulnerability scanner and database handoff.
+- Package-level remediation grouping with fixed-version recommendations when scanner data includes them.
+- HCL static audit mode for public Terraform repositories and early PR/IDE checks.
+- Real-world replay scripts for external HCL corpus validation and existing Grype/CycloneDX outputs.
+- Expanded source rules for Express, NestJS/Express, Spring Web, FastAPI, Chainlit, and aiohttp.
+- Linked IaC exposure inference instead of provider-wide public fallback for supported workload patterns.
+- Expanded test suite to 269 tests while keeping the coverage gate at 93%.
+
+## Post-v1 candidates
+
 - Better package-manager manifest support for Gradle, pnpm, yarn, Poetry, and Go modules.
 - More precise diagnostics-to-source mapping.
 - Additional community Terraform fixtures for common AWS Lambda, Azure App Service, GCP GKE, and Kubernetes Helm module shapes.
-- Published JSON schemas and example policy packs.
+- Example policy packs.
 
-## v5.0 candidates
+## Longer-term candidates
 
 - Optional language-server wrapper.
 - Baseline cache format.

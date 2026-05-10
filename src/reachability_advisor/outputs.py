@@ -9,6 +9,7 @@ from typing import Any
 
 from . import __version__
 from .models import Finding, SourceLocation, Tier
+from .remediation import build_remediation_groups
 
 
 def _metadata(extra: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -25,8 +26,18 @@ def _metadata(extra: dict[str, Any] | None = None) -> dict[str, Any]:
 def write_json_findings(findings: list[Finding], path: str | Path, metadata: dict[str, Any] | None = None) -> None:
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
+    remediations = build_remediation_groups(findings)
+    metadata_with_rollup = dict(metadata or {})
+    metadata_with_rollup.setdefault("remediation_groups", len(remediations))
     out.write_text(
-        json.dumps({"metadata": _metadata(metadata), "findings": [finding.to_json() for finding in findings]}, indent=2),
+        json.dumps(
+            {
+                "metadata": _metadata(metadata_with_rollup),
+                "remediations": remediations,
+                "findings": [finding.to_json() for finding in findings],
+            },
+            indent=2,
+        ),
         encoding="utf-8",
     )
 
@@ -153,6 +164,7 @@ def _finding_message(finding: Finding) -> str:
 def write_markdown_report(findings: list[Finding], path: str | Path, max_findings: int = 15) -> None:
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
+    remediations = build_remediation_groups(findings)
     lines = [
         "# Reachability Advisor PR Summary",
         "",
@@ -160,16 +172,55 @@ def write_markdown_report(findings: list[Finding], path: str | Path, max_finding
         "",
         "This report prioritizes dependency vulnerabilities using SBOM presence, source reachability hints, and optional deployment context. It does not prove exploitability and should not be used for automatic suppression without review.",
         "",
-        "## Fix-now queue",
+        "## Remediation queue",
         "",
     ]
     if not findings:
         lines.append("No matching vulnerable components were found.")
+    for index, remediation in enumerate(remediations[:max_findings], start=1):
+        lines.extend(_remediation_markdown(index, remediation))
+    if len(remediations) > max_findings:
+        lines.append(f"\n{len(remediations) - max_findings} additional remediation groups omitted from this summary. See JSON output for details.")
+    if findings:
+        lines.extend(["", "## Highest-scoring findings", ""])
     for index, finding in enumerate(findings[:max_findings], start=1):
         lines.extend(_finding_markdown(index, finding))
     if len(findings) > max_findings:
         lines.append(f"\n{len(findings) - max_findings} additional findings omitted from this summary. See JSON/SARIF output for details.")
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _remediation_markdown(index: int, remediation: dict[str, Any]) -> list[str]:
+    component = remediation["component"]
+    context = remediation["context"]
+    owner = context.get("owner") or "unknown owner"
+    vulnerabilities = remediation["top_vulnerabilities"]
+    lines = [
+        f"### {index}. {str(remediation['tier']).upper()}: `{component['display_name']}@{component.get('version') or 'unknown'}`",
+        "",
+        f"- Artifact: `{remediation['artifact']['name']}`",
+        f"- Vulnerabilities grouped: `{remediation['vulnerability_count']}`",
+        f"- Max score: `{float(remediation['max_score']):.1f}`; confidence: `{remediation['confidence']}`",
+        f"- Owner: `{owner}`",
+        f"- Source signal: `{remediation['reachability']}`",
+        f"- Context: exposure=`{context['exposure']}`, environment=`{context['environment']}`, privilege=`{context['privilege']}`",
+    ]
+    if remediation.get("suggested_fix"):
+        lines.append(f"- Suggested fix: `{remediation['suggested_fix']}`")
+    elif not remediation.get("fix_available"):
+        lines.append("- Suggested fix: no fixed version was reported by vulnerability intelligence")
+    if vulnerabilities:
+        shown = vulnerabilities[:5]
+        lines.append("- Included vulnerabilities:")
+        for vulnerability in shown:
+            lines.append(
+                f"  - `{vulnerability['id']}` score `{float(vulnerability['score']):.1f}` "
+                f"severity `{vulnerability['severity']}`"
+            )
+        if len(vulnerabilities) > len(shown):
+            lines.append(f"  - {len(vulnerabilities) - len(shown)} more in JSON output")
+    lines.append("")
+    return lines
 
 
 def _finding_markdown(index: int, finding: Finding) -> list[str]:

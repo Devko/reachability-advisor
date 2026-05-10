@@ -57,6 +57,67 @@ class CliTests(unittest.TestCase):
             self.assertIn("Reachability Advisor PR Summary", (out / "summary.md").read_text(encoding="utf-8"))
             self.assertIn("::error", (out / "annotations.txt").read_text(encoding="utf-8"))
 
+    def test_scan_accepts_grype_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            vulns = out / "grype.json"
+            vulns.write_text(
+                json.dumps(
+                    {
+                        "matches": [
+                            {
+                                "vulnerability": {
+                                    "id": "GHSA-35jh-r3h4-6jhm",
+                                    "severity": "High",
+                                    "description": "Prototype pollution in lodash.",
+                                    "cvss": [{"metrics": {"baseScore": 7.4}}],
+                                    "fix": {"versions": ["4.17.21"]},
+                                },
+                                "artifact": {
+                                    "name": "lodash",
+                                    "version": "4.17.20",
+                                    "purl": "pkg:npm/lodash@4.17.20",
+                                },
+                                "relatedVulnerabilities": [{"id": "CVE-2021-23337"}],
+                            },
+                            {
+                                "vulnerability": {
+                                    "id": "GHSA-r5fr-rjxr-66jc",
+                                    "severity": "Critical",
+                                    "description": "Additional lodash advisory.",
+                                    "cvss": [{"metrics": {"baseScore": 8.1}}],
+                                    "fix": {"versions": ["4.17.21"]},
+                                },
+                                "artifact": {
+                                    "name": "lodash",
+                                    "version": "4.17.20",
+                                    "purl": "pkg:npm/lodash@4.17.20",
+                                },
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            findings_path = out / "findings.json"
+            code = main([
+                "scan",
+                "--sbom", str(ROOT / "samples/sboms/notifier.cdx.json"),
+                "--vulns", str(vulns),
+                "--source-root", f"notifier={ROOT / 'samples/source/notifier'}",
+                "--out", str(findings_path),
+                "--no-table",
+            ])
+            self.assertEqual(code, 0)
+            data = json.loads(findings_path.read_text(encoding="utf-8"))
+            self.assertEqual(data["metadata"]["vulnerability_records"], 2)
+            self.assertEqual(data["metadata"]["remediation_groups"], 1)
+            self.assertEqual(len(data["remediations"]), 1)
+            self.assertEqual(data["remediations"][0]["vulnerability_count"], 2)
+            self.assertEqual(data["remediations"][0]["suggested_fix"], "npm install lodash@4.17.21")
+            self.assertEqual({finding["vulnerability"]["id"] for finding in data["findings"]}, {"GHSA-35jh-r3h4-6jhm", "GHSA-r5fr-rjxr-66jc"})
+            self.assertIn("CVE-2021-23337", next(finding for finding in data["findings"] if finding["vulnerability"]["id"] == "GHSA-35jh-r3h4-6jhm")["vulnerability"]["aliases"])
+
     def test_scan_fail_on_high(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             code = main([

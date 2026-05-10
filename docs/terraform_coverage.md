@@ -10,7 +10,7 @@ The intent is not to become a CNAPP or live cloud inventory product. The tool re
 - whether tags or labels identify environment and owner;
 - which Terraform resources were semantically classified and which became visibility gaps.
 
-## What “100% Terraform coverage” means here
+## What "100% Terraform coverage" means here
 
 There are thousands of Terraform resource types and modules can create arbitrary provider shapes. A defensible pipeline/IDE tool should not pretend to understand all of them semantically.
 
@@ -65,10 +65,10 @@ terraform show -json tfplan.binary > tfplan.json
 
 ```json
 {
-  "total_resources": 14,
-  "accounted_resources": 14,
+  "total_resources": 15,
+  "accounted_resources": 15,
   "resource_accounting_coverage": 1.0,
-  "semantically_classified_resources": 14,
+  "semantically_classified_resources": 15,
   "semantic_classification_coverage": 1.0,
   "artifacts_requested": 4,
   "artifacts_matched": 4,
@@ -81,7 +81,9 @@ terraform show -json tfplan.binary > tfplan.json
 
 - Missing Terraform context is `unknown`, not safe.
 - Unsupported resource types become visibility gaps.
-- Public exposure is only raised when a supported resource provides a clear public signal.
+- Helm and kubectl manifest wrappers are semantically classified as Kubernetes support resources, but still emit `opaque_manifest_wrapper` gaps because rendered child workloads are not inspected.
+- Public exposure is only raised when a supported resource provides a clear public signal linked to the matched workload. A public resource elsewhere in the same provider plan does not create provider-wide public context.
+- Supported linked public exposure currently includes AWS ECS security-group and load-balancer target-group links, AWS Lambda function URLs, GCP Cloud Run and Cloud Functions public invoker grants, Azure Container Apps external ingress, and Kubernetes Service/Ingress name or selector matches.
 - Privilege is coarse and explainable: `unknown`, `none`, `limited`, `sensitive`, `admin`.
 - The tool never emits automatic `not_affected` claims.
 

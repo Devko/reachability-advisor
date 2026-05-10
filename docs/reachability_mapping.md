@@ -28,6 +28,12 @@ The mapping report exposes all candidates so a developer can see exactly what th
 
 ## Step 2: vulnerability-to-component matching
 
+For Grype input, the vulnerability file is already a scanner result: Grype has
+matched the SBOM package to a vulnerability database entry. Reachability Advisor
+normalizes each Grype `matches[]` item, then still verifies the package
+name/package URL and version against the SBOM component before source and
+deployment scoring.
+
 A vulnerability matches an SBOM component when one of the following holds:
 
 | Evidence | Confidence |
@@ -58,8 +64,8 @@ Supported built-in rule families:
 | Ecosystem | Examples |
 |---|---|
 | Maven/Java | Log4j, Jackson Databind, Guava |
-| npm/Node | lodash, minimist |
-| PyPI/Python | requests |
+| npm/Node | lodash, minimist, Express |
+| PyPI/Python | requests, FastAPI, Chainlit, aiohttp |
 | Go | Generic import/package evidence |
 
 ## Step 4: custom reachability rules

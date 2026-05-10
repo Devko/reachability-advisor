@@ -5,7 +5,7 @@ Reachability Advisor now supports two Terraform validation modes:
 1. **Plan mode** using `terraform show -json`, which is the strongest evidence path for CI gates because variables, modules, `for_each`, `count`, and provider defaults have already been evaluated.
 2. **HCL static mode** using `reachability-advisor hcl-audit`, which is useful for public open-source repositories and early IDE/PR checks where cloud credentials or Terraform initialization are unavailable.
 
-HCL static mode is deliberately conservative. It accounts for `.tf` resource and module blocks, classifies known resource types, extracts simple image/exposure/identity literals, and reports unresolved variables/modules as visibility gaps. It does **not** claim full deployment reachability.
+HCL static mode is deliberately conservative. It accounts for `.tf` resource and module blocks, classifies known resource types, resolves simple literal `variable` defaults and `.tfvars` assignments, extracts simple image/exposure/identity literals, and reports unresolved variables, modules, and opaque manifest wrappers as visibility gaps. It does **not** claim full deployment reachability.
 
 ## Why add HCL static validation?
 
@@ -64,14 +64,54 @@ reachability-advisor scan --terraform-plan tfplan.json ...
 | `Azure/terraform-azure-container-apps` | Azure | Container App, app environment, image, ingress, secrets, identity, dynamic blocks. |
 | `aws-ia/terraform-aws-ecs-fargate` | AWS | ECS/Fargate module shape; demonstrates why module expansion needs a plan. |
 | `GoogleCloudPlatform/terraform-ecommerce-microservices-on-gke` | GCP/Kubernetes context | GKE clusters, service account/IAM, multi-cluster ecommerce deployment context. |
+| `aws-samples/amazon-ecs-fullstack-app-terraform` | AWS | ECS, ALB, CodePipeline, ECR, DynamoDB, and module/pipeline-driven image identity. |
+| `aws-samples/aws-ecs-cicd-terraform` | AWS | Petclinic ECS deployment with HCL variable defaults that can be resolved statically. |
+| `aws-containers/retail-store-sample-app` | AWS/Kubernetes | EKS-adjacent Terraform with Helm and kubectl manifest wrapper resources. |
+| `Azure-Samples/container-apps-openai` | Azure | Azure Container Apps, private endpoints, Azure OpenAI, and source-only Chainlit app validation. |
+| `Azure-Samples/container-apps-azapi-terraform` | Azure | Container Apps deployed through AzAPI ARM resource wrappers. |
 
 In a network-enabled environment, run:
+
+```bash
+python scripts/run_external_hcl_audit.py
+```
+
+The script clones each repository into `external_corpus/worktrees/` and writes per-project reports plus an aggregate `summary.json` and `summary.md` under `outputs/external-hcl-audit/`. The Bash wrapper still exists for Unix-like environments:
 
 ```bash
 ./scripts/run_external_hcl_audit.sh
 ```
 
-The script clones each repository into `external_corpus/worktrees/` and writes reports under `outputs/external-hcl-audit/`.
+## Current validation snapshot
+
+Snapshot date: 2026-05-10.
+
+The current corpus run audits 9 public repositories. All 9 completed successfully on Windows using `scripts/run_external_hcl_audit.py`.
+
+| Result | Count |
+|---|---:|
+| Projects cloned/audited | 9 |
+| Projects with 100% semantic Terraform resource classification | 9 |
+| Projects with explicit opaque Helm/Kubectl wrapper visibility gaps | 2 |
+| Expected resource-type misses | 0 |
+
+The two projects that contain `helm_release` or `kubectl_manifest` now classify those resources as Kubernetes supporting resources, so semantic coverage stays at `1.0`. They still emit `opaque_manifest_wrapper` visibility gaps because the HCL static analyzer cannot inspect rendered Kubernetes manifests. This preserves the important boundary: the Terraform wrapper is known, but child workloads, images, exposure, and RBAC still need rendered manifest or plan evidence.
+
+Real Grype source scans were also run against app-code repositories in the corpus:
+
+| Project | Grype matches | Reachability Advisor result |
+|---|---:|---|
+| `aws-samples/aws-ecs-cicd-terraform` Petclinic | 6 | SBOM artifact matched ECS task/service from resolved HCL variable defaults; Terraform artifact match coverage `1.0`; linked ECS security-group/load-balancer exposure plus limited IAM context raised the grouped Bootstrap remediation to `medium`. |
+| `aws-samples/amazon-ecs-fullstack-app-terraform` Node backend | 51 | Grype JSON and CycloneDX output parsed; Express is now classified as `attacker_controlled` from same-file route/request evidence, raising the grouped Express remediation to `medium`; Terraform source was classified but artifact identity stayed unmatched because image identity is module/pipeline driven. |
+| `Azure-Samples/container-apps-openai` Python app | 110 | Grype JSON and CycloneDX output parsed; Chainlit is now classified as `attacker_controlled` from same-file message-handler evidence, raising the grouped Chainlit remediation to `high`; Terraform Container App resource classified, but `for_each`/variable-driven image identity remained an explicit mapping warning. |
+
+These handoff cases can be rerun without refreshing the Grype database when the existing Grype/CycloneDX files are present:
+
+```bash
+python scripts/run_external_grype_validation.py
+```
+
+The script writes `outputs/external-grype/summary.json` and `summary.md`. Current result: 3 cases passed, 0 failed. The two source-heavy app cases intentionally keep Terraform artifact match coverage at `0.0` because static HCL cannot resolve their module/pipeline-driven image identity without a plan or explicit artifact alias; their prioritization proof comes from Grype parsing and source reachability.
 
 ## Expected findings from manual source inspection
 
@@ -94,4 +134,4 @@ For each external project, reviewers should record:
 
 ## Boundary statement
 
-HCL static validation improves real-world verification, but it is not Terraform. It does not evaluate expressions, modules, locals, data sources, provider defaults, `count`, or `for_each`. A static finding of `unknown` is not a safe state; it means a plan, explicit context file, or artifact alias is needed.
+HCL static validation improves real-world verification, but it is not Terraform. It only resolves simple literal variables; it does not evaluate expressions, modules, locals, data sources, provider defaults, `count`, `for_each`, or rendered Helm/Kubectl child manifests. A static finding of `unknown` is not a safe state; it means a plan, explicit context file, or artifact alias is needed. Public exposure is now linked to matched workloads for supported patterns rather than inferred from unrelated public resources in the same provider plan.

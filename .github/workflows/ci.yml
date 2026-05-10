@@ -19,10 +19,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: python -m pip install --upgrade pip coverage
+      - run: python -m pip install --upgrade pip coverage build
       - run: python -m pip install -e .
       - run: make compile
       - run: make test
       - run: make coverage
       - run: make sample
       - run: make fixtures
+      - run: make release-check
+      - run: make package

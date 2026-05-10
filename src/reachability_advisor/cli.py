@@ -47,7 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     scan = sub.add_parser("scan", help="Scan SBOMs and produce CI/IDE-friendly outputs.")
     scan.add_argument("--sbom", action="append", required=True, help="CycloneDX JSON SBOM path. Repeat for multiple artifacts.")
-    scan.add_argument("--vulns", required=True, help="Local vulnerability intelligence JSON or OSV-Scanner-style JSON.")
+    scan.add_argument("--vulns", required=True, help="Local vulnerability intelligence JSON, Grype JSON, or OSV-Scanner-style JSON.")
     scan.add_argument("--source-root", action="append", default=[], help="Optional source mapping: artifact=path. Repeat for multiple artifacts.")
     scan.add_argument("--context", help="Optional lightweight context JSON keyed by artifact name.")
     scan.add_argument("--terraform-plan", help="Optional Terraform plan JSON for AWS/Azure/GCP/Kubernetes deployment-context hints.")

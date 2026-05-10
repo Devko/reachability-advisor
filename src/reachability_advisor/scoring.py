@@ -95,11 +95,19 @@ def tier_for_score(score: float, policy: ScorePolicy = DEFAULT_POLICY) -> Tier:
 
 
 def _confidence(source: SourceEvidence, context: ContextEvidence) -> Confidence:
+    if source.confidence == Confidence.HIGH and context.confidence in {Confidence.MEDIUM, Confidence.HIGH}:
+        return Confidence.HIGH
+    if source.confidence == Confidence.HIGH:
+        return Confidence.MEDIUM
+    if context.confidence == Confidence.HIGH and source.confidence == Confidence.MEDIUM:
+        return Confidence.HIGH
+    if context.confidence == Confidence.HIGH:
+        return Confidence.MEDIUM
     if source.confidence == Confidence.MEDIUM and context.confidence in {Confidence.MEDIUM, Confidence.HIGH}:
         return Confidence.HIGH if context.confidence == Confidence.HIGH else Confidence.MEDIUM
     if source.confidence == Confidence.MEDIUM:
         return Confidence.MEDIUM
-    if context.confidence in {Confidence.MEDIUM, Confidence.HIGH}:
+    if context.confidence == Confidence.MEDIUM:
         return Confidence.MEDIUM
     return Confidence.LOW
 

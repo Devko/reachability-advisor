@@ -63,6 +63,23 @@ class HclStaticAuditTests(unittest.TestCase):
         self.assertIn("module child resources", reasons)
         self.assertIn("unresolved expression", reasons)
 
+    def test_hcl_audit_ignores_line_commented_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "main.tf").write_text(
+                '''
+                # resource "aws_ecs_task_definition" "old" {
+                #   family = "commented"
+                # }
+                resource "aws_ecs_service" "service" {
+                  name = "petclinic"
+                }
+                ''',
+                encoding="utf-8",
+            )
+            audit = audit_hcl_project(root)
+        self.assertEqual([block.address for block in audit.resources], ["aws_ecs_service.service"])
+
     def test_hcl_blocks_to_plan_extracts_public_exposure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -137,6 +154,29 @@ class HclStaticAuditTests(unittest.TestCase):
         resources = extract_resources(audit.synthetic_plan)
         self.assertEqual(find_image_references(resources[0].values), ["gcr.io/acme/app:1"])
 
+    def test_hcl_static_handles_json_style_image_and_azapi_external(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "main.tf").write_text(
+                '''
+                resource "azapi_resource" "app" {
+                  type = "Microsoft.App/containerApps@2023-05-01"
+                  body = jsonencode({
+                    properties = {
+                      template = { containers = [{ image: "repo/app:1" }] }
+                      configuration = { ingress = { external = true } }
+                    }
+                  })
+                }
+                ''',
+                encoding="utf-8",
+            )
+            audit = audit_hcl_project(root)
+        resources = extract_resources(audit.synthetic_plan)
+        self.assertEqual(resources[0].provider, "azure")
+        self.assertEqual(resources[0].category, "workload")
+        self.assertIn("repo/app:1", find_image_references(resources[0].values))
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -188,6 +228,78 @@ class HclStaticCoverageBoostTests(unittest.TestCase):
         self.assertTrue(is_public_exposure(resources[0]))
         self.assertIn("ghcr.io/acme/app:1", find_image_references(resources[1].values))
 
+    def test_hcl_static_preserves_security_group_reference_for_exposure_linking(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "main.tf").write_text(
+                '''
+                resource "aws_security_group" "alb" {
+                  ingress { cidr_blocks = ["0.0.0.0/0"] }
+                }
+                resource "aws_security_group" "task" {
+                  ingress { security_groups = [aws_security_group.alb.id] }
+                }
+                resource "aws_ecs_service" "app" {
+                  name = "app"
+                  network_configuration { security_groups = [aws_security_group.task.id] }
+                }
+                ''',
+                encoding="utf-8",
+            )
+            analysis = analyze_terraform_source(root, [Artifact(name="app")])
+        self.assertEqual(analysis.contexts["app"].exposure, "public")
+
+    def test_hcl_static_preserves_interpolated_image_value(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "main.tf").write_text(
+                '''
+                resource "aws_ecs_task_definition" "task" {
+                  container_definitions = <<DEFINITION
+                  [{"image": "${aws_ecr_repository.image_repo.repository_url}"}]
+                  DEFINITION
+                }
+                ''',
+                encoding="utf-8",
+            )
+            audit = audit_hcl_project(root)
+        self.assertIn("${aws_ecr_repository.image_repo.repository_url}", audit.resources[0].body)
+        resources = extract_resources(audit.synthetic_plan)
+        self.assertIn("${aws_ecr_repository.image_repo.repository_url}", find_image_references(resources[0].values))
+
+    def test_hcl_static_resolves_simple_variable_defaults_and_tfvars(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "variables.tf").write_text(
+                '''
+                variable "family" {
+                  default = "petclinic"
+                }
+                variable "stack" {
+                  default = "dev"
+                }
+                ''',
+                encoding="utf-8",
+            )
+            (root / "terraform.tfvars").write_text('stack = "prod"', encoding="utf-8")
+            (root / "main.tf").write_text(
+                '''
+                resource "aws_ecs_task_definition" "task" {
+                  family = var.family
+                }
+                resource "aws_ecs_service" "service" {
+                  name = "${var.stack}-service"
+                  container_name = var.family
+                }
+                ''',
+                encoding="utf-8",
+            )
+            audit = audit_hcl_project(root)
+        resources = {resource.address: resource for resource in extract_resources(audit.synthetic_plan)}
+        self.assertEqual(resources["aws_ecs_task_definition.task"].values["family"], "petclinic")
+        self.assertEqual(resources["aws_ecs_service.service"].values["name"], "prod-service")
+        self.assertEqual(audit.to_json()["summary"]["resolved_variable_values"], 2)
+
     def test_hcl_static_handles_azure_nsg_and_private_container_app(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -228,6 +340,25 @@ class HclStaticCoverageBoostTests(unittest.TestCase):
         self.assertEqual(report["modules"][0]["version"], "1.2.3")
         self.assertEqual(report["modules"][0]["address"], "module.child")
         self.assertIn("image_url", report["modules"][0]["image_like_arguments"][0]["key"])
+
+    def test_hcl_static_classifies_opaque_manifest_wrappers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "main.tf").write_text(
+                '''
+                resource "helm_release" "api" {
+                  name = "api"
+                }
+                resource "kubectl_manifest" "api" {
+                  yaml_body = "kind: Deployment"
+                }
+                ''',
+                encoding="utf-8",
+            )
+            report = audit_hcl_project(root).to_json()
+        self.assertEqual(report["coverage"]["summary"]["semantic_classification_coverage"], 1.0)
+        self.assertEqual(report["coverage"]["summary"]["unsupported_or_unclassified_resources"], 0)
+        self.assertEqual({gap["gap_type"] for gap in report["coverage"]["visibility_gaps"]}, {"opaque_manifest_wrapper"})
 
     def test_hcl_blocks_to_plan_skips_non_resource_like_block_without_type(self) -> None:
         from reachability_advisor.hcl_static import HclBlock

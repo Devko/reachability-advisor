@@ -60,6 +60,9 @@ TERRAFORM_COVERAGE_MANIFEST: tuple[ResourceSupport, ...] = (
         types=(
             "aws_security_group",
             "aws_security_group_rule",
+            "aws_alb",
+            "aws_alb_listener",
+            "aws_alb_listener_rule",
             "aws_lb",
             "aws_lb_listener",
             "aws_lb_listener_rule",
@@ -91,12 +94,14 @@ TERRAFORM_COVERAGE_MANIFEST: tuple[ResourceSupport, ...] = (
         category="sensitive_data",
         types=(
             "aws_secretsmanager_secret",
+            "aws_secretsmanager_secret_version",
             "aws_ssm_parameter",
             "aws_db_instance",
             "aws_rds_cluster",
             "aws_dynamodb_table",
             "aws_s3_bucket",
             "aws_kms_key",
+            "aws_mq_broker",
         ),
         description="Sensitive data and secret-adjacent resources used as blast-radius hints.",
     ),
@@ -105,11 +110,35 @@ TERRAFORM_COVERAGE_MANIFEST: tuple[ResourceSupport, ...] = (
         category="supporting",
         types=(
             "aws_cloudwatch_log_group",
+            "aws_cloudwatch_log_resource_policy",
+            "aws_cloudwatch_metric_alarm",
+            "aws_cloudwatch_event_rule",
+            "aws_cloudwatch_event_target",
             "aws_appautoscaling_target",
             "aws_appautoscaling_policy",
+            "aws_codebuild_project",
+            "aws_codecommit_repository",
+            "aws_codedeploy_app",
+            "aws_codedeploy_deployment_group",
+            "aws_codepipeline",
             "aws_ecr_repository",
+            "aws_lb_target_group",
+            "aws_alb_target_group",
             "aws_vpc",
             "aws_subnet",
+            "aws_internet_gateway",
+            "aws_nat_gateway",
+            "aws_eip",
+            "aws_route",
+            "aws_route_table",
+            "aws_default_route_table",
+            "aws_route_table_association",
+            "aws_db_subnet_group",
+            "aws_eks_addon",
+            "aws_apprunner_vpc_connector",
+            "aws_apprunner_vpc_ingress_connection",
+            "aws_service_discovery_private_dns_namespace",
+            "aws_sns_topic",
         ),
         description="Common supporting resources emitted by ECS/Fargate and container platform modules.",
     ),
@@ -165,12 +194,18 @@ TERRAFORM_COVERAGE_MANIFEST: tuple[ResourceSupport, ...] = (
         types=(
             "azurerm_key_vault",
             "azurerm_key_vault_secret",
+            "azurerm_key_vault_key",
             "azurerm_storage_account",
+            "azurerm_storage_container",
+            "azurerm_storage_account_customer_managed_key",
             "azurerm_mssql_server",
             "azurerm_mssql_database",
             "azurerm_postgresql_flexible_server",
             "azurerm_mysql_flexible_server",
             "azurerm_cosmosdb_account",
+            "azurerm_cognitive_account",
+            "azurerm_cognitive_deployment",
+            "azurerm_container_registry_token_password",
         ),
         description="Key Vault, storage, database, and Cosmos DB blast-radius hints.",
     ),
@@ -181,9 +216,19 @@ TERRAFORM_COVERAGE_MANIFEST: tuple[ResourceSupport, ...] = (
             "azurerm_resource_group",
             "azurerm_log_analytics_workspace",
             "azurerm_container_registry",
+            "azurerm_container_registry_token",
             "azurerm_private_endpoint",
+            "azurerm_private_dns_zone",
+            "azurerm_private_dns_zone_virtual_network_link",
+            "azurerm_private_dns_a_record",
             "azurerm_virtual_network",
             "azurerm_subnet",
+            "azurerm_container_app_environment_dapr_component",
+            "azurerm_container_app_environment_storage",
+            "azurerm_log_analytics_solution",
+            "azurerm_log_analytics_storage_insights",
+            "azurerm_application_insights",
+            "azurerm_monitor_diagnostic_setting",
         ),
         description="Common supporting resources emitted by Azure Container Apps and App Service modules.",
     ),
@@ -193,6 +238,7 @@ TERRAFORM_COVERAGE_MANIFEST: tuple[ResourceSupport, ...] = (
         types=(
             "google_cloud_run_service",
             "google_cloud_run_v2_service",
+            "google_cloud_run_v2_job",
             "google_cloudfunctions_function",
             "google_cloudfunctions2_function",
             "google_container_cluster",
@@ -208,6 +254,8 @@ TERRAFORM_COVERAGE_MANIFEST: tuple[ResourceSupport, ...] = (
             "google_compute_firewall",
             "google_cloud_run_service_iam_member",
             "google_cloud_run_service_iam_binding",
+            "google_cloud_run_v2_service_iam_member",
+            "google_cloud_run_v2_service_iam_binding",
             "google_cloudfunctions_function_iam_member",
             "google_cloudfunctions2_function_iam_member",
             "google_compute_forwarding_rule",
@@ -223,11 +271,18 @@ TERRAFORM_COVERAGE_MANIFEST: tuple[ResourceSupport, ...] = (
         types=(
             "google_project_iam_member",
             "google_project_iam_binding",
+            "google_organization_iam_member",
+            "google_folder_iam_member",
+            "google_billing_account_iam_member",
             "google_service_account",
             "google_service_account_iam_member",
             "google_service_account_iam_binding",
             "google_kms_crypto_key_iam_member",
             "google_kms_crypto_key_iam_binding",
+            "google_artifact_registry_repository_iam_member",
+            "google_secret_manager_secret_iam_member",
+            "google_iap_web_cloud_run_service_iam_member",
+            "google_project_service_identity",
         ),
         description="IAM grants and service-account/KMS permission hints.",
     ),
@@ -240,6 +295,7 @@ TERRAFORM_COVERAGE_MANIFEST: tuple[ResourceSupport, ...] = (
             "google_sql_database_instance",
             "google_bigquery_dataset",
             "google_kms_crypto_key",
+            "google_service_account_key",
         ),
         description="Secret Manager, Cloud Storage, Cloud SQL, BigQuery, and KMS blast-radius hints.",
     ),
@@ -250,8 +306,21 @@ TERRAFORM_COVERAGE_MANIFEST: tuple[ResourceSupport, ...] = (
             "google_project_service",
             "google_artifact_registry_repository",
             "google_project",
+            "google_folder",
             "google_compute_network",
             "google_compute_subnetwork",
+            "google_compute_global_address",
+            "google_compute_region_network_endpoint_group",
+            "google_compute_security_policy",
+            "google_compute_shared_vpc_service_project",
+            "google_compute_router",
+            "google_compute_router_nat",
+            "google_dns_policy",
+            "google_gke_hub_feature",
+            "google_gke_hub_membership",
+            "google_vpc_access_connector",
+            "google_access_context_manager_access_policy",
+            "google_access_context_manager_service_perimeter_resource",
         ),
         description="Common supporting resources emitted by Cloud Run and GKE module fixtures.",
     ),
@@ -278,14 +347,53 @@ TERRAFORM_COVERAGE_MANIFEST: tuple[ResourceSupport, ...] = (
     ResourceSupport(
         provider="kubernetes",
         category="identity",
-        types=("kubernetes_service_account", "kubernetes_role_binding", "kubernetes_cluster_role_binding"),
+        types=(
+            "kubernetes_service_account",
+            "kubernetes_role_binding",
+            "kubernetes_cluster_role_binding",
+            "kubernetes_role_v1",
+            "kubernetes_role_binding_v1",
+            "kubernetes_cluster_role_v1",
+            "kubernetes_cluster_role_binding_v1",
+        ),
         description="Kubernetes service-account and role-binding hints, including IRSA annotations.",
     ),
     ResourceSupport(
         provider="kubernetes",
         category="supporting",
-        types=("kubernetes_namespace", "kubernetes_config_map", "kubernetes_secret"),
-        description="Common supporting Kubernetes-provider resources included in community fixture packs.",
+        types=(
+            "kubernetes_namespace",
+            "kubernetes_namespace_v1",
+            "kubernetes_config_map",
+            "kubernetes_secret",
+            "helm_release",
+            "kubectl_manifest",
+        ),
+        description="Common supporting Kubernetes-provider resources and opaque Helm/Kubectl manifest wrappers included in community fixture packs.",
+    ),
+    ResourceSupport(
+        provider="terraform",
+        category="supporting",
+        types=(
+            "random_string",
+            "random_id",
+            "random_integer",
+            "random_password",
+            "random_pet",
+            "null_resource",
+            "time_sleep",
+            "local_file",
+            "template_file",
+            "terraform_data",
+            "terracurl_request",
+        ),
+        description="Terraform helper resources that affect provisioning but do not provide direct workload, exposure, identity, or data context.",
+    ),
+    ResourceSupport(
+        provider="docker",
+        category="supporting",
+        types=("docker_image", "docker_tag"),
+        description="Local Docker provider resources used by examples to build or tag container images.",
     ),
 )
 
@@ -301,6 +409,8 @@ SENSITIVE_RESOURCE_TYPES = {
     if support.category == "sensitive_data"
     for rtype in support.types
 }
+
+OPAQUE_MANIFEST_WRAPPER_TYPES = {"helm_release", "kubectl_manifest"}
 
 PUBLIC_TOKEN_VALUES = {"0.0.0.0/0", "::/0", "*", "internet", "all", "allusers", "allauthenticatedusers"}
 ADMIN_ROLE_TOKENS = (
@@ -334,6 +444,39 @@ SENSITIVE_ROLE_TOKENS = (
     "roles/storage.admin",
 )
 
+AZAPI_ARM_TYPE_TO_CATEGORY = {
+    "microsoft.app/containerapps": "workload",
+    "microsoft.app/jobs": "workload",
+    "microsoft.app/managedenvironments": "workload",
+    "microsoft.app/managedenvironments/daprcomponents": "supporting",
+    "microsoft.app/managedenvironments/storages": "supporting",
+    "microsoft.insights/components": "supporting",
+    "microsoft.insights/diagnosticsettings": "supporting",
+    "microsoft.operationalinsights/workspaces": "supporting",
+    "microsoft.network/applicationgateways": "exposure",
+    "microsoft.network/frontdoors": "exposure",
+    "microsoft.network/loadbalancers": "exposure",
+    "microsoft.network/publicipaddresses": "exposure",
+    "microsoft.network/privateendpoints": "supporting",
+    "microsoft.network/privatednszones": "supporting",
+    "microsoft.network/virtualnetworks": "supporting",
+    "microsoft.network/virtualnetworks/subnets": "supporting",
+    "microsoft.containerregistry/registries": "supporting",
+    "microsoft.managedidentity/userassignedidentities": "identity",
+    "microsoft.authorization/roleassignments": "identity",
+    "microsoft.keyvault/vaults": "sensitive_data",
+    "microsoft.keyvault/vaults/secrets": "sensitive_data",
+    "microsoft.keyvault/vaults/keys": "sensitive_data",
+    "microsoft.storage/storageaccounts": "sensitive_data",
+    "microsoft.storage/storageaccounts/blobservices/containers": "sensitive_data",
+    "microsoft.cognitiveservices/accounts": "sensitive_data",
+    "microsoft.cognitiveservices/accounts/deployments": "sensitive_data",
+    "microsoft.sql/servers": "sensitive_data",
+    "microsoft.sql/servers/databases": "sensitive_data",
+    "microsoft.dbforpostgresql/flexibleservers": "sensitive_data",
+    "microsoft.documentdb/databaseaccounts": "sensitive_data",
+}
+
 
 @dataclass(frozen=True)
 class TerraformResource:
@@ -344,15 +487,15 @@ class TerraformResource:
 
     @property
     def provider(self) -> str:
-        return provider_for_type(self.type)
+        return classification_for_resource(self.type, self.values)[0]
 
     @property
     def category(self) -> str:
-        return SUPPORTED_TYPE_TO_CLASS.get(self.type, (self.provider, "unclassified"))[1]
+        return classification_for_resource(self.type, self.values)[1]
 
     @property
     def supported(self) -> bool:
-        return self.type in SUPPORTED_TYPE_TO_CLASS
+        return resource_type_supported(self.type, self.values)
 
 
 @dataclass
@@ -417,8 +560,12 @@ class TerraformAnalyzer:
         self.resources = extract_resources(plan)
         self._resource_by_address = {resource.address: resource for resource in self.resources}
         self._global_exposure_by_provider = self._global_exposure()
+        self._public_security_groups = self._public_security_group_refs()
+        self._public_target_groups = self._public_target_group_refs()
+        self._public_ecs_task_definitions = self._public_ecs_task_definition_refs()
         self._public_functions = self._public_function_names()
         self._public_cloud_run_services = self._public_cloud_run_services()
+        self._public_kubernetes_workload_names = self._public_kubernetes_names()
         self._privilege_by_provider = self._provider_privileges()
         self._has_sensitive_by_provider = self._sensitive_resources_by_provider()
 
@@ -449,15 +596,22 @@ class TerraformAnalyzer:
                 if not matched_image:
                     continue
                 accumulator.add_resource(resource, matched_image, match_method=match_method, match_score=match_score)
-                exposure = exposure_for_matched_workload(resource, self._global_exposure_by_provider, self._public_functions, self._public_cloud_run_services)
+                exposure = exposure_for_matched_workload(
+                    resource,
+                    self._global_exposure_by_provider,
+                    self._public_functions,
+                    self._public_cloud_run_services,
+                    self._public_security_groups,
+                    self._public_target_groups,
+                    self._public_ecs_task_definitions,
+                    self._public_kubernetes_workload_names,
+                )
                 accumulator.exposure = max_exposure(accumulator.exposure, exposure)
                 accumulator.privilege = max_privilege(accumulator.privilege, self._privilege_by_provider.get(resource.provider, "unknown"))
                 if self._has_sensitive_by_provider.get(resource.provider) and accumulator.privilege == "unknown":
                     accumulator.privilege = "limited"
                 match_rows.append({"artifact": artifact.name, "resource": resource.address, "type": resource.type, "provider": resource.provider, "image": matched_image, "match_method": match_method, "match_score": match_score})
             if accumulator.matched_resources:
-                if accumulator.exposure == "unknown":
-                    accumulator.exposure = self._global_exposure_by_provider.get("all", self._global_exposure_by_provider.get(next(iter(accumulator.providers), "unknown"), "unknown"))
                 if accumulator.privilege == "unknown":
                     accumulator.privilege = self._privilege_by_provider.get("all", "unknown")
                 contexts[artifact.name] = accumulator.as_context(source=f"terraform:{self.source_name}")
@@ -488,16 +642,82 @@ class TerraformAnalyzer:
                     public.add(str(name))
         return public
 
+    def _public_security_group_refs(self) -> set[str]:
+        public: set[str] = set()
+        security_groups = [resource for resource in self.resources if resource.type == "aws_security_group"]
+        for resource in security_groups:
+            if is_public_exposure(resource):
+                public.update(_resource_identifiers(resource))
+        for resource in self.resources:
+            if resource.type == "aws_security_group_rule" and is_public_exposure(resource):
+                public.update(_value_reference_candidates(resource.values.get("security_group_id")))
+
+        changed = True
+        while changed:
+            changed = False
+            for resource in security_groups:
+                identifiers = _resource_identifiers(resource)
+                if identifiers & public:
+                    continue
+                if _references_any(_security_group_source_refs(resource.values), public):
+                    public.update(identifiers)
+                    changed = True
+        return public
+
+    def _public_load_balancer_refs(self) -> set[str]:
+        public: set[str] = set()
+        for resource in self.resources:
+            if resource.type in {"aws_lb", "aws_alb"} and is_public_exposure(resource):
+                public.update(_resource_identifiers(resource))
+        return public
+
+    def _public_target_group_refs(self) -> set[str]:
+        public_lbs = self._public_load_balancer_refs()
+        public_tgs: set[str] = set()
+        target_groups = [resource for resource in self.resources if resource.type in {"aws_lb_target_group", "aws_alb_target_group"}]
+        for resource in self.resources:
+            if resource.type not in {"aws_lb_listener", "aws_alb_listener", "aws_lb_listener_rule", "aws_alb_listener_rule"}:
+                continue
+            if resource.type in {"aws_lb_listener", "aws_alb_listener"} and not _references_any(_load_balancer_refs(resource.values), public_lbs):
+                continue
+            public_tgs.update(_value_reference_candidates(_target_group_refs(resource.values)))
+        for target_group in target_groups:
+            if _references_any(_resource_identifiers(target_group), public_tgs):
+                public_tgs.update(_resource_identifiers(target_group))
+        return public_tgs
+
+    def _public_ecs_task_definition_refs(self) -> set[str]:
+        public_task_defs: set[str] = set()
+        for resource in self.resources:
+            if resource.type != "aws_ecs_service":
+                continue
+            if not _ecs_service_is_public(resource.values, self._public_security_groups, self._public_target_groups):
+                continue
+            public_task_defs.update(_value_reference_candidates(resource.values.get("task_definition")))
+        for resource in self.resources:
+            if resource.type == "aws_ecs_task_definition" and _references_any(_resource_identifiers(resource), public_task_defs):
+                public_task_defs.update(_resource_identifiers(resource))
+        return public_task_defs
+
     def _public_cloud_run_services(self) -> set[str]:
         public: set[str] = set()
         for resource in self.resources:
-            if resource.type not in {"google_cloud_run_service_iam_member", "google_cloud_run_service_iam_binding"}:
+            if resource.type not in {"google_cloud_run_service_iam_member", "google_cloud_run_service_iam_binding", "google_cloud_run_v2_service_iam_member", "google_cloud_run_v2_service_iam_binding"}:
                 continue
             if not _iam_member_is_public_invoker(resource.values):
                 continue
             service = resource.values.get("service") or resource.values.get("name")
             if service:
                 public.add(str(service))
+        return public
+
+    def _public_kubernetes_names(self) -> set[str]:
+        public: set[str] = set()
+        for resource in self.resources:
+            if resource.type not in {"kubernetes_service", "kubernetes_ingress", "kubernetes_ingress_v1"}:
+                continue
+            if is_public_exposure(resource):
+                public.update(_kubernetes_names_and_selectors(resource))
         return public
 
     def _provider_privileges(self) -> dict[str, str]:
@@ -513,7 +733,7 @@ class TerraformAnalyzer:
     def _sensitive_resources_by_provider(self) -> dict[str, bool]:
         result: dict[str, bool] = {}
         for resource in self.resources:
-            if resource.type in SENSITIVE_RESOURCE_TYPES:
+            if resource.category == "sensitive_data":
                 result[resource.provider] = True
                 result["all"] = True
         return result
@@ -573,15 +793,61 @@ def extract_resources(plan: dict[str, Any]) -> list[TerraformResource]:
     return list(resources.values())
 
 
+def _normalized_arm_type(value: Any) -> str | None:
+    if not value:
+        return None
+    text = str(value).strip().strip('"').strip("'")
+    if not text:
+        return None
+    return text.split("@", 1)[0].lower()
+
+
+def azapi_arm_category(value: Any) -> str | None:
+    """Return a semantic category for an AzAPI ARM resource type."""
+
+    arm_type = _normalized_arm_type(value)
+    if not arm_type:
+        return None
+    if arm_type in AZAPI_ARM_TYPE_TO_CATEGORY:
+        return AZAPI_ARM_TYPE_TO_CATEGORY[arm_type]
+    # Child resources often add one or more path segments. Prefer the most
+    # specific parent that is explicitly declared above.
+    parts = arm_type.split("/")
+    while len(parts) > 2:
+        parts.pop()
+        parent = "/".join(parts)
+        if parent in AZAPI_ARM_TYPE_TO_CATEGORY:
+            return AZAPI_ARM_TYPE_TO_CATEGORY[parent]
+    return None
+
+
+def classification_for_resource(resource_type: str, values: dict[str, Any] | None = None) -> tuple[str, str]:
+    if resource_type.startswith("azapi_"):
+        return "azure", azapi_arm_category((values or {}).get("type")) or "unclassified"
+    if resource_type in SUPPORTED_TYPE_TO_CLASS:
+        return SUPPORTED_TYPE_TO_CLASS[resource_type]
+    return provider_for_type(resource_type), "unclassified"
+
+
+def resource_type_supported(resource_type: str, values: dict[str, Any] | None = None) -> bool:
+    if resource_type.startswith("azapi_"):
+        return azapi_arm_category((values or {}).get("type")) is not None
+    return resource_type in SUPPORTED_TYPE_TO_CLASS
+
+
 def provider_for_type(resource_type: str) -> str:
     if resource_type.startswith("aws_"):
         return "aws"
-    if resource_type.startswith("azurerm_") or resource_type.startswith("azuread_"):
+    if resource_type.startswith("azurerm_") or resource_type.startswith("azuread_") or resource_type.startswith("azapi_"):
         return "azure"
     if resource_type.startswith("google_"):
         return "gcp"
-    if resource_type.startswith("kubernetes_"):
+    if resource_type.startswith("kubernetes_") or resource_type.startswith("kubectl_") or resource_type.startswith("helm_"):
         return "kubernetes"
+    if resource_type.startswith("random_") or resource_type.startswith("time_") or resource_type in {"null_resource", "local_file", "template_file", "terraform_data", "terracurl_request"}:
+        return "terraform"
+    if resource_type.startswith("docker_"):
+        return "docker"
     return "unknown"
 
 
@@ -662,6 +928,8 @@ def workload_name_matches(artifact: Artifact, resource: TerraformResource) -> bo
         str(values.get("function_name") or ""),
         str(values.get("service_name") or ""),
         str(values.get("app_name") or ""),
+        str(values.get("family") or ""),
+        str(values.get("container_name") or ""),
     }
     artifact_name = artifact.name.lower()
     return any(name and (artifact_name == name.lower() or artifact_name in name.lower()) for name in names)
@@ -672,18 +940,38 @@ def exposure_for_matched_workload(
     global_exposure_by_provider: dict[str, str],
     public_functions: set[str],
     public_cloud_run_services: set[str],
+    public_security_groups: set[str] | None = None,
+    public_target_groups: set[str] | None = None,
+    public_ecs_task_definitions: set[str] | None = None,
+    public_kubernetes_names: set[str] | None = None,
 ) -> str:
     values = resource.values
+    public_security_groups = public_security_groups or set()
+    public_target_groups = public_target_groups or set()
+    public_ecs_task_definitions = public_ecs_task_definitions or set()
+    public_kubernetes_names = public_kubernetes_names or set()
     if resource.type == "aws_apprunner_service":
         return "public"
+    if resource.type == "aws_ecs_service":
+        if _ecs_service_is_public(values, public_security_groups, public_target_groups):
+            return "public"
+        return "unknown"
+    if resource.type == "aws_ecs_task_definition":
+        if _references_any(_resource_identifiers(resource), public_ecs_task_definitions):
+            return "public"
+        return "unknown"
     if resource.type == "aws_lambda_function":
         names = {str(values.get("function_name") or ""), str(values.get("name") or ""), str(values.get("arn") or "")}
         if any(name in public_functions for name in names if name):
             return "public"
+        return "unknown"
     if resource.type in {"azurerm_linux_web_app", "azurerm_windows_web_app", "azurerm_app_service", "azurerm_function_app", "azurerm_linux_function_app", "azurerm_windows_function_app"}:
         public_network = values.get("public_network_access_enabled")
         return "internal" if public_network is False else "public"
     if resource.type == "azurerm_container_app":
+        if _azure_container_app_external_ingress(values):
+            return "public"
+    if resource.type.startswith("azapi_") and _normalized_arm_type(values.get("type")) == "microsoft.app/containerapps":
         if _azure_container_app_external_ingress(values):
             return "public"
     if resource.type in {"google_cloud_run_service", "google_cloud_run_v2_service"}:
@@ -693,24 +981,30 @@ def exposure_for_matched_workload(
         ingress = str(values.get("ingress") or "").lower()
         if ingress in {"all", "ingress_traffic_all", "all_traffic"}:
             return "external"
+    if resource.type in {"google_cloudfunctions_function", "google_cloudfunctions2_function"}:
+        if _references_any(_resource_identifiers(resource), public_functions):
+            return "public"
+        return "unknown"
     if resource.type.startswith("kubernetes_") and resource.type != "kubernetes_manifest":
-        return global_exposure_by_provider.get("kubernetes", "unknown")
-    return global_exposure_by_provider.get(resource.provider, "unknown")
+        if _kubernetes_names_and_selectors(resource) & public_kubernetes_names:
+            return "public"
+        return "unknown"
+    return "unknown"
 
 
 def _azure_container_app_external_ingress(values: dict[str, Any]) -> bool:
     ingress = values.get("ingress")
     if isinstance(ingress, list):
-        return any(isinstance(item, dict) and bool(item.get("external_enabled")) for item in ingress)
+        return any(isinstance(item, dict) and bool(item.get("external_enabled") or item.get("external")) for item in ingress)
     if isinstance(ingress, dict):
-        return bool(ingress.get("external_enabled"))
+        return bool(ingress.get("external_enabled") or ingress.get("external"))
     return False
 
 
 def is_public_exposure(resource: TerraformResource) -> bool:
     values = resource.values
     rtype = resource.type
-    if rtype in {"aws_lb", "azurerm_public_ip", "azurerm_application_gateway", "azurerm_frontdoor_endpoint", "azurerm_cdn_frontdoor_endpoint", "google_compute_forwarding_rule", "google_compute_global_forwarding_rule"}:
+    if rtype in {"aws_lb", "aws_alb", "azurerm_public_ip", "azurerm_application_gateway", "azurerm_frontdoor_endpoint", "azurerm_cdn_frontdoor_endpoint", "google_compute_forwarding_rule", "google_compute_global_forwarding_rule"}:
         if str(values.get("internal") or "").lower() == "true":
             return False
         return True
@@ -722,8 +1016,10 @@ def is_public_exposure(resource: TerraformResource) -> bool:
         return _gcp_firewall_is_public(values)
     if rtype == "aws_lambda_function_url":
         return str(values.get("authorization_type") or "").upper() == "NONE"
-    if rtype in {"google_cloud_run_service_iam_member", "google_cloud_run_service_iam_binding", "google_cloudfunctions_function_iam_member", "google_cloudfunctions2_function_iam_member"}:
+    if rtype in {"google_cloud_run_service_iam_member", "google_cloud_run_service_iam_binding", "google_cloud_run_v2_service_iam_member", "google_cloud_run_v2_service_iam_binding", "google_cloudfunctions_function_iam_member", "google_cloudfunctions2_function_iam_member"}:
         return _iam_member_is_public_invoker(values)
+    if rtype.startswith("azapi_") and resource.category == "exposure":
+        return True
     if rtype in {"kubernetes_service", "kubernetes_ingress", "kubernetes_ingress_v1"}:
         return _kubernetes_exposure_is_public(values)
     if rtype in {"aws_apigatewayv2_api", "aws_api_gateway_rest_api", "aws_cloudfront_distribution", "google_cloud_run_domain_mapping"}:
@@ -796,6 +1092,150 @@ def _kubernetes_exposure_is_public(values: dict[str, Any]) -> bool:
     return bool(values.get("rules") or values.get("spec"))
 
 
+def _ecs_service_is_public(values: dict[str, Any], public_security_groups: set[str], public_target_groups: set[str]) -> bool:
+    return _references_any(_security_group_refs(values), public_security_groups) or _references_any(_target_group_refs(values), public_target_groups)
+
+
+def _resource_identifiers(resource: TerraformResource) -> set[str]:
+    identifiers = {
+        resource.address,
+        resource.name,
+        f"{resource.type}.{resource.name}" if resource.name else "",
+    }
+    for key in ("id", "arn", "name", "function_name", "service_name", "family"):
+        value = resource.values.get(key)
+        if isinstance(value, str):
+            identifiers.add(value)
+    expanded: set[str] = set()
+    for item in identifiers:
+        if not item:
+            continue
+        text = str(item).strip()
+        expanded.add(text.lower())
+        if "." in text and not text.endswith((".id", ".arn", ".name")):
+            expanded.add(f"{text}.id".lower())
+            expanded.add(f"{text}.arn".lower())
+            expanded.add(f"{text}.name".lower())
+    return expanded
+
+
+def _references_any(values: Any, references: set[str]) -> bool:
+    if not references:
+        return False
+    candidates = _value_reference_candidates(values)
+    for candidate in candidates:
+        for reference in references:
+            if reference and (candidate == reference or reference in candidate or candidate in reference):
+                return True
+    return False
+
+
+def _value_reference_candidates(values: Any) -> set[str]:
+    candidates: set[str] = set()
+
+    def add(value: Any) -> None:
+        if value is None:
+            return
+        text = str(value).strip().strip('"').strip("'")
+        if not text:
+            return
+        lower = text.lower()
+        candidates.add(lower)
+        for token in re.findall(r"[A-Za-z0-9_:\-/]+(?:\.[A-Za-z0-9_\-]+)+|sg-[A-Za-z0-9]+|arn:[^\s,\]\}]+", text):
+            candidates.add(token.strip().strip('"').strip("'").lower())
+
+    if isinstance(values, dict):
+        for value in values.values():
+            candidates.update(_value_reference_candidates(value))
+    elif isinstance(values, (list, tuple, set)):
+        for value in values:
+            candidates.update(_value_reference_candidates(value))
+    else:
+        add(values)
+    return {candidate for candidate in candidates if candidate}
+
+
+def _security_group_refs(values: dict[str, Any]) -> set[str]:
+    refs: set[str] = set()
+    for key in ("security_groups", "security_group_ids", "vpc_security_group_ids"):
+        if key in values:
+            refs.update(_value_reference_candidates(values.get(key)))
+    network_configuration = values.get("network_configuration")
+    if isinstance(network_configuration, dict):
+        refs.update(_security_group_refs(network_configuration))
+    elif isinstance(network_configuration, list):
+        for item in network_configuration:
+            if isinstance(item, dict):
+                refs.update(_security_group_refs(item))
+    return refs
+
+
+def _security_group_source_refs(values: dict[str, Any]) -> set[str]:
+    refs: set[str] = set()
+    rules: list[Any] = []
+    for key in ("ingress", "ingress_with_source_security_group_id"):
+        item = values.get(key)
+        if isinstance(item, list):
+            rules.extend(item)
+        elif isinstance(item, dict):
+            rules.append(item)
+    if values.get("type") == "ingress":
+        rules.append(values)
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        for key in ("security_groups", "source_security_group_id", "source_security_group_ids"):
+            refs.update(_value_reference_candidates(rule.get(key)))
+    return refs
+
+
+def _target_group_refs(values: dict[str, Any]) -> set[str]:
+    refs: set[str] = set()
+    for key in ("target_group_arn", "target_group_arns", "target_group", "target_groups"):
+        if key in values:
+            refs.update(_value_reference_candidates(values.get(key)))
+    for key in ("load_balancer", "default_action", "action"):
+        item = values.get(key)
+        if isinstance(item, dict):
+            refs.update(_target_group_refs(item))
+        elif isinstance(item, list):
+            for subitem in item:
+                if isinstance(subitem, dict):
+                    refs.update(_target_group_refs(subitem))
+    return refs
+
+
+def _load_balancer_refs(values: dict[str, Any]) -> set[str]:
+    refs: set[str] = set()
+    for key in ("load_balancer_arn", "load_balancer_id", "load_balancer_name", "arn", "id"):
+        if key in values:
+            refs.update(_value_reference_candidates(values.get(key)))
+    return refs
+
+
+def _kubernetes_names_and_selectors(resource: TerraformResource) -> set[str]:
+    names: set[str] = {resource.name.lower()} if resource.name else set()
+
+    def walk(value: Any, key_hint: str = "") -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                key_l = str(key).lower()
+                if key_l in {"name", "app", "app.kubernetes.io/name", "app.kubernetes.io/instance"} and isinstance(item, str):
+                    names.add(item.lower())
+                elif key_l in {"metadata", "labels", "selector", "match_labels"}:
+                    walk(item, key_l)
+                elif key_hint in {"metadata", "labels", "selector", "match_labels"}:
+                    walk(item, key_hint)
+                elif key_l in {"spec", "template"}:
+                    walk(item, key_l)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item, key_hint)
+
+    walk(resource.values)
+    return {name for name in names if name}
+
+
 def privilege_for_resource(resource: TerraformResource) -> str:
     values = resource.values
     rtype = resource.type
@@ -809,9 +1249,22 @@ def privilege_for_resource(resource: TerraformResource) -> str:
         return classify_role_text(values.get("role_definition_name") or values.get("role_definition_id"))
     if rtype == "azurerm_key_vault_access_policy":
         return _azure_key_vault_privilege(values)
-    if rtype in {"google_project_iam_member", "google_project_iam_binding", "google_service_account_iam_member", "google_service_account_iam_binding", "google_kms_crypto_key_iam_member", "google_kms_crypto_key_iam_binding"}:
+    if rtype in {
+        "google_project_iam_member",
+        "google_project_iam_binding",
+        "google_organization_iam_member",
+        "google_folder_iam_member",
+        "google_billing_account_iam_member",
+        "google_service_account_iam_member",
+        "google_service_account_iam_binding",
+        "google_kms_crypto_key_iam_member",
+        "google_kms_crypto_key_iam_binding",
+        "google_artifact_registry_repository_iam_member",
+        "google_secret_manager_secret_iam_member",
+        "google_iap_web_cloud_run_service_iam_member",
+    }:
         return classify_role_text(values.get("role"))
-    if rtype in {"kubernetes_role_binding", "kubernetes_cluster_role_binding"}:
+    if rtype in {"kubernetes_role_binding", "kubernetes_cluster_role_binding", "kubernetes_role_binding_v1", "kubernetes_cluster_role_binding_v1", "kubernetes_role_v1", "kubernetes_cluster_role_v1"}:
         return classify_role_text(values.get("role_ref") or values.get("metadata"))
     return "unknown"
 
@@ -932,6 +1385,7 @@ def coverage_report(resources: list[TerraformResource], artifacts: list[Artifact
     classified = sum(1 for resource in resources if resource.supported)
     provider_counts: dict[str, int] = {}
     category_counts: dict[str, int] = {}
+    visibility_gaps: list[dict[str, str]] = []
     unsupported: list[dict[str, str]] = []
     resource_rows: list[dict[str, Any]] = []
     for resource in resources:
@@ -946,7 +1400,25 @@ def coverage_report(resources: list[TerraformResource], artifacts: list[Artifact
         }
         resource_rows.append(row)
         if not resource.supported:
-            unsupported.append({"address": resource.address, "type": resource.type, "provider": resource.provider, "reason": "resource type is accounted for but not semantically classified"})
+            gap = {
+                "address": resource.address,
+                "type": resource.type,
+                "provider": resource.provider,
+                "gap_type": "unclassified_resource",
+                "reason": "resource type is accounted for but not semantically classified",
+            }
+            unsupported.append(gap)
+            visibility_gaps.append(gap)
+        elif resource.type in OPAQUE_MANIFEST_WRAPPER_TYPES:
+            visibility_gaps.append(
+                {
+                    "address": resource.address,
+                    "type": resource.type,
+                    "provider": resource.provider,
+                    "gap_type": "opaque_manifest_wrapper",
+                    "reason": "resource is a Helm/Kubectl manifest wrapper; rendered Kubernetes child workloads, images, exposure, and RBAC are not inspected",
+                }
+            )
     matched_artifacts = sorted({row["artifact"] for row in matches})
     unmatched_artifacts = sorted(artifact.name for artifact in artifacts if artifact.name not in matched_artifacts)
     manifest = manifest_report()
@@ -971,10 +1443,11 @@ def coverage_report(resources: list[TerraformResource], artifacts: list[Artifact
         "matched_artifacts": matched_artifacts,
         "unmatched_artifacts": unmatched_artifacts,
         "resources": resource_rows,
-        "visibility_gaps": unsupported,
+        "visibility_gaps": visibility_gaps,
         "notes": [
             "100% resource accounting means every Terraform resource in the plan is represented in this report.",
             "Semantic coverage is limited to the declared manifest; unclassified resources are visibility gaps, not safe states.",
+            "Opaque manifest wrappers such as Helm releases are classified as Kubernetes support resources but still require rendered manifest evidence for child workloads.",
             "Use source reachability and explicit context files for evidence that Terraform cannot infer from a static plan.",
         ],
     }
@@ -1023,6 +1496,7 @@ def manifest_report() -> dict[str, Any]:
 
 __all__ = [
     "TERRAFORM_COVERAGE_MANIFEST",
+    "OPAQUE_MANIFEST_WRAPPER_TYPES",
     "SUPPORTED_TYPE_TO_CLASS",
     "TerraformAnalysis",
     "TerraformAnalyzer",

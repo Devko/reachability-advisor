@@ -35,7 +35,30 @@ Recommended artifact metadata:
 
 Use `--artifact-alias artifact=image-or-reference` when generated SBOMs lack artifact/image metadata.
 
+For source-only validation, Grype's CycloneDX output is acceptable SBOM input when it includes the package inventory:
+
+```bash
+grype dir:path/to/app -o cyclonedx-json --name app --file app.cdx.json
+```
+
 ## Vulnerability intelligence
+
+Preferred production input is Grype JSON generated from the same SBOM that
+Reachability Advisor scans:
+
+```bash
+grype sbom:sboms/payments-api.cdx.json -o json > vulns/payments-api.grype.json
+
+reachability-advisor scan \
+  --sbom sboms/payments-api.cdx.json \
+  --vulns vulns/payments-api.grype.json \
+  --source-root payments-api=. \
+  --terraform-plan tfplan.json
+```
+
+The Grype adapter reads `matches[]`, normalizes the matched artifact package,
+matched vulnerable version, severity, CVSS, EPSS when present, fixed versions,
+aliases, and references, then the normal source/deployment scoring pipeline runs.
 
 Recommended local format:
 
@@ -106,10 +129,10 @@ Generated with `--terraform-coverage-out`.
 {
   "schema_version": "2.0",
   "summary": {
-    "total_resources": 14,
-    "accounted_resources": 14,
+    "total_resources": 15,
+    "accounted_resources": 15,
     "resource_accounting_coverage": 1.0,
-    "semantically_classified_resources": 14,
+    "semantically_classified_resources": 15,
     "semantic_classification_coverage": 1.0,
     "unsupported_or_unclassified_resources": 0,
     "artifacts_requested": 4,
@@ -189,12 +212,28 @@ The canonical output is:
 
 ```json
 {
-  "metadata": {},
+  "metadata": {"remediation_groups": 1},
+  "remediations": [
+    {
+      "artifact": {"name": "audit-api"},
+      "component": {"name": "jackson-databind", "version": "2.9.9"},
+      "vulnerability_count": 52,
+      "max_score": 100.0,
+      "tier": "urgent",
+      "reachability": "attacker_controlled",
+      "suggested_version": "2.12.7.1",
+      "suggested_fix": "Set Maven dependency com.fasterxml.jackson.core:jackson-databind to version 2.12.7.1",
+      "top_vulnerabilities": []
+    }
+  ],
   "findings": []
 }
 ```
 
-Each finding includes artifact, component, vulnerability, source reachability, context, score, tier, confidence, rationale, fix commands, and policy status.
+`remediations[]` groups findings by artifact and dependency so developers see a
+package-level fix queue before individual advisory rows. Each finding still
+includes artifact, component, vulnerability, source reachability, context,
+score, tier, confidence, rationale, fix commands, and policy status.
 
 Schema draft: `schemas/findings.schema.json`.
 

@@ -6,14 +6,14 @@ import unittest
 from pathlib import Path
 
 from reachability_advisor.context import infer_context_from_terraform, load_context_file
-from reachability_advisor.models import Confidence, Reachability, Tier
-from reachability_advisor.outputs import render_table
+from reachability_advisor.models import Component, Confidence, Reachability, Tier
+from reachability_advisor.outputs import explain_finding, render_table, write_annotations, write_diagnostics, write_json_findings, write_markdown_report, write_sarif
 from reachability_advisor.purl import ecosystem_from_component, package_match, parse_purl
 from reachability_advisor.sbom import load_sbom, load_sboms
 from reachability_advisor.scoring import generate_findings, tier_for_score
 from reachability_advisor.source import analyze_component_source, parse_source_roots
 from reachability_advisor.validators import has_errors, validate_paths
-from reachability_advisor.vulnerability import load_vulnerabilities, matching_vulnerabilities
+from reachability_advisor.vulnerability import VulnerabilityError, load_vulnerabilities, matching_vulnerabilities
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -79,6 +79,134 @@ class SbomAndVulnTests(unittest.TestCase):
             self.assertEqual(vulns[0].id, "GHSA-test")
             self.assertEqual(vulns[0].package_name, "lodash")
 
+    def test_grype_style_parser_matches_sbom_component(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "grype.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "matches": [
+                            {
+                                "vulnerability": {
+                                    "id": "GHSA-35jh-r3h4-6jhm",
+                                    "severity": "High",
+                                    "description": "Prototype pollution in lodash.",
+                                    "urls": ["https://github.com/advisories/GHSA-35jh-r3h4-6jhm"],
+                                    "cvss": [{"version": "3.1", "metrics": {"baseScore": 7.4}}],
+                                    "epss": [{"cve": "CVE-2021-23337", "epss": 0.22}],
+                                    "fix": {"versions": ["4.17.21"], "state": "fixed"},
+                                },
+                                "artifact": {
+                                    "name": "lodash",
+                                    "version": "4.17.20",
+                                    "type": "npm",
+                                    "purl": "pkg:npm/lodash@4.17.20",
+                                },
+                                "relatedVulnerabilities": [{"id": "CVE-2021-23337"}],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            vulns = load_vulnerabilities(path)
+            self.assertEqual(len(vulns), 1)
+            self.assertEqual(vulns[0].id, "GHSA-35jh-r3h4-6jhm")
+            self.assertEqual(vulns[0].aliases, ["CVE-2021-23337"])
+            self.assertEqual(vulns[0].package_name, "lodash")
+            self.assertEqual(vulns[0].package_purl, "pkg:npm/lodash@4.17.20")
+            self.assertEqual(vulns[0].affected_versions, ["4.17.20"])
+            self.assertEqual(vulns[0].severity, "high")
+            self.assertEqual(vulns[0].cvss, 7.4)
+            self.assertEqual(vulns[0].epss, 0.22)
+            self.assertEqual(vulns[0].fixed_versions, ["4.17.21"])
+            sbom = load_sbom(ROOT / "samples/sboms/notifier.cdx.json")
+            matches = matching_vulnerabilities(sbom.components[0], vulns)
+            self.assertEqual([match.id for match in matches], ["GHSA-35jh-r3h4-6jhm"])
+
+    def test_grype_parser_handles_edge_shapes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "grype-edge.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "matches": [
+                            "not an object",
+                            {"vulnerability": {"id": "SKIP"}, "artifact": {}},
+                            {
+                                "vulnerability": {
+                                    "id": "CVE-EDGE",
+                                    "packageName": "left-pad",
+                                    "severity": "Medium",
+                                    "aliases": ["CVE-EDGE", "CVE-ALIAS", "CVE-ALIAS", " "],
+                                    "cvss": [4.0, {"score": "5.5"}, {"metrics": {"baseScore": "6.6"}}],
+                                    "epss": {"percentage": "0.31"},
+                                    "knownExploited": "known",
+                                    "fix": {"version": "1.3.0"},
+                                    "references": {"href": "https://example.test/ref"},
+                                    "advisories": [{"url": "https://example.test/advisory"}, "https://example.test/advisory"],
+                                    "dataSource": "https://example.test/source",
+                                },
+                                "artifact": {"version": "1.2.0", "purl": "pkg:npm/left-pad@1.2.0"},
+                                "relatedVulnerabilities": ["CVE-RELATED", {"value": "GHSA-RELATED"}],
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            vulns = load_vulnerabilities(path)
+        self.assertEqual(len(vulns), 1)
+        self.assertEqual(vulns[0].package_name, "left-pad")
+        self.assertEqual(vulns[0].aliases, ["CVE-ALIAS", "CVE-RELATED", "GHSA-RELATED"])
+        self.assertEqual(vulns[0].cvss, 6.6)
+        self.assertEqual(vulns[0].epss, 0.31)
+        self.assertTrue(vulns[0].known_exploited)
+        self.assertEqual(vulns[0].fixed_versions, ["1.3.0"])
+        self.assertEqual(vulns[0].references, ["https://example.test/ref", "https://example.test/advisory", "https://example.test/source"])
+
+    def test_grype_parser_rejects_non_list_matches(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "bad-grype.json"
+            path.write_text(json.dumps({"matches": {}}), encoding="utf-8")
+            with self.assertRaises(VulnerabilityError):
+                load_vulnerabilities(path)
+
+    def test_osv_parser_handles_severity_and_bad_shapes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "osv-edge.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "results": [
+                            "bad result",
+                            {
+                                "packages": [
+                                    "bad package",
+                                    {
+                                        "package": {"name": "requests", "purl": "pkg:pypi/requests@2.19.0", "version": "2.19.0"},
+                                        "vulnerabilities": [
+                                            "bad vuln",
+                                            {
+                                                "id": "PYSEC-EDGE",
+                                                "severity": [{"type": "CVSS_V3", "score": "7.1"}],
+                                                "summary": "edge",
+                                                "references": ["https://example.test/osv"],
+                                            },
+                                        ],
+                                    },
+                                ]
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            vulns = load_vulnerabilities(path)
+        self.assertEqual(vulns[0].id, "PYSEC-EDGE")
+        self.assertEqual(vulns[0].severity, "cvss_v3")
+        self.assertEqual(vulns[0].cvss, 7.1)
+
 
 class SourceTests(unittest.TestCase):
     def test_parse_source_roots(self) -> None:
@@ -99,6 +227,82 @@ class SourceTests(unittest.TestCase):
     def test_lodash_attacker_controlled(self) -> None:
         sbom = load_sbom(ROOT / "samples/sboms/notifier.cdx.json")
         evidence = analyze_component_source(sbom.components[0], ROOT / "samples/source/notifier")
+        self.assertEqual(evidence.reachability, Reachability.ATTACKER_CONTROLLED)
+
+    def test_express_attacker_controlled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "app.js").write_text(
+                "const express = require('express');\n"
+                "const app = express();\n"
+                "app.get('/items/:id', (req, res) => res.json({ id: req.params.id }));\n",
+                encoding="utf-8",
+            )
+            component = Component(name="express", purl="pkg:npm/express@4.17.1")
+            evidence = analyze_component_source(component, root)
+        self.assertEqual(evidence.reachability, Reachability.ATTACKER_CONTROLLED)
+        self.assertIn("Express", evidence.reason)
+
+    def test_chainlit_attacker_controlled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "chat.py").write_text(
+                "import chainlit as cl\n\n"
+                "@cl.on_message\n"
+                "async def on_message(message: cl.Message):\n"
+                "    await cl.Message(content=message.content).send()\n",
+                encoding="utf-8",
+            )
+            component = Component(name="chainlit", purl="pkg:pypi/chainlit@1.0.200")
+            evidence = analyze_component_source(component, root)
+        self.assertEqual(evidence.reachability, Reachability.ATTACKER_CONTROLLED)
+        self.assertEqual(evidence.language, "python")
+
+    def test_fastapi_attacker_controlled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "api.py").write_text(
+                "from fastapi import FastAPI, Request\n"
+                "app = FastAPI()\n\n"
+                "@app.post('/items')\n"
+                "async def create_item(request: Request):\n"
+                "    return await request.json()\n",
+                encoding="utf-8",
+            )
+            component = Component(name="fastapi", purl="pkg:pypi/fastapi@0.100.1")
+            evidence = analyze_component_source(component, root)
+        self.assertEqual(evidence.reachability, Reachability.ATTACKER_CONTROLLED)
+
+    def test_spring_web_attacker_controlled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Controller.java").write_text(
+                "import org.springframework.web.bind.annotation.*;\n"
+                "@RestController\n"
+                "class ProductsController {\n"
+                "  @PostMapping(\"/products\")\n"
+                "  String create(@RequestBody String body) { return body; }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            component = Component(name="spring-web", purl="pkg:maven/org.springframework/spring-web@6.0.0")
+            evidence = analyze_component_source(component, root)
+        self.assertEqual(evidence.reachability, Reachability.ATTACKER_CONTROLLED)
+
+    def test_nestjs_platform_express_attacker_controlled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "checkout.controller.ts").write_text(
+                "import { Body, Controller, Post } from '@nestjs/common';\n"
+                "@Controller('checkout')\n"
+                "export class CheckoutController {\n"
+                "  @Post()\n"
+                "  create(@Body() order: unknown) { return order; }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            component = Component(name="@nestjs/platform-express", purl="pkg:npm/%40nestjs/platform-express@11.1.3")
+            evidence = analyze_component_source(component, root)
         self.assertEqual(evidence.reachability, Reachability.ATTACKER_CONTROLLED)
 
     def test_no_source_root_is_low_confidence(self) -> None:
@@ -168,6 +372,36 @@ class ScoringTests(unittest.TestCase):
         table = render_table(self._findings())
         self.assertIn("Tier", table)
         self.assertIn("payments-api", table)
+
+    def test_output_writers_and_explain_paths(self) -> None:
+        findings = self._findings()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            json_path = root / "findings.json"
+            sarif_path = root / "findings.sarif"
+            diagnostics_path = root / "diagnostics.json"
+            markdown_path = root / "summary.md"
+            annotations_path = root / "annotations.txt"
+            empty_markdown_path = root / "empty.md"
+            empty_annotations_path = root / "empty-annotations.txt"
+
+            write_json_findings(findings, json_path, metadata={"sbom_count": 2})
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+            explained = explain_finding(data, key=findings[0].key)
+            write_sarif(findings, sarif_path)
+            write_diagnostics(findings, diagnostics_path)
+            write_markdown_report(findings, markdown_path, max_findings=2)
+            write_markdown_report([], empty_markdown_path)
+            write_annotations(findings, annotations_path, min_tier=Tier.LOW, max_findings=2)
+            write_annotations([], empty_annotations_path)
+
+            self.assertIn(findings[0].vulnerability.id, explained)
+            self.assertIn("runs", sarif_path.read_text(encoding="utf-8"))
+            self.assertIn("diagnostics", diagnostics_path.read_text(encoding="utf-8"))
+            self.assertIn("Remediation queue", markdown_path.read_text(encoding="utf-8"))
+            self.assertIn("No matching vulnerable components", empty_markdown_path.read_text(encoding="utf-8"))
+            self.assertTrue(annotations_path.read_text(encoding="utf-8").startswith("::"))
+            self.assertEqual(empty_annotations_path.read_text(encoding="utf-8"), "")
 
 
 class ValidationTests(unittest.TestCase):

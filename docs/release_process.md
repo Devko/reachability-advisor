@@ -9,17 +9,27 @@ make compile
 make test
 make coverage
 make sample
+make fixtures
+make release-check
+make package
 ```
 
-4. Review generated sample outputs.
-5. Tag release:
+4. Review generated sample and release-validation outputs.
+5. Confirm public package metadata:
+
+- `pyproject.toml` and `reachability_advisor.__version__` match.
+- classifier is `Development Status :: 5 - Production/Stable`.
+- no alpha/beta package status remains.
+- source distribution and wheel build as `reachability_advisor-<version>`.
+
+6. Tag release:
 
 ```bash
 git tag -s v1.0.0 -m "Reachability Advisor v1.0.0"
 git push origin v1.0.0
 ```
 
-6. Publish release notes with:
+7. Publish release notes with:
 
 - security-relevant changes;
 - output format changes;

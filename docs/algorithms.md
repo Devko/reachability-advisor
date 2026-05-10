@@ -6,7 +6,7 @@ Reachability Advisor uses transparent, conservative algorithms. The goal is to h
 
 ```text
 CycloneDX SBOMs
-  + vulnerability intelligence
+  + vulnerability intelligence (Grype JSON or normalized local JSON)
   + optional source roots
   + optional context JSON
   + optional Terraform plan JSON
@@ -17,6 +17,7 @@ CycloneDX SBOMs
   -> artifact-to-Terraform workload matches
   -> exposure / identity / data context
   -> explainable score
+  -> remediation groups by artifact/component/version
   -> JSON/SARIF/diagnostics/Markdown/annotations/coverage/mapping
 ```
 
@@ -54,6 +55,12 @@ All candidates appear in `--mapping-out` so reviewers can verify the mapping.
 
 ## Dependency matching
 
+When `--vulns` points to Grype JSON, Reachability Advisor treats Grype's
+`matches[]` as the scanner/database handoff. Each match is normalized to the
+same vulnerability record shape used by local fixtures, with the Grype artifact
+version recorded as the affected version. The advisor then verifies that record
+against the supplied SBOM component before scoring it.
+
 A vulnerability matches a component when one of these conditions is true:
 
 1. exact package URL match;
@@ -77,6 +84,22 @@ The same-file requirement prevents overclaiming. If an HTTP handler appears in o
 
 Rules are visible in `src/reachability_advisor/source.py`. Additional project-specific rules can be supplied with `--reachability-rules`.
 
+Built-in high-risk source rules currently cover common Java, Node, Python, and Go evidence:
+
+- Java/Maven import and sink patterns, including Log4j and Spring Web entrypoints;
+- Node/npm import and route/request patterns, including Express and NestJS on Express;
+- Python/PyPI import and handler patterns, including FastAPI, Chainlit, and aiohttp;
+- basic Go import evidence, with stronger evidence available through custom rules.
+
+## Remediation grouping
+
+Individual scanner findings are preserved, but JSON and Markdown outputs also
+include a package-level remediation queue. Findings are grouped by artifact,
+component name, component version, and package URL. The group inherits the
+highest reachability and highest score among its findings, keeps all advisory
+IDs underneath, and proposes one package upgrade from the highest fixed version
+reported by vulnerability intelligence.
+
 ## Artifact-to-Terraform matching
 
 Terraform evidence is derived from a local `terraform show -json` plan. The analyzer is manifest-driven:
@@ -86,9 +109,13 @@ Terraform evidence is derived from a local `terraform show -json` plan. The anal
 3. Classify the resource category if it appears in `TERRAFORM_COVERAGE_MANIFEST`: `workload`, `exposure`, `identity`, `sensitive_data`, or supporting context.
 4. Extract likely container image or artifact references from provider-specific and generic fields.
 5. Match those references against SBOM artifact candidates.
-6. Infer exposure from public network/API resources.
+6. Infer exposure from public network/API resources linked to the matched workload.
 7. Infer coarse privilege from IAM/role/policy resources.
 8. Emit coverage and mapping reports.
+
+Helm and kubectl wrapper resources are classified as Kubernetes supporting
+resources, but they still emit `opaque_manifest_wrapper` visibility gaps because
+the rendered child manifests are where workload images, exposure, and RBAC live.
 
 Match scoring:
 
@@ -101,7 +128,9 @@ Match scoring:
 | `repository-leaf` | 58 | low/medium | Last repository segment matches. |
 | `name` / `artifact-name` | 45-52 | low | Weak name-only match. |
 
-This is deployment context, not exploit proof. Unsupported resources do not lower risk; they are reported as gaps.
+Exposure inference is deliberately linked instead of provider-wide. A public load balancer, API gateway, or ingress in the same Terraform plan does not automatically make every matched artifact public. Supported public links include AWS ECS services through public security groups or public load balancer target groups, AWS Lambda function URLs, GCP Cloud Run and Cloud Functions public invoker grants, Azure Container Apps external ingress, and Kubernetes Service/Ingress names or selectors.
+
+This is deployment context, not exploit proof. Unsupported resources and opaque rendered-manifest wrappers do not lower risk; they are reported as gaps.
 
 ## Context evidence
 

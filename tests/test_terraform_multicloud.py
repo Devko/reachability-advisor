@@ -12,6 +12,7 @@ from reachability_advisor.terraform import (
     TERRAFORM_COVERAGE_MANIFEST,
     TerraformAnalyzer,
     TerraformContextError,
+    classification_for_resource,
     classify_policy,
     classify_role_text,
     coverage_report,
@@ -40,7 +41,7 @@ def plan(resources: list[dict]) -> dict:
 class TerraformManifestTests(unittest.TestCase):
     def test_manifest_has_aws_azure_gcp_kubernetes(self) -> None:
         providers = {support.provider for support in TERRAFORM_COVERAGE_MANIFEST}
-        self.assertEqual(providers, {"aws", "azure", "gcp", "kubernetes"})
+        self.assertTrue({"aws", "azure", "gcp", "kubernetes"}.issubset(providers))
 
     def test_manifest_has_no_duplicate_resource_types(self) -> None:
         all_types = [rtype for support in TERRAFORM_COVERAGE_MANIFEST for rtype in support.types]
@@ -48,16 +49,19 @@ class TerraformManifestTests(unittest.TestCase):
 
     def test_manifest_report_counts(self) -> None:
         report = manifest_report()
-        self.assertEqual(report["provider_count"], 4)
-        self.assertGreater(report["resource_type_count"], 70)
+        self.assertGreaterEqual(report["provider_count"], 4)
+        self.assertGreater(report["resource_type_count"], 120)
         self.assertIn("aws", report["providers"])
         self.assertIn("azure", report["providers"])
         self.assertIn("gcp", report["providers"])
 
     def test_supported_type_map_contains_categories(self) -> None:
         self.assertEqual(SUPPORTED_TYPE_TO_CLASS["aws_ecs_task_definition"], ("aws", "workload"))
+        self.assertEqual(SUPPORTED_TYPE_TO_CLASS["aws_alb"], ("aws", "exposure"))
         self.assertEqual(SUPPORTED_TYPE_TO_CLASS["azurerm_container_app"], ("azure", "workload"))
+        self.assertEqual(SUPPORTED_TYPE_TO_CLASS["azurerm_container_app_environment_dapr_component"], ("azure", "supporting"))
         self.assertEqual(SUPPORTED_TYPE_TO_CLASS["google_compute_firewall"], ("gcp", "exposure"))
+        self.assertEqual(classification_for_resource("azapi_resource", {"type": "Microsoft.App/containerApps@2023-05-01"}), ("azure", "workload"))
 
 
 class TerraformParsingTests(unittest.TestCase):
@@ -65,9 +69,13 @@ class TerraformParsingTests(unittest.TestCase):
         self.assertEqual(provider_for_type("aws_lambda_function"), "aws")
         self.assertEqual(provider_for_type("azurerm_container_app"), "azure")
         self.assertEqual(provider_for_type("azuread_application"), "azure")
+        self.assertEqual(provider_for_type("azapi_resource"), "azure")
         self.assertEqual(provider_for_type("google_cloud_run_v2_service"), "gcp")
         self.assertEqual(provider_for_type("kubernetes_deployment"), "kubernetes")
-        self.assertEqual(provider_for_type("random_pet"), "unknown")
+        self.assertEqual(provider_for_type("helm_release"), "kubernetes")
+        self.assertEqual(provider_for_type("kubectl_manifest"), "kubernetes")
+        self.assertEqual(provider_for_type("random_pet"), "terraform")
+        self.assertEqual(provider_for_type("docker_image"), "docker")
 
     def test_extract_resources_from_planned_values_and_changes(self) -> None:
         data = plan([resource("aws_lambda_function.a", "aws_lambda_function", {"image_uri": "repo/a:1"})])
@@ -231,7 +239,7 @@ class TerraformAnalysisTests(unittest.TestCase):
         artifacts = [Artifact(name="app", reference="ghcr.io/acme/app:1")]
         data = plan([
             resource("azurerm_container_app.app", "azurerm_container_app", {"name": "app", "template": [{"container": [{"image": "ghcr.io/acme/app:1"}]}]}),
-            resource("random_pet.name", "random_pet", {"length": 2}),
+            resource("custom_resource.name", "custom_resource", {"length": 2}),
         ])
         analysis = TerraformAnalyzer(data, artifacts).analyze()
         self.assertEqual(analysis.coverage["summary"]["resource_accounting_coverage"], 1.0)
@@ -268,7 +276,7 @@ class TerraformAnalysisTests(unittest.TestCase):
             coverage = json.loads((out / "coverage.json").read_text(encoding="utf-8"))
             self.assertEqual(coverage["summary"]["resource_accounting_coverage"], 1.0)
             findings = json.loads((out / "findings.json").read_text(encoding="utf-8"))
-            self.assertEqual(findings["metadata"]["terraform_resources"], 14)
+            self.assertEqual(findings["metadata"]["terraform_resources"], 15)
 
     def test_all_manifest_resource_types_can_be_accounted(self) -> None:
         resources = [resource(f"{rtype}.x{i}", rtype, {}) for i, rtype in enumerate(SUPPORTED_TYPE_TO_CLASS)]
@@ -276,6 +284,21 @@ class TerraformAnalysisTests(unittest.TestCase):
         self.assertEqual(report["summary"]["resource_accounting_coverage"], 1.0)
         self.assertEqual(report["summary"]["semantic_classification_coverage"], 1.0)
         self.assertEqual(report["summary"]["unsupported_or_unclassified_resources"], 0)
+
+    def test_opaque_manifest_wrappers_are_supported_but_still_gaps(self) -> None:
+        resources = extract_resources(
+            plan(
+                [
+                    resource("helm_release.app", "helm_release", {"name": "app"}),
+                    resource("kubectl_manifest.app", "kubectl_manifest", {"yaml_body": "kind: Deployment"}),
+                ]
+            )
+        )
+        report = coverage_report(resources, [], [])
+        self.assertEqual(report["summary"]["semantic_classification_coverage"], 1.0)
+        self.assertEqual(report["summary"]["unsupported_or_unclassified_resources"], 0)
+        self.assertEqual({row["category"] for row in report["resources"]}, {"supporting"})
+        self.assertEqual({gap["gap_type"] for gap in report["visibility_gaps"]}, {"opaque_manifest_wrapper"})
 
 
 if __name__ == "__main__":
@@ -318,10 +341,27 @@ class TerraformBranchCoverageTests(unittest.TestCase):
         analysis = TerraformAnalyzer(data, [Artifact(name="app", reference="repo/app:1")]).analyze()
         self.assertEqual(analysis.contexts["app"].privilege, "limited")
 
-    def test_exposure_fallback_to_provider_global(self) -> None:
+    def test_unlinked_public_api_does_not_mark_lambda_public(self) -> None:
         data = plan([
             resource("aws_lambda_function.app", "aws_lambda_function", {"function_name": "app", "image_uri": "repo/app:1"}),
             resource("aws_api_gateway_rest_api.api", "aws_api_gateway_rest_api", {"name": "api"}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app", reference="repo/app:1")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "unknown")
+
+    def test_ecs_service_linked_to_public_security_group_is_public(self) -> None:
+        data = plan([
+            resource("aws_security_group.public", "aws_security_group", {"id": "sg-public", "ingress": [{"cidr_blocks": ["0.0.0.0/0"]}]}),
+            resource("aws_ecs_service.app", "aws_ecs_service", {"name": "app", "network_configuration": [{"security_groups": ["sg-public"]}]}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "public")
+
+    def test_ecs_task_definition_uses_linked_public_service(self) -> None:
+        data = plan([
+            resource("aws_security_group.public", "aws_security_group", {"id": "sg-public", "ingress": [{"cidr_blocks": ["0.0.0.0/0"]}]}),
+            resource("aws_ecs_task_definition.app", "aws_ecs_task_definition", {"family": "app", "container_definitions": "[{\"name\":\"app\",\"image\":\"repo/app:1\"}]"}),
+            resource("aws_ecs_service.app", "aws_ecs_service", {"name": "service", "task_definition": "app", "network_configuration": [{"security_groups": ["sg-public"]}]}),
         ])
         analysis = TerraformAnalyzer(data, [Artifact(name="app", reference="repo/app:1")]).analyze()
         self.assertEqual(analysis.contexts["app"].exposure, "public")
@@ -331,6 +371,9 @@ class TerraformBranchCoverageTests(unittest.TestCase):
         private = self._tf_resource("aws_lb", {"internal": True})
         self.assertTrue(is_public_exposure(public))
         self.assertFalse(is_public_exposure(private))
+
+    def test_aws_alb_alias_public(self) -> None:
+        self.assertTrue(is_public_exposure(self._tf_resource("aws_alb", {"internal": False})))
 
     def test_api_gateway_and_cloudfront_public(self) -> None:
         for rtype in ("aws_apigatewayv2_api", "aws_api_gateway_rest_api", "aws_cloudfront_distribution"):
@@ -344,6 +387,22 @@ class TerraformBranchCoverageTests(unittest.TestCase):
         r = self._tf_resource("kubernetes_ingress_v1", {"rules": [{"host": "example.com"}]})
         self.assertTrue(is_public_exposure(r))
 
+    def test_kubernetes_public_service_requires_workload_name_or_selector_match(self) -> None:
+        public_service = resource("kubernetes_service.web_public", "kubernetes_service", {"type": "LoadBalancer", "metadata": [{"name": "web"}]})
+        api = resource(
+            "kubernetes_deployment.api",
+            "kubernetes_deployment",
+            {"metadata": [{"name": "api"}], "spec": [{"template": [{"spec": [{"container": [{"name": "api", "image": "repo/api:1"}]}]}]}]},
+        )
+        worker = resource(
+            "kubernetes_deployment.worker",
+            "kubernetes_deployment",
+            {"metadata": [{"name": "worker"}], "spec": [{"template": [{"spec": [{"container": [{"name": "worker", "image": "repo/worker:1"}]}]}]}]},
+        )
+        analysis = TerraformAnalyzer(plan([public_service, api, worker]), [Artifact(name="api", reference="repo/api:1"), Artifact(name="worker", reference="repo/worker:1")]).analyze()
+        self.assertEqual(analysis.contexts["api"].exposure, "unknown")
+        self.assertEqual(analysis.contexts["worker"].exposure, "unknown")
+
     def test_azure_public_resources(self) -> None:
         for rtype in ("azurerm_public_ip", "azurerm_application_gateway", "azurerm_frontdoor_endpoint", "azurerm_cdn_frontdoor_endpoint"):
             self.assertTrue(is_public_exposure(self._tf_resource(rtype, {})))
@@ -351,6 +410,20 @@ class TerraformBranchCoverageTests(unittest.TestCase):
     def test_azure_container_app_ingress_dict_public(self) -> None:
         data = plan([resource("azurerm_container_app.app", "azurerm_container_app", {"name": "app", "template": [{"container": [{"image": "repo/app:1"}]}], "ingress": {"external_enabled": True}})])
         analysis = TerraformAnalyzer(data, [Artifact(name="app", reference="repo/app:1")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "public")
+
+    def test_azapi_container_app_classifies_and_scores_context(self) -> None:
+        data = plan(
+            [
+                resource(
+                    "azapi_resource.app",
+                    "azapi_resource",
+                    {"type": "Microsoft.App/containerApps@2023-05-01", "name": "app", "properties": {"template": {"containers": [{"image": "repo/app:1"}]}, "configuration": {"ingress": {"external": True}}}, "ingress": {"external": True}},
+                )
+            ]
+        )
+        analysis = TerraformAnalyzer(data, [Artifact(name="app", reference="repo/app:1")]).analyze()
+        self.assertEqual(analysis.coverage["summary"]["unsupported_or_unclassified_resources"], 0)
         self.assertEqual(analysis.contexts["app"].exposure, "public")
 
     def test_azure_web_app_internal_when_public_access_disabled(self) -> None:

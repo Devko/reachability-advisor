@@ -1,6 +1,21 @@
 # Changelog
 
-## 5.0.0 - 2026-05-10
+## 1.0.0 - 2026-05-10
+
+Stable public v1 release.
+
+- Promoted the package metadata to `Development Status :: 5 - Production/Stable`.
+- Aligned the package and CLI version to `1.0.0`.
+- Added `scripts/validate_release.py` and `make release-check` to validate release metadata and generated output schemas before tagging.
+- Added release validation to CI.
+- Includes the full local-first CLI, CycloneDX ingestion, Grype/local/OSV-style vulnerability adapters, source reachability heuristics, Terraform plan and HCL static context, mapping reports, remediation grouping, SARIF/diagnostics/Markdown/annotation outputs, fixture packs, and real-world replay scripts.
+- Current validation snapshot: 269 tests, 93% coverage gate, clean sdist/wheel build, 4 fixture packs, 9 external HCL corpus projects, and 3 Grype replay cases.
+
+## Pre-1.0 internal milestones
+
+The entries below were local development milestones before the first stable public release.
+
+### Internal milestone 5 - 2026-05-10
 
 Real-world Terraform validation release.
 
@@ -14,7 +29,7 @@ Real-world Terraform validation release.
 - Improved image discovery to handle list-shaped image values.
 - Expanded tests from 224 to 242.
 
-## 4.0.0 - 2026-05-10
+### Internal milestone 4 - 2026-05-10
 
 Logic verification and mapping-hardening release.
 
@@ -28,9 +43,9 @@ Logic verification and mapping-hardening release.
 - Added basic Go import evidence and expanded Java/Node/Python tests.
 - Added documentation for SBOM generation, reachability mapping, and logic verification.
 - Expanded tests from 174 to 224 and raised coverage threshold from 92% to 93%.
-- Current measured coverage is 94%.
+- Current measured coverage was 94%.
 
-## 3.0.0 - 2026-05-10
+### Internal milestone 3 - 2026-05-10
 
 Community Terraform fixture-pack release.
 
@@ -41,9 +56,9 @@ Community Terraform fixture-pack release.
 - Added `make fixtures` and CI execution for fixture-pack validation.
 - Expanded Terraform semantic manifest with common supporting resources from module-shaped plans.
 - Expanded tests from 134 to 174 and raised coverage threshold from 90% to 92%.
-- Current measured coverage is 94%.
+- Current measured coverage was 94%.
 
-## 2.0.0 - 2026-05-10
+### Internal milestone 2 - 2026-05-10
 
 Multi-cloud Terraform developer context release.
 
@@ -56,9 +71,9 @@ Multi-cloud Terraform developer context release.
 - Added Azure and GCP sample artifacts and a multi-cloud Terraform sample plan.
 - Expanded tests from 71 to 134 and raised coverage threshold from 88% to 90%.
 
-## 1.0.0 - 2026-05-09
+### Internal milestone 1 - 2026-05-09
 
-Focused developer edition prepared as an OWASP project candidate package.
+Focused developer edition.
 
 - Added local-first CLI for SBOM + vulnerability + source/context prioritization.
 - Added SARIF, diagnostics JSON, Markdown PR summary, and GitHub annotations.
@@ -66,5 +81,5 @@ Focused developer edition prepared as an OWASP project candidate package.
 - Added Java/Maven, Node/npm, and Python/PyPI lightweight source heuristics.
 - Added context JSON and Terraform-lite context inference.
 - Added VS Code extension skeleton.
-- Added governance, security, privacy, contribution, and OWASP application docs.
+- Added governance, security, privacy, and contribution docs.
 - Added 71 tests with 88% coverage.

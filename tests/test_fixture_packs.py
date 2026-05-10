@@ -213,7 +213,7 @@ class FixtureEdgeCoverageTests(unittest.TestCase):
         from reachability_advisor.fixtures import FixtureIssue, default_fixtures_root
 
         self.assertEqual(FixtureIssue("warning", "msg").to_json(), {"severity": "warning", "message": "msg"})
-        self.assertTrue(str(default_fixtures_root()).endswith("fixtures/terraform"))
+        self.assertEqual(default_fixtures_root().parts[-2:], ("fixtures", "terraform"))
 
     def test_discover_invalid_index_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -226,7 +226,7 @@ class FixtureEdgeCoverageTests(unittest.TestCase):
             Path(tmp, "index.json").write_text(json.dumps({"packs": [{}, "bad", {"path": "packs/demo"}]}), encoding="utf-8")
             paths = discover_fixture_packs(tmp)
             self.assertEqual(len(paths), 1)
-            self.assertTrue(str(paths[0]).endswith("packs/demo/fixture.json"))
+            self.assertEqual(paths[0].parts[-3:], ("packs", "demo", "fixture.json"))
 
     def test_load_fixture_pack_invalid_json_and_non_object(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

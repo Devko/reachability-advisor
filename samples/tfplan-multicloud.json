@@ -16,7 +16,18 @@
           "address": "aws_security_group.public_api",
           "type": "aws_security_group",
           "name": "public_api",
-          "values": {"ingress": [{"cidr_blocks": ["0.0.0.0/0"], "from_port": 443, "to_port": 443}]}
+          "values": {"id": "sg-public-api", "name": "payments-public-api", "ingress": [{"cidr_blocks": ["0.0.0.0/0"], "from_port": 443, "to_port": 443}]}
+        },
+        {
+          "address": "aws_ecs_service.payments",
+          "type": "aws_ecs_service",
+          "name": "payments",
+          "values": {
+            "name": "payments-api",
+            "task_definition": "payments-api",
+            "network_configuration": [{"security_groups": ["sg-public-api"]}],
+            "tags": {"Environment": "prod", "Owner": "@team-payments"}
+          }
         },
         {
           "address": "aws_iam_role_policy.payments_secrets",

@@ -79,6 +79,130 @@
         "the application workloads are Kubernetes YAML / downstream deployment assets, not only Terraform resources",
         "cluster reachability does not imply package reachability without SBOMs for individual microservices"
       ]
+    },
+    {
+      "id": "aws-ecs-fullstack-app-terraform",
+      "name": "aws-samples amazon-ecs-fullstack-app-terraform",
+      "repo": "https://github.com/aws-samples/amazon-ecs-fullstack-app-terraform.git",
+      "web": "https://github.com/aws-samples/amazon-ecs-fullstack-app-terraform",
+      "path": "Infrastructure",
+      "source_paths": [
+        "Code/server",
+        "Code/client"
+      ],
+      "provider": "aws",
+      "why_selected": "Real fullstack Node/Vue application with Terraform-managed ECS services, task definitions, public ALBs, IAM, CodePipeline, DynamoDB, S3, and ECR.",
+      "expected_resource_types": [
+        "aws_ecs_cluster",
+        "aws_ecs_service",
+        "aws_ecs_task_definition",
+        "aws_alb",
+        "aws_alb_listener",
+        "aws_security_group",
+        "aws_iam_role",
+        "aws_ecr_repository"
+      ],
+      "expected_static_limitations": [
+        "ECS task definition image values are template or pipeline driven until a concrete plan exists",
+        "CI/CD resources are supporting deployment context and should not be treated as application workloads"
+      ]
+    },
+    {
+      "id": "aws-ecs-cicd-petclinic",
+      "name": "aws-samples aws-ecs-cicd-terraform",
+      "repo": "https://github.com/aws-samples/aws-ecs-cicd-terraform.git",
+      "web": "https://github.com/aws-samples/aws-ecs-cicd-terraform",
+      "path": "terraform",
+      "source_paths": [
+        "petclinic"
+      ],
+      "provider": "aws",
+      "why_selected": "Real Spring Petclinic application deployed to ECS/Fargate with Terraform and CodePipeline, useful for Maven source reachability plus AWS IaC context.",
+      "expected_resource_types": [
+        "aws_ecs_cluster",
+        "aws_ecs_service",
+        "aws_ecs_task_definition",
+        "aws_alb",
+        "aws_alb_listener",
+        "aws_db_instance",
+        "aws_codepipeline",
+        "aws_codebuild_project"
+      ],
+      "expected_static_limitations": [
+        "application image identity is produced by the pipeline and is stronger in plan/runtime SBOM mode",
+        "database password and build pipeline settings are intentionally variable or external"
+      ]
+    },
+    {
+      "id": "aws-retail-store-sample-app",
+      "name": "aws-containers retail-store-sample-app",
+      "repo": "https://github.com/aws-containers/retail-store-sample-app.git",
+      "web": "https://github.com/aws-containers/retail-store-sample-app",
+      "path": "terraform",
+      "source_paths": [
+        "src"
+      ],
+      "provider": "aws",
+      "why_selected": "Large real sample application with multiple services, source code, and Terraform deployment options for ECS, EKS, and App Runner.",
+      "expected_resource_types": [
+        "aws_ecs_cluster",
+        "aws_ecs_service",
+        "aws_ecs_task_definition",
+        "aws_apprunner_service",
+        "aws_mq_broker",
+        "aws_secretsmanager_secret",
+        "aws_security_group",
+        "aws_iam_role"
+      ],
+      "expected_static_limitations": [
+        "the Terraform tree includes multiple deployment variants, so source audit coverage is about visible resource support rather than one concrete deployment",
+        "Kubernetes manifests and Helm charts require separate manifest-aware analysis"
+      ]
+    },
+    {
+      "id": "azure-container-apps-openai",
+      "name": "Azure-Samples container-apps-openai",
+      "repo": "https://github.com/Azure-Samples/container-apps-openai.git",
+      "web": "https://github.com/Azure-Samples/container-apps-openai",
+      "path": "terraform",
+      "source_paths": [
+        "src"
+      ],
+      "provider": "azure",
+      "why_selected": "Python chat applications deployed with Terraform-managed Azure Container Apps, Container Registry, private networking, Azure OpenAI, and managed identity.",
+      "expected_resource_types": [
+        "azurerm_container_app",
+        "azurerm_container_app_environment",
+        "azurerm_container_registry",
+        "azurerm_cognitive_account",
+        "azurerm_private_endpoint",
+        "azurerm_private_dns_zone",
+        "azurerm_user_assigned_identity"
+      ],
+      "expected_static_limitations": [
+        "container image names usually come from registry module outputs and variables",
+        "private endpoint and Azure OpenAI resources provide blast-radius context, not package-level source reachability by themselves"
+      ]
+    },
+    {
+      "id": "azure-container-apps-azapi-dapr",
+      "name": "Azure-Samples container-apps-azapi-terraform",
+      "repo": "https://github.com/Azure-Samples/container-apps-azapi-terraform.git",
+      "web": "https://github.com/Azure-Samples/container-apps-azapi-terraform",
+      "path": ".",
+      "provider": "azure",
+      "why_selected": "Real Azure Container Apps Terraform sample that uses the generic AzAPI provider, validating ARM-type classification instead of only provider-native azurerm resource names.",
+      "expected_resource_types": [
+        "azurerm_container_app_environment",
+        "azurerm_container_app_environment_dapr_component",
+        "azapi_resource",
+        "azurerm_log_analytics_workspace",
+        "azurerm_storage_account"
+      ],
+      "expected_static_limitations": [
+        "generic azapi_resource blocks need ARM type inspection for semantic classification",
+        "container image evidence may be nested in encoded body objects or module variables"
+      ]
     }
   ]
 }

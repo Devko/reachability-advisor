@@ -371,7 +371,7 @@ class TerraformMappingEvidenceTests(unittest.TestCase):
         self.assertEqual(analysis.coverage["unmatched_artifacts"], ["api"])
 
     def test_coverage_report_accepts_empty_artifact_list(self) -> None:
-        resources = extract_resources(_plan([_resource("random_pet.x", "random_pet", {})]))
+        resources = extract_resources(_plan([_resource("custom_resource.x", "custom_resource", {})]))
         report = coverage_report(resources, [], [])
         self.assertEqual(report["summary"]["artifact_match_coverage"], 1.0)
         self.assertEqual(len(report["visibility_gaps"]), 1)

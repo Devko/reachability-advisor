@@ -8,9 +8,10 @@ real-world validation workflows:
 
 * account for resource/module blocks without running Terraform;
 * classify resource types against the same multi-cloud manifest used for plans;
-* extract only simple, local evidence such as image-like attributes and obvious
-  public exposure literals;
-* report unresolved variables/modules as visibility gaps instead of treating
+* extract only simple, local evidence such as literal variable defaults,
+  ``.tfvars`` assignments, image-like attributes, and obvious public exposure
+  literals;
+* report unresolved expressions/modules as visibility gaps instead of treating
   them as safe or fully understood.
 
 The parser is not a full Terraform interpreter.  It is a static coverage and
@@ -66,12 +67,13 @@ class HclProjectAudit:
     data_blocks: tuple[HclBlock, ...]
     synthetic_plan: dict[str, Any]
     coverage: dict[str, Any]
+    variables: dict[str, Any] = field(default_factory=dict, repr=False)
     warnings: tuple[str, ...] = field(default_factory=tuple)
 
     def to_json(self) -> dict[str, Any]:
         resource_types = sorted({block.type for block in self.resources if block.type})
-        module_rows = [_module_row(block) for block in self.modules]
-        images = _image_summary(self.resources)
+        module_rows = [_module_row(block, self.variables) for block in self.modules]
+        images = _image_summary(self.resources, self.variables)
         return {
             "schema_version": "4.1",
             "mode": "hcl_static",
@@ -86,27 +88,29 @@ class HclProjectAudit:
                 "literal_image_references": len(images["literal"]),
                 "unresolved_image_references": len(images["unresolved"]),
                 "module_expansion_gaps": len(self.modules),
+                "resolved_variable_values": len(self.variables),
             },
             "resource_types_seen": resource_types,
-            "resources": [_block_row(block) for block in self.resources],
+            "resources": [_block_row(block, self.variables) for block in self.resources],
             "modules": module_rows,
-            "data": [_block_row(block) for block in self.data_blocks],
+            "data": [_block_row(block, self.variables) for block in self.data_blocks],
             "image_references": images,
             "coverage": self.coverage,
             "warnings": list(self.warnings),
             "notes": [
-                "HCL static mode does not evaluate variables, count/for_each, modules, data sources, locals, or provider defaults.",
+                "HCL static mode resolves simple literal variables but does not evaluate count/for_each, modules, data sources, locals, expressions, or provider defaults.",
                 "Use terraform show -json for production gating when a plan is available.",
-                "Module blocks are reported as visibility gaps because their child resources are not expanded without Terraform.",
+                "Module blocks and opaque Helm/Kubectl wrappers are reported as visibility gaps because their child resources are not expanded or rendered in HCL static mode.",
             ],
         }
 
 
-RESOURCE_RE = re.compile(r'\bresource\s+"([^"]+)"\s+"([^"]+)"\s*\{', re.MULTILINE)
-DATA_RE = re.compile(r'\bdata\s+"([^"]+)"\s+"([^"]+)"\s*\{', re.MULTILINE)
-MODULE_RE = re.compile(r'\bmodule\s+"([^"]+)"\s*\{', re.MULTILINE)
+RESOURCE_RE = re.compile(r'^\s*resource\s+"([^"]+)"\s+"([^"]+)"\s*\{', re.MULTILINE)
+DATA_RE = re.compile(r'^\s*data\s+"([^"]+)"\s+"([^"]+)"\s*\{', re.MULTILINE)
+MODULE_RE = re.compile(r'^\s*module\s+"([^"]+)"\s*\{', re.MULTILINE)
+VARIABLE_RE = re.compile(r'^\s*variable\s+"([^"]+)"\s*\{', re.MULTILINE)
 ASSIGNMENT_RE = re.compile(r'^\s*([A-Za-z0-9_:\-\.]+)\s*=\s*(.+?)\s*$', re.MULTILINE)
-IMAGE_KEY_RE = re.compile(r'\b(image|image_uri|image_url|container_image|docker_image|docker_image_name|linux_fx_version)\s*=\s*([^\n]+)', re.IGNORECASE)
+IMAGE_KEY_RE = re.compile(r'["\']?\b(image|image_uri|image_url|container_image|docker_image|docker_image_name|linux_fx_version)\b["\']?\s*(?:=|:)\s*([^\n,]+)', re.IGNORECASE)
 PUBLIC_CIDR_RE = re.compile(r'("0\.0\.0\.0/0"|"::/0"|\bInternet\b|"\*"|\ballUsers\b|"allUsers")', re.IGNORECASE)
 
 
@@ -138,6 +142,7 @@ def audit_hcl_project(path: str | Path, artifacts: list[Artifact] | None = None)
     resources: list[HclBlock] = []
     modules: list[HclBlock] = []
     data_blocks: list[HclBlock] = []
+    variables: dict[str, Any] = {}
     warnings: list[str] = []
     for tf_file in files:
         try:
@@ -148,7 +153,9 @@ def audit_hcl_project(path: str | Path, artifacts: list[Artifact] | None = None)
         resources.extend(_extract_blocks(text, tf_file, RESOURCE_RE, kind="resource"))
         data_blocks.extend(_extract_blocks(text, tf_file, DATA_RE, kind="data"))
         modules.extend(_extract_blocks(text, tf_file, MODULE_RE, kind="module"))
-    synthetic_plan = hcl_blocks_to_plan(resources)
+        variables.update(_variable_defaults_from_text(text))
+    variables.update(_tfvars_values(root_dir))
+    synthetic_plan = hcl_blocks_to_plan(resources, variables=variables)
     plan_resources = extract_resources(synthetic_plan)
     coverage = coverage_report(plan_resources, artifacts or [], _artifact_matches(plan_resources, artifacts or []))
     coverage["source_mode"] = "hcl_static"
@@ -173,7 +180,7 @@ def audit_hcl_project(path: str | Path, artifacts: list[Artifact] | None = None)
     for block in resources:
         if block.type in BASE_UNSUPPORTED_TYPES:
             continue
-        for image in _image_values(block.body):
+        for image in _image_values(block.body, variables):
             if _is_unresolved_expression(image):
                 coverage["visibility_gaps"].append(
                     {
@@ -192,6 +199,7 @@ def audit_hcl_project(path: str | Path, artifacts: list[Artifact] | None = None)
         data_blocks=tuple(data_blocks),
         synthetic_plan=synthetic_plan,
         coverage=coverage,
+        variables=variables,
         warnings=tuple(warnings),
     )
 
@@ -215,14 +223,14 @@ def analyze_terraform_source(path: str | Path | None, artifacts: list[Artifact])
     return TerraformAnalysis(contexts=analysis.contexts, coverage=coverage)
 
 
-def hcl_blocks_to_plan(resources: list[HclBlock] | tuple[HclBlock, ...]) -> dict[str, Any]:
+def hcl_blocks_to_plan(resources: list[HclBlock] | tuple[HclBlock, ...], variables: dict[str, Any] | None = None) -> dict[str, Any]:
     """Convert HCL resource blocks to a Terraform-plan-shaped JSON object."""
 
     plan_resources: list[dict[str, Any]] = []
     for block in resources:
         if not block.type:
             continue
-        values = _values_from_body(block.body, block.type)
+        values = _values_from_body(block.body, block.type, variables or {})
         values["__hcl_file"] = block.file
         values["__hcl_line"] = block.line
         plan_resources.append({"address": block.address, "type": block.type, "name": block.name, "values": values})
@@ -230,7 +238,7 @@ def hcl_blocks_to_plan(resources: list[HclBlock] | tuple[HclBlock, ...]) -> dict
 
 
 def render_hcl_audit_markdown(report: dict[str, Any]) -> str:
-    """Render a compact Markdown report for maintainers and OWASP reviewers."""
+    """Render a compact Markdown report for maintainers and reviewers."""
 
     summary = report.get("summary", {})
     coverage = report.get("coverage", {})
@@ -273,7 +281,7 @@ def render_hcl_audit_markdown(report: dict[str, Any]) -> str:
             "",
             "## Notes",
             "",
-            "This is a static HCL audit. It does not evaluate variables, modules, locals, provider defaults, count, or for_each. Use `terraform show -json` for stronger deployment-context evidence.",
+            "This is a static HCL audit. It resolves simple literal variables but does not evaluate modules, locals, provider defaults, expressions, count, for_each, or rendered Helm/Kubectl child manifests. Use `terraform show -json` for stronger deployment-context evidence.",
             "",
         ]
     )
@@ -297,6 +305,34 @@ def _extract_blocks(text: str, file: Path, regex: re.Pattern[str], kind: str) ->
             block = HclBlock(kind=kind, type=None, name=match.group(1), body=body, file=str(file), line=line)
         blocks.append(block)
     return blocks
+
+
+def _variable_defaults_from_text(text: str) -> dict[str, Any]:
+    variables: dict[str, Any] = {}
+    for match in VARIABLE_RE.finditer(text):
+        open_brace = text.find("{", match.end() - 1)
+        if open_brace == -1:
+            continue
+        close_brace = _find_matching_brace(text, open_brace)
+        if close_brace == -1:
+            continue
+        default = _attr_value(text[open_brace + 1 : close_brace], "default")
+        if default is not None:
+            variables[match.group(1)] = default
+    return variables
+
+
+def _tfvars_values(root: Path) -> dict[str, Any]:
+    root_dir = root.parent if root.is_file() else root
+    values: dict[str, Any] = {}
+    for path in sorted(root_dir.glob("*.tfvars")) + sorted(root_dir.glob("*.auto.tfvars")):
+        try:
+            values.update(_simple_assignments(path.read_text(encoding="utf-8")))
+        except UnicodeDecodeError:
+            values.update(_simple_assignments(path.read_text(encoding="utf-8", errors="replace")))
+        except OSError:
+            continue
+    return values
 
 
 def _find_matching_brace(text: str, open_brace: int) -> int:
@@ -325,35 +361,48 @@ def _find_matching_brace(text: str, open_brace: int) -> int:
     return -1
 
 
-def _values_from_body(body: str, resource_type: str) -> dict[str, Any]:
+def _values_from_body(body: str, resource_type: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
+    variables = variables or {}
     values: dict[str, Any] = {}
-    assignments = _simple_assignments(body)
+    assignments = {key: _resolve_value(value, variables) for key, value in _simple_assignments(body).items()}
     values.update(assignments)
-    image_values = _image_values(body)
+    image_values = _image_values(body, variables)
     if image_values:
         values["image"] = image_values
     if "container_definitions" in assignments:
         values["container_definitions"] = assignments["container_definitions"]
+    if resource_type.startswith("aws_security_group"):
+        cidrs = _cidr_values(body)
+        ipv6_cidrs = _ipv6_cidr_values(body)
+        source_security_groups = _security_group_ref_values(body)
+        if cidrs or ipv6_cidrs or source_security_groups:
+            values.setdefault("ingress", [{"cidr_blocks": cidrs, "ipv6_cidr_blocks": ipv6_cidrs, "security_groups": source_security_groups}])
+    if resource_type == "aws_ecs_service":
+        security_groups = _security_group_ref_values(body)
+        if security_groups:
+            values.setdefault("network_configuration", [{"security_groups": security_groups}])
+        target_groups = _target_group_ref_values(body)
+        if target_groups:
+            values.setdefault("load_balancer", [{"target_group_arn": target_groups}])
     if PUBLIC_CIDR_RE.search(body):
-        if resource_type.startswith("aws_security_group"):
-            values.setdefault("ingress", [{"cidr_blocks": _cidr_values(body), "ipv6_cidr_blocks": _ipv6_cidr_values(body)}])
         if resource_type == "google_compute_firewall":
             values.setdefault("source_ranges", _source_values(body) or _cidr_values(body))
         if resource_type.startswith("azurerm_network_security"):
             sources = _source_values(body) or _cidr_values(body) or ["Internet"]
             values.setdefault("source_address_prefix", sources[0] if len(sources) == 1 else sources)
-            values.setdefault("direction", _string_attr(body, "direction") or "Inbound")
-            values.setdefault("access", _string_attr(body, "access") or "Allow")
-    if "external_enabled" in body:
-        external = _bool_attr(body, "external_enabled")
-        if external is not None:
-            values.setdefault("ingress", [{"external_enabled": external}])
+            values.setdefault("direction", _resolve_value(_string_attr(body, "direction"), variables) or "Inbound")
+            values.setdefault("access", _resolve_value(_string_attr(body, "access"), variables) or "Allow")
+    for key in ("external_enabled", "external"):
+        if key in body:
+            external = _bool_attr(body, key)
+            if external is not None:
+                values.setdefault("ingress", [{key: external}])
     if resource_type.startswith("kubernetes_") and _string_attr(body, "type"):
-        values["type"] = _string_attr(body, "type")
-    for key in ("role", "member", "members", "role_definition_name", "role_definition_id", "policy_arn", "authorization_type", "function_name", "service", "name", "internal"):
+        values["type"] = _resolve_value(_string_attr(body, "type"), variables)
+    for key in ("role", "member", "members", "role_definition_name", "role_definition_id", "policy_arn", "authorization_type", "function_name", "service", "name", "family", "container_name", "internal"):
         parsed = _attr_value(body, key)
         if parsed is not None:
-            values.setdefault(key, parsed)
+            values.setdefault(key, _resolve_value(parsed, variables))
     return values
 
 
@@ -367,10 +416,30 @@ def _simple_assignments(body: str) -> dict[str, Any]:
     return values
 
 
+def _resolve_value(value: Any, variables: dict[str, Any]) -> Any:
+    if isinstance(value, list):
+        return [_resolve_value(item, variables) for item in value]
+    if not isinstance(value, str) or not variables:
+        return value
+    stripped = value.strip()
+    if stripped.startswith("var."):
+        return variables.get(stripped[4:], value)
+
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        replacement = variables.get(name)
+        return str(replacement) if replacement is not None else match.group(0)
+
+    return re.sub(r"\${\s*var\.([A-Za-z0-9_-]+)\s*}", replace, value)
+
+
 def _parse_hcl_value(raw: str) -> Any:
-    raw = raw.split("#", 1)[0].split("}", 1)[0].strip().rstrip(",")
+    raw = raw.split("#", 1)[0].strip().rstrip(",")
     if raw.startswith('"') and '"' in raw[1:]:
         return raw[1 : raw.find('"', 1)]
+    if raw.startswith("'") and "'" in raw[1:]:
+        return raw[1 : raw.find("'", 1)]
+    raw = raw.split("}", 1)[0].strip().rstrip(",")
     if raw.lower() == "true":
         return True
     if raw.lower() == "false":
@@ -399,10 +468,12 @@ def _bool_attr(body: str, key: str) -> bool | None:
     return value if isinstance(value, bool) else None
 
 
-def _image_values(body: str) -> list[str]:
+def _image_values(body: str, variables: dict[str, Any] | None = None) -> list[str]:
+    variables = variables or {}
     values: list[str] = []
     for match in IMAGE_KEY_RE.finditer(body):
         parsed = _parse_hcl_value(match.group(2))
+        parsed = _resolve_value(parsed, variables)
         if isinstance(parsed, list):
             values.extend(str(item) for item in parsed)
         else:
@@ -429,16 +500,42 @@ def _source_values(body: str) -> list[str]:
     return list(dict.fromkeys(values))
 
 
+def _security_group_ref_values(body: str) -> list[str]:
+    values: list[str] = []
+    for key in ("security_groups", "source_security_group_id", "source_security_group_ids"):
+        parsed = _attr_value(body, key)
+        if isinstance(parsed, list):
+            values.extend(str(item) for item in parsed)
+        elif parsed:
+            values.append(str(parsed))
+    for match in re.finditer(r"\b(?:security_groups|source_security_group_id|source_security_group_ids)\s*=\s*\[?([^\]\n]+)\]?", body):
+        values.extend(item.strip().strip('"').strip("'") for item in match.group(1).split(",") if item.strip())
+    return list(dict.fromkeys(values))
+
+
+def _target_group_ref_values(body: str) -> list[str]:
+    values: list[str] = []
+    for key in ("target_group_arn", "target_group_arns", "target_group", "target_groups"):
+        parsed = _attr_value(body, key)
+        if isinstance(parsed, list):
+            values.extend(str(item) for item in parsed)
+        elif parsed:
+            values.append(str(parsed))
+    for match in re.finditer(r"\b(?:target_group_arn|target_group_arns|target_group|target_groups)\s*=\s*\[?([^\]\n]+)\]?", body):
+        values.extend(item.strip().strip('"').strip("'") for item in match.group(1).split(",") if item.strip())
+    return list(dict.fromkeys(values))
+
+
 def _is_unresolved_expression(value: str) -> bool:
     stripped = value.strip()
     return stripped.startswith("var.") or stripped.startswith("local.") or stripped.startswith("each.") or "${" in stripped
 
 
-def _image_summary(resources: tuple[HclBlock, ...]) -> dict[str, list[dict[str, Any]]]:
+def _image_summary(resources: tuple[HclBlock, ...], variables: dict[str, Any] | None = None) -> dict[str, list[dict[str, Any]]]:
     literal: list[dict[str, Any]] = []
     unresolved: list[dict[str, Any]] = []
     for block in resources:
-        for image in _image_values(block.body):
+        for image in _image_values(block.body, variables):
             row = {"address": block.address, "image": image, "source": f"{block.file}:{block.line}"}
             if _is_unresolved_expression(image):
                 unresolved.append(row)
@@ -455,7 +552,7 @@ def _artifact_matches(resources: list[TerraformResource], artifacts: list[Artifa
     return []
 
 
-def _block_row(block: HclBlock) -> dict[str, Any]:
+def _block_row(block: HclBlock, variables: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         "kind": block.kind,
         "address": block.address,
@@ -464,16 +561,16 @@ def _block_row(block: HclBlock) -> dict[str, Any]:
         "provider": provider_for_type(block.type or "") if block.type else "unknown",
         "file": block.file,
         "line": block.line,
-        "image_references": _image_values(block.body),
+        "image_references": _image_values(block.body, variables),
     }
 
 
-def _module_row(block: HclBlock) -> dict[str, Any]:
-    row = _block_row(block)
-    row["source"] = _string_attr(block.body, "source")
-    row["version"] = _string_attr(block.body, "version")
+def _module_row(block: HclBlock, variables: dict[str, Any] | None = None) -> dict[str, Any]:
+    row = _block_row(block, variables)
+    row["source"] = _resolve_value(_string_attr(block.body, "source"), variables or {})
+    row["version"] = _resolve_value(_string_attr(block.body, "version"), variables or {})
     row["image_like_arguments"] = [
-        {"key": match.group(1), "value": str(_parse_hcl_value(match.group(2)))}
+        {"key": match.group(1), "value": str(_resolve_value(_parse_hcl_value(match.group(2)), variables or {}))}
         for match in IMAGE_KEY_RE.finditer(block.body)
     ]
     return row

@@ -1,8 +1,9 @@
 # Reachability Advisor
 
-Reachability Advisor is a **developer-first** dependency vulnerability prioritization tool for CI pipelines and IDEs. It reads CycloneDX SBOMs, local vulnerability intelligence, source roots, and optional Terraform deployment context, then produces actionable outputs for engineers:
+Reachability Advisor is a **developer-first** dependency vulnerability prioritization tool for CI pipelines and IDEs. It reads CycloneDX SBOMs, Grype or local vulnerability intelligence, source roots, and optional Terraform deployment context, then produces actionable outputs for engineers:
 
 - ranked findings JSON;
+- remediation-grouped fix queue;
 - SARIF 2.1.0 for code scanning;
 - IDE diagnostics JSON;
 - GitHub Actions annotations;
@@ -12,7 +13,8 @@ Reachability Advisor is a **developer-first** dependency vulnerability prioritiz
 - Terraform multi-cloud coverage reports;
 - SBOM/source/Terraform mapping reports.
 
-The project is an **OWASP project candidate package**, not an accepted OWASP project. The repository is prepared so it can be moved under OWASP governance after foundation approval.
+Package status: **stable v1.0.0**.
+License: **GNU GPL v3.0 or later**.
 
 ## Design principles
 
@@ -25,6 +27,15 @@ The project is an **OWASP project candidate package**, not an accepted OWASP pro
 7. **Small, reviewable scope.** The focused edition intentionally avoids live cloud posture management, ticketing integrations, dashboards, secrets scanning, malware scanning, and DSPM.
 
 ## Install
+
+From GitHub:
+
+```bash
+python -m pip install git+https://github.com/Devko/reachability-advisor.git@main
+reachability-advisor version
+```
+
+For local development:
 
 ```bash
 python -m venv .venv
@@ -63,6 +74,21 @@ Recommended practice:
 See `docs/sbom_generation.md`.
 
 ## Quick start
+
+In production, generate vulnerability matches from the same SBOM with Grype:
+
+```bash
+grype sbom:sboms/payments-api.cdx.json -o json > vulns/payments-api.grype.json
+```
+
+For source-only validation, Grype can also emit both sides of the handoff from the same directory scan:
+
+```bash
+grype dir:path/to/app -o cyclonedx-json --name app --file sboms/app.cdx.json
+grype dir:path/to/app -o json --name app --file vulns/app.grype.json
+```
+
+The sample command below uses the checked-in demo vulnerability file so it can run without downloading a scanner database.
 
 ```bash
 PYTHONPATH=src python -m reachability_advisor scan \
@@ -197,7 +223,7 @@ PYTHONPATH=src python -m reachability_advisor fixtures run \
   --output-dir outputs/fixtures
 ```
 
-The fixture packs assert `1.0` resource accounting, semantic classification, and artifact matching for their included resources. Unsupported resources in other plans remain visibility gaps, not safe assumptions.
+The fixture packs assert `1.0` resource accounting, semantic classification, and artifact matching for their included resources. Unsupported resources and opaque rendered-manifest wrappers remain visibility gaps, not safe assumptions.
 
 
 ## Real-world Terraform validation
@@ -211,15 +237,27 @@ PYTHONPATH=src python -m reachability_advisor hcl-audit \
   --markdown-out outputs/hcl-audit.md
 ```
 
-`hcl-audit` accounts for `.tf` resources and modules, classifies known AWS/Azure/GCP/Kubernetes resource types, extracts simple image/exposure/identity literals, and reports unresolved variables or modules as visibility gaps. For release gates, prefer `--terraform-plan`; for early PR/IDE or open-source repository validation, use `--terraform-source` or `hcl-audit`.
+`hcl-audit` accounts for `.tf` resources and modules, classifies known AWS/Azure/GCP/Kubernetes resource types, resolves simple literal variable defaults and `.tfvars` assignments, extracts simple image/exposure/identity literals, and reports unresolved variables, modules, or opaque Helm/kubectl manifest wrappers as visibility gaps. For release gates, prefer `--terraform-plan`; for early PR/IDE or open-source repository validation, use `--terraform-source` or `hcl-audit`.
 
 A curated external corpus is in `external_corpus/popular_terraform_projects.json`. In a network-enabled environment:
 
 ```bash
-./scripts/run_external_hcl_audit.sh
+python scripts/run_external_hcl_audit.py
 ```
 
-See `docs/real_world_validation.md`.
+The current corpus validates 9 public repositories with `1.0` semantic classification coverage and writes aggregate reports to `outputs/external-hcl-audit/`. See `docs/real_world_validation.md`.
+
+Existing real-world Grype handoff outputs can be replayed with:
+
+```bash
+python scripts/run_external_grype_validation.py
+```
+
+That summary currently covers Petclinic, the AWS ECS demo backend, and the Azure Chainlit app.
+
+## GitHub Actions pipeline
+
+See [docs/pipeline.md](docs/pipeline.md) for a complete GitHub Actions example using GitHub-hosted runners. The workflow generates CycloneDX SBOMs and Grype vulnerability JSON, runs Reachability Advisor, uploads SARIF, stores mapping and Terraform coverage artifacts, and publishes a Markdown summary to the job page.
 
 ## CI gate
 
@@ -258,12 +296,12 @@ The `ide/vscode` directory contains a minimal VS Code extension skeleton. It inv
 |---|---|
 | SBOM | CycloneDX JSON |
 | SBOM acquisition support | `sbom-plan` command with Syft, Trivy, Maven, npm, and Python suggestions |
-| Vulnerability input | Local JSON and small OSV-Scanner-style JSON |
-| Source reachability | Java/Maven, Node/npm, Python/PyPI, and basic Go import evidence |
+| Vulnerability input | Grype JSON, local JSON, and small OSV-Scanner-style JSON |
+| Source reachability | Java/Maven, Node/npm including Express, Python/PyPI including FastAPI/Chainlit/aiohttp, and basic Go import evidence |
 | Custom source rules | `--reachability-rules` JSON |
-| Terraform context | AWS, Azure, GCP, and Kubernetes provider plan hints with coverage reporting |
+| Terraform context | AWS, Azure, GCP, and Kubernetes provider plan/source hints with coverage reporting and linked workload exposure inference |
 | Context JSON | Optional explicit context keyed by artifact name |
-| Outputs | JSON, SARIF, diagnostics JSON, Markdown, annotations, Terraform coverage JSON, mapping JSON |
+| Outputs | JSON with remediation groups and raw findings, SARIF, diagnostics JSON, Markdown, annotations, Terraform coverage JSON, mapping JSON |
 
 ## Run quality gates
 
@@ -273,15 +311,19 @@ make test
 make coverage
 make sample
 make fixtures
+make release-check
+make package
 ```
 
 Current validation snapshot:
 
 ```text
-Ran 224 tests: OK
-Coverage: 94%
+Ran 269 tests: OK
+Coverage: 93%
 Coverage gate: 93% passed
 Fixture packs: 4 passed, 0 failed
+Release validation: passed
+Package build: sdist and wheel
 ```
 
 ## Repository structure
@@ -293,7 +335,6 @@ fixtures/terraform/        Community Terraform fixture packs and harness inputs
 tests/                     Unit and workflow tests
 ide/vscode/                Minimal VS Code extension skeleton
 docs/                      User, maintainer, algorithm, and governance docs
-docs/owasp/                OWASP application package drafts
 schemas/                   Output and policy schema drafts
 .github/workflows/         CI and sample pipeline workflows
 action.yml                 Composite GitHub Action wrapper

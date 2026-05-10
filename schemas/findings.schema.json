@@ -5,6 +5,27 @@
   "required": ["metadata", "findings"],
   "properties": {
     "metadata": {"type": "object"},
+    "remediations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["key", "artifact", "component", "vulnerability_count", "max_score", "tier"],
+        "properties": {
+          "key": {"type": "string"},
+          "artifact": {"type": "object"},
+          "component": {"type": "object"},
+          "vulnerability_count": {"type": "integer", "minimum": 1},
+          "max_score": {"type": "number", "minimum": 0, "maximum": 100},
+          "tier": {"enum": ["urgent", "high", "medium", "low", "informational"]},
+          "reachability": {"type": "string"},
+          "fix_available": {"type": "boolean"},
+          "suggested_version": {"type": ["string", "null"]},
+          "suggested_fix": {"type": ["string", "null"]},
+          "candidate_fixed_versions": {"type": "array", "items": {"type": "string"}},
+          "top_vulnerabilities": {"type": "array"}
+        }
+      }
+    },
     "findings": {
       "type": "array",
       "items": {

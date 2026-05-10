@@ -1,6 +1,6 @@
 # Logic Verification Checklist
 
-Use this checklist when reviewing a new repository, fixture pack, or OWASP project submission.
+Use this checklist when reviewing a new repository, fixture pack, or release candidate.
 
 ## SBOM acquisition
 

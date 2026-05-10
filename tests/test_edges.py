@@ -12,6 +12,7 @@ from reachability_advisor.models import Artifact, Component, Confidence, Context
 from reachability_advisor.compare import write_delta, write_delta_markdown
 from reachability_advisor.policy import ExceptionRule, load_runtime_policy, apply_exceptions
 from reachability_advisor.purl import parse_purl
+from reachability_advisor.remediation import build_remediation_groups
 from reachability_advisor.sbom import SbomError, load_sbom
 from reachability_advisor.scoring import ScorePolicy, fix_commands, score_finding
 from reachability_advisor.source import analyze_component_source
@@ -237,6 +238,51 @@ class SourceAndScoringEdgeTests(unittest.TestCase):
         finding = score_finding(sbom_like, component, vuln, source, context, ScorePolicy())
         self.assertGreater(finding.score, 0)
         self.assertIn("dependency scope", " ".join(finding.rationale))
+
+    def test_high_source_confidence_is_not_downgraded_to_low(self) -> None:
+        sbom_like = type("SbomLike", (), {"artifact": Artifact(name="app")})()
+        finding = score_finding(
+            sbom_like,
+            Component(name="express", version="4.17.1", purl="pkg:npm/express@4.17.1"),
+            VulnerabilityRecord(id="GHSA-X", package_name="express", cvss=6.1),
+            SourceEvidence(reachability=Reachability.ATTACKER_CONTROLLED, confidence=Confidence.HIGH),
+            ContextEvidence(),
+            ScorePolicy(),
+        )
+        self.assertEqual(finding.confidence, Confidence.MEDIUM)
+
+    def test_remediation_groups_pick_highest_fixed_version(self) -> None:
+        artifact = Artifact(name="audit-api")
+        component = Component(
+            name="jackson-databind",
+            version="2.9.9",
+            purl="pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.9.9",
+            group="com.fasterxml.jackson.core",
+        )
+        findings = [
+            Finding(
+                key=f"audit-api|jackson-databind|2.9.9|{vuln_id}",
+                artifact=artifact,
+                component=component,
+                vulnerability=VulnerabilityRecord(id=vuln_id, package_name="jackson-databind", fixed_versions=[fixed], cvss=8.0),
+                source=SourceEvidence(reachability=Reachability.ATTACKER_CONTROLLED, confidence=Confidence.MEDIUM),
+                context=ContextEvidence(exposure="public", privilege="sensitive", confidence=Confidence.MEDIUM),
+                score=score,
+                tier=Tier.URGENT,
+                confidence=Confidence.MEDIUM,
+                rationale=[],
+                fix_commands=[f"Set Maven dependency com.fasterxml.jackson.core:jackson-databind to version {fixed}"],
+            )
+            for vuln_id, fixed, score in (
+                ("GHSA-A", "2.9.10.8", 90),
+                ("GHSA-B", "2.12.7.1", 95),
+            )
+        ]
+        groups = build_remediation_groups(findings)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["vulnerability_count"], 2)
+        self.assertEqual(groups[0]["suggested_version"], "2.12.7.1")
+        self.assertEqual(groups[0]["suggested_fix"], "Set Maven dependency com.fasterxml.jackson.core:jackson-databind to version 2.12.7.1")
 
 
 class ValidatorEdgeTests(unittest.TestCase):

@@ -9,6 +9,8 @@ A release should meet these gates:
 - `make coverage` passes at or above the configured threshold.
 - `make sample` produces all expected outputs.
 - `make fixtures` validates and runs all Terraform fixture packs.
+- `make release-check` validates release metadata and generated outputs against repository schemas.
+- `make package` builds the source distribution and wheel.
 - Changelog entry is added.
 - Any new output format has a schema update or documented rationale.
 - Any new supported Terraform resource type is backed by at least one unit test or fixture-pack assertion.
@@ -29,7 +31,7 @@ A release should meet these gates:
 
 ## Project governance
 
-The repository uses Apache-2.0 for code and DCO sign-off for contributions. The OWASP application package proposes a 2-5 leader model and annual release cadence to match OWASP project policy.
+The repository uses GNU GPL v3.0 or later for code and DCO sign-off for contributions. Maintainers should keep releases small, documented, and reproducible through the local quality gates.
 
 
 ## Adding a Terraform fixture pack

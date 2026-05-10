@@ -2,12 +2,14 @@
 
 ## Current gates
 
-- Unit and workflow tests: 224.
+- Unit and workflow tests: 269.
 - Coverage threshold: 93%.
-- Current measured coverage: 94% line/branch-aware coverage report.
+- Current measured coverage: 93% line/branch-aware coverage report.
 - Compile check: `python -m compileall`.
 - Sample workflow: `make sample`.
 - Terraform fixture workflow: `make fixtures`.
+- Release validation: `make release-check`.
+- Package build: `make package`.
 - CI matrix: Python 3.10, 3.11, 3.12.
 
 ## Engineering choices
@@ -33,8 +35,9 @@ The v4 logic layer has tests for:
 - Custom reachability rule loading.
 - Same-file gating for `attacker_controlled` evidence.
 - Weaker rationale when input/entrypoint evidence appears in a different file.
-- Java, Node, Python, and basic Go source evidence.
+- Java/Spring, Node/Express/NestJS, Python/FastAPI/Chainlit/aiohttp, and basic Go source evidence.
 - CLI generation of mapping, coverage, SARIF, diagnostics, Markdown, and annotations.
+- Generated output validation against repository JSON schemas through `scripts/validate_release.py`.
 
 ## Terraform quality bar
 
@@ -45,6 +48,7 @@ The Terraform layer has tests for:
 - Plan parsing from `planned_values` and `resource_changes`.
 - Container image extraction across ECS/Lambda/App Runner, Azure Container Apps/App Service, GCP Cloud Run, and Kubernetes resources.
 - Public exposure detection for AWS security groups/load balancers/API resources, Azure NSGs/public resources, GCP firewalls/public invoker IAM, and Kubernetes services/ingresses.
+- Linked public exposure inference for AWS ECS security groups/target groups, AWS Lambda URLs, GCP Cloud Run/Cloud Functions public invokers, Azure Container Apps ingress, and Kubernetes Service/Ingress names or selectors.
 - IAM blast-radius classification across AWS IAM, Azure role assignments and Key Vault policies, GCP IAM, and Kubernetes role bindings.
 - CLI generation of `--terraform-coverage-out`.
 
