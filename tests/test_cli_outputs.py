@@ -20,11 +20,25 @@ class CliTests(unittest.TestCase):
         self.assertEqual(main(["version"]), 0)
 
     def test_validate_command_success(self) -> None:
-        code = main(["validate", "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"), "--vulns", str(ROOT / "samples/vulnerabilities.json")])
+        code = main([
+            "validate",
+            "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"),
+            "--vulns", str(ROOT / "samples/vulnerabilities.json"),
+            "--policy", str(ROOT / "configs/policy.example.json"),
+        ])
         self.assertEqual(code, 0)
 
     def test_validate_command_failure(self) -> None:
         code = main(["validate", "--sbom", "missing.json"])
+        self.assertEqual(code, 2)
+
+    def test_validate_command_checks_policy_and_reachability_rule_paths(self) -> None:
+        code = main([
+            "validate",
+            "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"),
+            "--policy", "missing-policy.json",
+            "--reachability-rules", "missing-rules.json",
+        ])
         self.assertEqual(code, 2)
 
     def test_scan_writes_all_developer_outputs(self) -> None:
@@ -138,6 +152,7 @@ class CliTests(unittest.TestCase):
             code = main(["init-policy", "--out", str(path)])
             self.assertEqual(code, 0)
             data = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(data["schema_version"], "1.0")
             self.assertEqual(data["fail_on_tier"], "high")
 
     def test_explain_command(self) -> None:

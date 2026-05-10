@@ -13,7 +13,16 @@ class ValidationIssue:
     message: str
 
 
-def validate_paths(sboms: list[str], vulns: str | None, context: str | None = None, terraform_plan: str | None = None, source_roots: list[str] | None = None, terraform_source: str | None = None) -> list[ValidationIssue]:
+def validate_paths(
+    sboms: list[str],
+    vulns: str | None,
+    context: str | None = None,
+    terraform_plan: str | None = None,
+    source_roots: list[str] | None = None,
+    terraform_source: str | None = None,
+    policy: str | None = None,
+    reachability_rules: str | None = None,
+) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     for path in sboms:
         _validate_file(path, "sbom", issues)
@@ -23,6 +32,10 @@ def validate_paths(sboms: list[str], vulns: str | None, context: str | None = No
         _validate_file(context, "context", issues)
     if terraform_plan:
         _validate_file(terraform_plan, "terraform-plan", issues)
+    if policy:
+        _validate_file(policy, "policy", issues)
+    if reachability_rules:
+        _validate_file(reachability_rules, "reachability-rules", issues)
     if terraform_source:
         source_path = Path(terraform_source)
         if not source_path.exists():

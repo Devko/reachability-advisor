@@ -14,6 +14,36 @@
 - VS Code extension skeleton.
 - Governance, contribution, and security docs.
 
+## v1.1 roadmap: CI adoption and policy hardening
+
+Goal: make the published GitHub repository easy to consume from production CI while keeping the scanner local-first and auditable.
+
+Priority 1: GitHub Actions consumption
+
+- Harden the composite action so external repositories can use the published action without checking out this repository as their application source.
+- Support multiple SBOMs, source-root mappings, artifact aliases, runtime policy, custom reachability rules, Terraform plan/source context, SARIF, diagnostics, mapping, and Terraform coverage outputs through action inputs.
+- Expose stable action output paths so downstream workflow steps can upload SARIF and artifacts without duplicating path conventions.
+- Add an action usage example to the pipeline documentation.
+
+Priority 2: Policy packs
+
+- Publish a schema for runtime policy files.
+- Validate the example policy during release checks.
+- Expand policy examples for exceptions, fail thresholds, and expiration hygiene.
+- Later: add named policy pack examples for strict release gates, PR-only advisory mode, and legacy backlog migration.
+
+Priority 3: Evidence coverage
+
+- Improve package-manager manifest coverage for Gradle, pnpm, yarn, Poetry, and Go modules.
+- Add more precise source diagnostics for package manager files and vulnerable call sites.
+- Add fixture packs for AWS Lambda, Azure App Service, GCP GKE, and Helm-heavy Kubernetes shapes.
+
+Priority 4: Baseline and developer workflow
+
+- Add a stable baseline artifact format for default-branch findings.
+- Provide a first-class workflow for comparing PR findings against a downloaded baseline artifact.
+- Keep the CLI output deterministic so teams can diff findings in code review.
+
 ## Completed milestone: Multi-cloud Terraform developer context
 
 - AWS, Azure, GCP, and Kubernetes Terraform plan support.
@@ -59,10 +89,9 @@
 
 ## Post-v1 candidates
 
-- Better package-manager manifest support for Gradle, pnpm, yarn, Poetry, and Go modules.
-- More precise diagnostics-to-source mapping.
-- Additional community Terraform fixtures for common AWS Lambda, Azure App Service, GCP GKE, and Kubernetes Helm module shapes.
-- Example policy packs.
+- Optional npm package wrapper for projects that want Node-native install ergonomics.
+- Optional pre-commit hook example for source-only advisory runs.
+- Small public corpus for action-level workflow validation.
 
 ## Longer-term candidates
 

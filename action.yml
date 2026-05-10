@@ -1,40 +1,150 @@
 name: Reachability Advisor
 summary: Developer-first reachability-aware dependency vulnerability prioritization
-description: Runs Reachability Advisor and emits JSON, SARIF, Markdown, GitHub annotations, and optional Terraform coverage.
+description: Runs Reachability Advisor and emits JSON, SARIF, diagnostics, Markdown, GitHub annotations, mapping, and optional Terraform coverage.
 inputs:
   sbom:
-    description: CycloneDX SBOM path. For multiple SBOMs, call the CLI directly.
+    description: One or more CycloneDX SBOM paths. Use newline-separated paths for multiple artifacts.
     required: true
   vulns:
-    description: Vulnerability intelligence JSON path.
+    description: Vulnerability intelligence JSON path, usually Grype JSON generated from the same SBOM set.
     required: true
   source-root:
-    description: Optional artifact=path source-root mapping.
+    description: Optional newline-separated artifact=path source-root mappings.
     required: false
+    default: ""
+  artifact-alias:
+    description: Optional newline-separated artifact=reference aliases for SBOMs without strong artifact metadata.
+    required: false
+    default: ""
   context:
     description: Optional context JSON path.
     required: false
+    default: ""
   terraform-plan:
     description: Optional terraform show -json plan path.
     required: false
+    default: ""
+  terraform-source:
+    description: Optional Terraform source directory or .tf file for conservative static HCL context when no plan is available.
+    required: false
+    default: ""
+  reachability-rules:
+    description: Optional custom reachability rules JSON path.
+    required: false
+    default: ""
+  policy:
+    description: Optional runtime policy JSON path.
+    required: false
+    default: ""
+  output-dir:
+    description: Directory for generated Reachability Advisor outputs.
+    required: false
+    default: outputs/reachability-advisor
   fail-on-tier:
     description: Optional tier threshold: urgent, high, medium, low, informational.
     required: false
     default: ""
+outputs:
+  findings:
+    description: Findings JSON output path.
+    value: ${{ steps.scan.outputs.findings }}
+  sarif:
+    description: SARIF output path.
+    value: ${{ steps.scan.outputs.sarif }}
+  diagnostics:
+    description: IDE diagnostics JSON output path.
+    value: ${{ steps.scan.outputs.diagnostics }}
+  markdown:
+    description: Markdown summary output path.
+    value: ${{ steps.scan.outputs.markdown }}
+  annotations:
+    description: GitHub Actions annotations text output path.
+    value: ${{ steps.scan.outputs.annotations }}
+  mapping:
+    description: SBOM/source/Terraform mapping JSON output path.
+    value: ${{ steps.scan.outputs.mapping }}
+  terraform_coverage:
+    description: Terraform coverage JSON output path, written when Terraform context is supplied.
+    value: ${{ steps.scan.outputs.terraform_coverage }}
 runs:
   using: composite
   steps:
-    - shell: bash
-      run: python -m pip install -e .
-    - shell: bash
+    - name: Install Reachability Advisor
+      shell: bash
       run: |
         set -euo pipefail
-        mkdir -p outputs
-        args=(scan --sbom "${{ inputs.sbom }}" --vulns "${{ inputs.vulns }}" --out outputs/reachability-findings.json --sarif-out outputs/reachability.sarif --markdown-out outputs/reachability-summary.md --annotations-out outputs/reachability-annotations.txt --no-table)
-        if [[ -n "${{ inputs.source-root }}" ]]; then args+=(--source-root "${{ inputs.source-root }}"); fi
+        python -m pip install --upgrade pip
+        python -m pip install "$GITHUB_ACTION_PATH"
+
+    - id: scan
+      name: Run Reachability Advisor
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        trim() {
+          local value="$1"
+          value="${value#"${value%%[![:space:]]*}"}"
+          value="${value%"${value##*[![:space:]]}"}"
+          printf '%s' "$value"
+        }
+
+        add_repeated_args() {
+          local flag="$1"
+          local raw="$2"
+          local item
+          while IFS= read -r item; do
+            item="$(trim "$item")"
+            if [[ -n "$item" ]]; then
+              args+=("$flag" "$item")
+            fi
+          done <<< "$raw"
+        }
+
+        output_dir="${{ inputs.output-dir }}"
+        mkdir -p "$output_dir"
+
+        findings="$output_dir/reachability-findings.json"
+        sarif="$output_dir/reachability.sarif"
+        diagnostics="$output_dir/reachability-diagnostics.json"
+        markdown="$output_dir/reachability-summary.md"
+        annotations="$output_dir/reachability-annotations.txt"
+        mapping="$output_dir/reachability-mapping.json"
+        terraform_coverage="$output_dir/terraform-coverage.json"
+
+        args=(scan --vulns "${{ inputs.vulns }}" --out "$findings" --sarif-out "$sarif" --diagnostics-out "$diagnostics" --markdown-out "$markdown" --annotations-out "$annotations" --mapping-out "$mapping" --no-table)
+
+        add_repeated_args "--sbom" "${{ inputs.sbom }}"
+        add_repeated_args "--source-root" "${{ inputs.source-root }}"
+        add_repeated_args "--artifact-alias" "${{ inputs.artifact-alias }}"
+
         if [[ -n "${{ inputs.context }}" ]]; then args+=(--context "${{ inputs.context }}"); fi
-        if [[ -n "${{ inputs.terraform-plan }}" ]]; then args+=(--terraform-plan "${{ inputs.terraform-plan }}" --terraform-coverage-out outputs/terraform-coverage.json); fi
+        if [[ -n "${{ inputs.reachability-rules }}" ]]; then args+=(--reachability-rules "${{ inputs.reachability-rules }}"); fi
+        if [[ -n "${{ inputs.policy }}" ]]; then args+=(--policy "${{ inputs.policy }}"); fi
+        if [[ -n "${{ inputs.terraform-plan }}" ]]; then args+=(--terraform-plan "${{ inputs.terraform-plan }}" --terraform-coverage-out "$terraform_coverage"); fi
+        if [[ -n "${{ inputs.terraform-source }}" ]]; then args+=(--terraform-source "${{ inputs.terraform-source }}" --terraform-coverage-out "$terraform_coverage"); fi
         if [[ -n "${{ inputs.fail-on-tier }}" ]]; then args+=(--fail-on-tier "${{ inputs.fail-on-tier }}"); fi
+
+        set +e
         reachability-advisor "${args[@]}"
-        cat outputs/reachability-annotations.txt || true
-        cat outputs/reachability-summary.md >> "$GITHUB_STEP_SUMMARY" || true
+        scan_code=$?
+        set -e
+
+        test ! -f "$annotations" || cat "$annotations"
+        if [[ -n "${GITHUB_STEP_SUMMARY:-}" && -f "$markdown" ]]; then
+          cat "$markdown" >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+        if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+          {
+            echo "findings=$findings"
+            echo "sarif=$sarif"
+            echo "diagnostics=$diagnostics"
+            echo "markdown=$markdown"
+            echo "annotations=$annotations"
+            echo "mapping=$mapping"
+            echo "terraform_coverage=$terraform_coverage"
+          } >> "$GITHUB_OUTPUT"
+        fi
+
+        exit "$scan_code"

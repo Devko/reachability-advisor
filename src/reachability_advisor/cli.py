@@ -74,6 +74,8 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--context")
     validate.add_argument("--terraform-plan")
     validate.add_argument("--terraform-source")
+    validate.add_argument("--policy")
+    validate.add_argument("--reachability-rules")
     validate.add_argument("--json-out")
 
     explain = sub.add_parser("explain", help="Explain one finding from findings JSON.")
@@ -210,7 +212,16 @@ def _apply_artifact_aliases(sboms: list[Any], aliases: list[str]) -> None:
 
 def run_scan(args: argparse.Namespace) -> int:
     if not args.skip_validation:
-        issues = validate_paths(args.sbom, args.vulns, args.context, args.terraform_plan, args.source_root, args.terraform_source)
+        issues = validate_paths(
+            args.sbom,
+            args.vulns,
+            args.context,
+            args.terraform_plan,
+            args.source_root,
+            args.terraform_source,
+            args.policy,
+            args.reachability_rules,
+        )
         for issue in issues:
             print(f"{issue.severity}: {issue.target}: {issue.message}", file=sys.stderr)
         if has_errors(issues):
@@ -277,7 +288,16 @@ def _findings_fail(findings: list[Any], tier: Tier) -> bool:
 
 
 def run_validate(args: argparse.Namespace) -> int:
-    issues = validate_paths(args.sbom, args.vulns, args.context, args.terraform_plan, args.source_root, args.terraform_source)
+    issues = validate_paths(
+        args.sbom,
+        args.vulns,
+        args.context,
+        args.terraform_plan,
+        args.source_root,
+        args.terraform_source,
+        args.policy,
+        args.reachability_rules,
+    )
     report = issues_report(issues)
     if args.json_out:
         out = Path(args.json_out)
@@ -355,6 +375,8 @@ def run_hcl_audit(args: argparse.Namespace) -> int:
 
 def run_init_policy(args: argparse.Namespace) -> int:
     policy = {
+        "$schema": "schemas/runtime-policy.schema.json",
+        "schema_version": "1.0",
         "fail_on_tier": "high",
         "exceptions": [
             {

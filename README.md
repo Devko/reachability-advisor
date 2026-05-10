@@ -259,6 +259,17 @@ That summary currently covers Petclinic, the AWS ECS demo backend, and the Azure
 
 See [docs/pipeline.md](docs/pipeline.md) for a complete GitHub Actions example using GitHub-hosted runners. The workflow generates CycloneDX SBOMs and Grype vulnerability JSON, runs Reachability Advisor, uploads SARIF, stores mapping and Terraform coverage artifacts, and publishes a Markdown summary to the job page.
 
+For repositories that want to consume the published action directly:
+
+```yaml
+- uses: Devko/reachability-advisor@main
+  with:
+    sbom: sboms/app.cdx.json
+    vulns: vulns/app.grype.json
+    source-root: app=.
+    fail-on-tier: high
+```
+
 ## CI gate
 
 ```bash

@@ -154,6 +154,24 @@ def check_release_metadata() -> None:
     _check_no_former_project_positioning()
 
 
+def check_action_metadata() -> None:
+    action = (ROOT / "action.yml").read_text(encoding="utf-8")
+    required_fragments = [
+        "$GITHUB_ACTION_PATH",
+        "--mapping-out",
+        "--diagnostics-out",
+        "terraform-source",
+        "reachability-rules",
+        "artifact-alias",
+        "output-dir",
+        "scan_code=$?",
+        "outputs:",
+    ]
+    missing = [fragment for fragment in required_fragments if fragment not in action]
+    if missing:
+        raise ReleaseCheckError("action.yml is missing required fragments: " + ", ".join(missing))
+
+
 def _check_no_former_project_positioning() -> None:
     checked_roots = [
         ROOT / "README.md",
@@ -196,9 +214,12 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
 
     check_release_metadata()
     checks.append({"name": "release metadata", "status": "passed"})
+    check_action_metadata()
+    checks.append({"name": "composite action metadata", "status": "passed"})
 
     check("sample vulnerability intelligence", ROOT / "samples" / "vulnerabilities.json", "vulnerability-intelligence.schema.json")
     check("sample context", ROOT / "samples" / "context.json", "context.schema.json")
+    check("example runtime policy", ROOT / "configs" / "policy.example.json", "runtime-policy.schema.json")
     for fixture in sorted((ROOT / "fixtures" / "terraform" / "packs").glob("*/fixture.json")):
         check(f"fixture pack {fixture.parent.name}", fixture, "fixture-pack.schema.json")
 

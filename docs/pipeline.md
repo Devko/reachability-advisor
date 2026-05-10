@@ -125,6 +125,44 @@ For repositories that vendor Reachability Advisor as a development dependency, r
 python -m pip install -e .
 ```
 
+## Composite Action Variant
+
+When you want the scanner installed directly from this repository, use the composite action. It accepts newline-separated SBOMs, source roots, and artifact aliases, then exposes stable output paths for SARIF/artifact upload steps.
+
+```yaml
+      - name: Run Reachability Advisor
+        id: reachability
+        uses: Devko/reachability-advisor@main
+        with:
+          sbom: |
+            sboms/app.cdx.json
+          vulns: vulns/app.grype.json
+          source-root: |
+            app=.
+          terraform-source: infra
+          policy: configs/policy.example.json
+          fail-on-tier: high
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ steps.reachability.outputs.sarif }}
+
+      - name: Upload reachability artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reachability-advisor
+          path: |
+            ${{ steps.reachability.outputs.findings }}
+            ${{ steps.reachability.outputs.mapping }}
+            ${{ steps.reachability.outputs.terraform_coverage }}
+            ${{ steps.reachability.outputs.markdown }}
+```
+
+Pin this to the next release tag after the action hardening work is released.
+
 ## Release Gate Variant
 
 For release branches and deployment gates, scan the built artifact instead of the source checkout. The source checkout is still passed to Reachability Advisor so source reachability evidence can be collected.

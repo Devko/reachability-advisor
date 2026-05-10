@@ -103,6 +103,36 @@ Use `--reachability-rules` to add package/vulnerability-specific source heuristi
 
 Schema draft: `schemas/reachability-rules.schema.json`.
 
+## Runtime policy JSON
+
+Runtime policy files control CI fail thresholds and temporary exceptions. The scanner never treats an exception as proof that a vulnerability is not affected; it marks matching findings as `policy_status: excepted` and preserves the rationale in the finding.
+
+```json
+{
+  "$schema": "../schemas/runtime-policy.schema.json",
+  "schema_version": "1.0",
+  "fail_on_tier": "high",
+  "exceptions": [
+    {
+      "vulnerability": "CVE-EXAMPLE-0001",
+      "artifact": "example-service",
+      "component": "example-lib",
+      "expires": "2026-12-31",
+      "reason": "Accepted by service owner while upgrade is validated."
+    }
+  ]
+}
+```
+
+Recommended practice:
+
+- set `fail_on_tier` to `high` for release gates and `urgent` while onboarding an existing backlog;
+- require a human-readable `reason`;
+- set an `expires` date for every exception;
+- scope exceptions as narrowly as possible with vulnerability, artifact, and component.
+
+Schema draft: `schemas/runtime-policy.schema.json`.
+
 ## Context JSON
 
 ```json
