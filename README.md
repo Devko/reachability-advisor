@@ -8,6 +8,7 @@ Reachability Advisor is a **developer-first** dependency vulnerability prioritiz
 - IDE diagnostics JSON;
 - GitHub Actions annotations;
 - PR summary Markdown;
+- self-contained interactive HTML graph report;
 - PR delta comparison;
 - single-finding explanations;
 - Terraform multi-cloud coverage reports;
@@ -89,6 +90,7 @@ grype dir:path/to/app -o json --name app --file vulns/app.grype.json
 ```
 
 The sample command below uses the checked-in demo vulnerability file so it can run without downloading a scanner database.
+It includes public, internal/lateral, and private/no-ingress workloads so the HTML graph shows different entry paths.
 
 ```bash
 PYTHONPATH=src python -m reachability_advisor scan \
@@ -96,6 +98,9 @@ PYTHONPATH=src python -m reachability_advisor scan \
   --sbom samples/sboms/notifier.cdx.json \
   --sbom samples/sboms/orders-api.cdx.json \
   --sbom samples/sboms/audit-api.cdx.json \
+  --sbom samples/sboms/inventory-api.cdx.json \
+  --sbom samples/sboms/batch-worker.cdx.json \
+  --sbom samples/sboms/reports-api.cdx.json \
   --vulns samples/vulnerabilities.json \
   --terraform-plan samples/tfplan-multicloud.json \
   --terraform-coverage-out outputs/terraform-coverage.json \
@@ -104,10 +109,14 @@ PYTHONPATH=src python -m reachability_advisor scan \
   --source-root notifier=samples/source/notifier \
   --source-root orders-api=samples/source/orders-api \
   --source-root audit-api=samples/source/audit-api \
+  --source-root inventory-api=samples/source/inventory-api \
+  --source-root batch-worker=samples/source/batch-worker \
+  --source-root reports-api=samples/source/reports-api \
   --out outputs/findings.json \
   --sarif-out outputs/findings.sarif \
   --diagnostics-out outputs/diagnostics.json \
   --markdown-out outputs/pr-summary.md \
+  --html-out outputs/reachability-graph.html \
   --annotations-out outputs/annotations.txt
 ```
 
@@ -122,7 +131,29 @@ orders-api / requests: urgent
 
 audit-api / jackson-databind: urgent
   GCP Cloud Run + allUsers invoker + secret accessor + attacker-controlled source path
+
+inventory-api / requests: high
+  AWS ECS + lateral path through the public API security group + attacker-controlled source path
+
+batch-worker / lodash: medium
+  AWS ECS private security group + no detected ingress path + function-level source use
+
+reports-api / requests: high
+  AWS ECS internal-only security group + read-only IAM + function-level source use
 ```
+
+The checked-in sample intentionally covers the main network and IAM combinations:
+
+| Case | Sample asset |
+|---|---|
+| Public internet entry | `payments-api`, `orders-api`, `audit-api`, `notifier` |
+| Lateral movement path | `inventory-api` |
+| Fully internal/private-network ingress | `reports-api` |
+| Private/no detected ingress | `batch-worker` |
+| Admin role | `orders-api` |
+| No linked role | `batch-worker`, `notifier` |
+| Critical data-access role | `payments-api`, `audit-api` |
+| Read-only/limited role | `reports-api` |
 
 ## How mapping works
 
@@ -257,7 +288,7 @@ That summary currently covers Petclinic, the AWS ECS demo backend, and the Azure
 
 ## GitHub Actions pipeline
 
-See [docs/pipeline.md](docs/pipeline.md) for a complete GitHub Actions example using GitHub-hosted runners. The workflow generates CycloneDX SBOMs and Grype vulnerability JSON, runs Reachability Advisor, uploads SARIF, stores mapping and Terraform coverage artifacts, and publishes a Markdown summary to the job page.
+See [docs/pipeline.md](docs/pipeline.md) for a complete GitHub Actions example using GitHub-hosted runners. The workflow generates CycloneDX SBOMs and Grype vulnerability JSON, runs Reachability Advisor, uploads SARIF, stores mapping/Terraform/HTML artifacts, and publishes a Markdown summary to the job page.
 
 For repositories that want to consume the published action directly:
 
@@ -312,7 +343,7 @@ The `ide/vscode` directory contains a minimal VS Code extension skeleton. It inv
 | Custom source rules | `--reachability-rules` JSON |
 | Terraform context | AWS, Azure, GCP, and Kubernetes provider plan/source hints with coverage reporting and linked workload exposure inference |
 | Context JSON | Optional explicit context keyed by artifact name |
-| Outputs | JSON with remediation groups and raw findings, SARIF, diagnostics JSON, Markdown, annotations, Terraform coverage JSON, mapping JSON |
+| Outputs | JSON with remediation groups and raw findings, SARIF, diagnostics JSON, Markdown, interactive HTML, annotations, Terraform coverage JSON, mapping JSON |
 
 ## Run quality gates
 
@@ -329,8 +360,8 @@ make package
 Current validation snapshot:
 
 ```text
-Ran 318 tests: OK
-Coverage: 93%
+Ran 327 tests: OK
+Coverage: 94%
 Coverage gate: 93% passed
 Fixture packs: 4 passed, 0 failed
 Release validation: passed

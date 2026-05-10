@@ -22,6 +22,7 @@ The command writes:
 - `outputs/findings.sarif` - CI/code-scanning output;
 - `outputs/diagnostics.json` - editor diagnostics output;
 - `outputs/pr-summary.md` - developer summary for pull requests;
+- `outputs/reachability-graph.html` - searchable graph of assets, vulnerabilities, network/IAM context, and findings;
 - `outputs/annotations.txt` - GitHub Actions workflow-command annotations;
 - `outputs/terraform-coverage.json` - AWS/Azure/GCP/Kubernetes Terraform accounting and semantic coverage report;
 - `outputs/mapping.json` - SBOM/source/Terraform mapping verification report.
@@ -77,6 +78,7 @@ reachability-advisor scan \
   --mapping-out outputs/mapping.json \
   --source-root payments-api=samples/source/payments-api \
   --sarif-out outputs/findings.sarif \
+  --html-out outputs/reachability-graph.html \
   --fail-on-tier high \
   --no-table
 ```

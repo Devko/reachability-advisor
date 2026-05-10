@@ -18,7 +18,7 @@
 - The scanner does not execute source code.
 - The scanner does not make network calls.
 - Source scanning limits file extensions and ignores files larger than 1 MB.
-- Output is data-only JSON/SARIF/Markdown/annotations.
+- Outputs are local JSON/SARIF/Markdown/HTML/annotation artifacts.
 - Exceptions are explicit and visible.
 
 ## Main risks
@@ -28,5 +28,5 @@
 | Malformed input causes crash | Input validation and parser tests. |
 | Findings are over-demoted | Conservative scoring and no auto-suppression. |
 | CI command injection through annotations | Annotation output escapes `%`, CR, and LF. |
-| Sensitive source leaves environment | No network calls; all outputs are local files. |
+| Sensitive source leaves environment | No network calls; all outputs are local files. The HTML graph is self-contained and does not load remote assets. |
 | Misleading context | Confidence and evidence fields are explicit. |

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -56,11 +57,12 @@ class CliTests(unittest.TestCase):
                 "--sarif-out", str(out / "findings.sarif"),
                 "--diagnostics-out", str(out / "diagnostics.json"),
                 "--markdown-out", str(out / "summary.md"),
+                "--html-out", str(out / "graph.html"),
                 "--annotations-out", str(out / "annotations.txt"),
                 "--no-table",
             ])
             self.assertEqual(code, 0)
-            for filename in ("findings.json", "findings.sarif", "diagnostics.json", "summary.md", "annotations.txt"):
+            for filename in ("findings.json", "findings.sarif", "diagnostics.json", "summary.md", "graph.html", "annotations.txt"):
                 self.assertTrue((out / filename).exists(), filename)
             findings = json.loads((out / "findings.json").read_text(encoding="utf-8"))
             self.assertGreaterEqual(len(findings["findings"]), 4)
@@ -69,6 +71,24 @@ class CliTests(unittest.TestCase):
             diagnostics = json.loads((out / "diagnostics.json").read_text(encoding="utf-8"))
             self.assertTrue(diagnostics["diagnostics"])
             self.assertIn("Reachability Advisor PR Summary", (out / "summary.md").read_text(encoding="utf-8"))
+            html = (out / "graph.html").read_text(encoding="utf-8")
+            self.assertIn("Reachability Advisor Visual Report", html)
+            self.assertIn('id="graph"', html)
+            self.assertIn("report-data", html)
+            self.assertIn("asset-card", html)
+            self.assertIn("vuln-card", html)
+            self.assertIn("entry-card", html)
+            self.assertIn("path-card", html)
+            self.assertIn("Ingress path", html)
+            self.assertIn("Network", html)
+            self.assertIn("IAM:", html)
+            embedded = re.search(r'<script id="report-data" type="application/json">(.*?)</script>', html, flags=re.DOTALL)
+            self.assertIsNotNone(embedded)
+            report_data = json.loads(embedded.group(1)) if embedded else {}
+            self.assertGreaterEqual(len(report_data["assets"]), 2)
+            self.assertGreaterEqual(len(report_data["networkPaths"]), 2)
+            self.assertGreaterEqual(len(report_data["vulnerabilities"]), 2)
+            self.assertEqual(len(report_data["links"]), len(report_data["vulnerabilities"]))
             self.assertIn("::error", (out / "annotations.txt").read_text(encoding="utf-8"))
 
     def test_scan_accepts_grype_json(self) -> None:

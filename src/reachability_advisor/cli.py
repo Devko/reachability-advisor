@@ -32,6 +32,7 @@ from .scoring import generate_findings
 from .sbom_plan import recommend_sbom_commands, render_sbom_plan_markdown, write_sbom_plan_json
 from .source import load_reachability_rules, parse_source_roots
 from .validators import has_errors, issues_report, validate_paths
+from .visual import write_html_report
 from .vulnerability import VulnerabilityError, load_vulnerabilities
 
 
@@ -61,6 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--sarif-out", help="SARIF 2.1.0 output path.")
     scan.add_argument("--diagnostics-out", help="IDE diagnostics JSON output path.")
     scan.add_argument("--markdown-out", help="Developer PR summary Markdown output path.")
+    scan.add_argument("--html-out", help="Self-contained interactive HTML graph report output path.")
     scan.add_argument("--annotations-out", help="GitHub Actions workflow-command annotations output path.")
     scan.add_argument("--limit", type=int, default=20, help="Maximum rows printed to stdout.")
     scan.add_argument("--no-table", action="store_true", help="Do not print stdout table.")
@@ -262,6 +264,8 @@ def run_scan(args: argparse.Namespace) -> int:
         write_diagnostics(findings, args.diagnostics_out)
     if args.markdown_out:
         write_markdown_report(findings, args.markdown_out)
+    if args.html_out:
+        write_html_report(findings, args.html_out, metadata=metadata)
     if args.annotations_out:
         write_annotations(findings, args.annotations_out)
     if args.terraform_coverage_out:

@@ -160,6 +160,7 @@ def check_action_metadata() -> None:
         "$GITHUB_ACTION_PATH",
         "--mapping-out",
         "--diagnostics-out",
+        "--html-out",
         "terraform-source",
         "reachability-rules",
         "artifact-alias",
@@ -246,6 +247,7 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
     check("generated HCL audit", hcl_audit, "hcl-audit-report.schema.json")
 
     findings = out_dir / "findings.json"
+    html = out_dir / "graph.html"
     terraform_coverage = out_dir / "terraform-coverage.json"
     mapping = out_dir / "mapping.json"
     run_cli(
@@ -259,6 +261,12 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
             str(ROOT / "samples" / "sboms" / "orders-api.cdx.json"),
             "--sbom",
             str(ROOT / "samples" / "sboms" / "audit-api.cdx.json"),
+            "--sbom",
+            str(ROOT / "samples" / "sboms" / "inventory-api.cdx.json"),
+            "--sbom",
+            str(ROOT / "samples" / "sboms" / "batch-worker.cdx.json"),
+            "--sbom",
+            str(ROOT / "samples" / "sboms" / "reports-api.cdx.json"),
             "--vulns",
             str(ROOT / "samples" / "vulnerabilities.json"),
             "--terraform-plan",
@@ -275,12 +283,23 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
             f"orders-api={ROOT / 'samples' / 'source' / 'orders-api'}",
             "--source-root",
             f"audit-api={ROOT / 'samples' / 'source' / 'audit-api'}",
+            "--source-root",
+            f"inventory-api={ROOT / 'samples' / 'source' / 'inventory-api'}",
+            "--source-root",
+            f"batch-worker={ROOT / 'samples' / 'source' / 'batch-worker'}",
+            "--source-root",
+            f"reports-api={ROOT / 'samples' / 'source' / 'reports-api'}",
             "--out",
             str(findings),
+            "--html-out",
+            str(html),
             "--no-table",
         ]
     )
     check("generated findings", findings, "findings.schema.json")
+    if not html.exists() or "report-data" not in html.read_text(encoding="utf-8"):
+        raise ReleaseCheckError("generated HTML graph report is missing report data")
+    checks.append({"name": "generated HTML graph report", "status": "passed", "document": str(html)})
     check("generated Terraform coverage", terraform_coverage, "terraform-coverage.schema.json")
     check("generated mapping report", mapping, "mapping-report.schema.json")
 

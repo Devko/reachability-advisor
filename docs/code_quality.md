@@ -2,9 +2,9 @@
 
 ## Current gates
 
-- Unit and workflow tests: 318.
+- Unit and workflow tests: 327.
 - Coverage threshold: 93%.
-- Current measured coverage: 93% line/branch-aware coverage report.
+- Current measured coverage: 94% line/branch-aware coverage report.
 - Compile check: `python -m compileall`.
 - Sample workflow: `make sample`.
 - Terraform fixture workflow: `make fixtures`.
@@ -36,7 +36,7 @@ The logic layer has tests for:
 - Same-file gating for `attacker_controlled` evidence.
 - Weaker rationale when input/entrypoint evidence appears in a different file.
 - Java/Spring, Node/Express/NestJS, Python/FastAPI/Chainlit/aiohttp, and basic Go source evidence.
-- CLI generation of mapping, coverage, SARIF, diagnostics, Markdown, and annotations.
+- CLI generation of mapping, coverage, SARIF, diagnostics, Markdown, HTML, and annotations.
 - Generated output validation against repository JSON schemas through `scripts/validate_release.py`.
 
 ## Terraform quality bar

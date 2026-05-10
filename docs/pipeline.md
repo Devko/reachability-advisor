@@ -77,6 +77,7 @@ jobs:
             --out reachability/findings.json \
             --sarif-out reachability/reachability.sarif \
             --markdown-out reachability/summary.md \
+            --html-out reachability/reachability-graph.html \
             --annotations-out reachability/annotations.txt \
             --fail-on-tier high
 
@@ -90,6 +91,7 @@ jobs:
             --out reachability/findings.json \
             --sarif-out reachability/reachability.sarif \
             --markdown-out reachability/summary.md \
+            --html-out reachability/reachability-graph.html \
             --annotations-out reachability/annotations.txt \
             --fail-on-tier high
 
@@ -116,6 +118,7 @@ jobs:
             reachability/*.json
             reachability/*.sarif
             reachability/*.md
+            reachability/*.html
             reachability/*.txt
 ```
 
@@ -159,6 +162,7 @@ When you want the scanner installed directly from this repository, use the compo
             ${{ steps.reachability.outputs.mapping }}
             ${{ steps.reachability.outputs.terraform_coverage }}
             ${{ steps.reachability.outputs.markdown }}
+            ${{ steps.reachability.outputs.html }}
 ```
 
 Pin this to the next release tag after the action hardening work is released.
@@ -190,6 +194,7 @@ For release branches and deployment gates, scan the built artifact instead of th
             --out reachability/findings.json \
             --sarif-out reachability/reachability.sarif \
             --markdown-out reachability/summary.md \
+            --html-out reachability/reachability-graph.html \
             --annotations-out reachability/annotations.txt \
             --fail-on-tier high
 ```
@@ -203,7 +208,7 @@ Use `--terraform-plan reachability/tfplan.json` when a plan is available. Use `-
 3. Pass the matching source checkout with `--source-root name=path`.
 4. Pass Terraform plan JSON for release gates, or Terraform source for early PR feedback.
 5. Write `--mapping-out` and `--terraform-coverage-out` on every run.
-6. Upload SARIF to GitHub code scanning and upload JSON/Markdown artifacts for audit.
+6. Upload SARIF to GitHub code scanning and upload JSON/Markdown/HTML artifacts for audit.
 7. Fail on `--fail-on-tier high` only when the team is ready to enforce the prioritized queue.
 
 Terraform plan JSON can include sensitive values. Store it only as a short-lived job artifact when needed, or avoid uploading it and keep the generated coverage/mapping reports instead.

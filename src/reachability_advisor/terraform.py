@@ -888,9 +888,10 @@ class TerraformNetworkGraph:
             self._add_edge(self._target_group_node(target_group_ref), resource_node, f"{target_group_ref} targets {resource.address}")
         for task_def_ref in _value_reference_candidates(resource.values.get("task_definition")):
             self._add_edge(resource_node, self._ref_node(task_def_ref), f"{resource.address} runs task definition {task_def_ref}")
-        for name in _kubernetes_names_and_selectors(resource):
-            self._add_edge(self._kubernetes_name_node(name), resource_node, f"{name} selects {resource.address}")
-            self._add_edge(resource_node, self._kubernetes_name_node(name), f"{resource.address} can reach cluster service {name}", exposure_cap="internal")
+        if resource.type.startswith("kubernetes_"):
+            for name in _kubernetes_names_and_selectors(resource):
+                self._add_edge(self._kubernetes_name_node(name), resource_node, f"{name} selects {resource.address}")
+                self._add_edge(resource_node, self._kubernetes_name_node(name), f"{resource.address} can reach cluster service {name}", exposure_cap="internal")
         if _has_private_network_attachment(resource.values):
             self._add_edge(self._provider_bridge_node(resource.provider), resource_node, f"{resource.provider} private network reaches {resource.address}", exposure_cap="internal")
         if _has_direct_public_address(resource.values):

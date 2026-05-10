@@ -37,6 +37,98 @@
           "values": {"name": "payments-secrets", "role": "payments-task-role", "policy": "{\"Statement\": [{\"Effect\": \"Allow\", \"Action\": [\"secretsmanager:GetSecretValue\", \"s3:GetObject\"], \"Resource\": \"*\"}]}"}
         },
         {
+          "address": "aws_ecs_task_definition.inventory",
+          "type": "aws_ecs_task_definition",
+          "name": "inventory",
+          "values": {
+            "container_definitions": "[{\"name\":\"inventory-api\",\"image\":\"ghcr.io/acme/inventory-api:1.0.0\"}]",
+            "task_role_arn": "inventory-task-role",
+            "tags": {"Environment": "prod", "Owner": "@team-inventory"}
+          }
+        },
+        {
+          "address": "aws_security_group.inventory_private",
+          "type": "aws_security_group",
+          "name": "inventory_private",
+          "values": {"id": "sg-inventory-private", "name": "inventory-private", "ingress": []}
+        },
+        {
+          "address": "aws_security_group_rule.inventory_from_public",
+          "type": "aws_security_group_rule",
+          "name": "inventory_from_public",
+          "values": {"type": "ingress", "security_group_id": "sg-inventory-private", "source_security_group_id": "sg-public-api", "from_port": 8080, "to_port": 8080}
+        },
+        {
+          "address": "aws_ecs_service.inventory",
+          "type": "aws_ecs_service",
+          "name": "inventory",
+          "values": {
+            "name": "inventory-api",
+            "task_definition": "inventory-api",
+            "network_configuration": [{"security_groups": ["sg-inventory-private"]}],
+            "tags": {"Environment": "prod", "Owner": "@team-inventory"}
+          }
+        },
+        {
+          "address": "aws_ecs_task_definition.batch_worker",
+          "type": "aws_ecs_task_definition",
+          "name": "batch_worker",
+          "values": {
+            "container_definitions": "[{\"name\":\"batch-worker\",\"image\":\"ghcr.io/acme/batch-worker:0.4.0\"}]",
+            "tags": {"Environment": "prod", "Owner": "@team-platform"}
+          }
+        },
+        {
+          "address": "aws_security_group.batch_private",
+          "type": "aws_security_group",
+          "name": "batch_private",
+          "values": {"id": "sg-batch-private", "name": "batch-private", "ingress": []}
+        },
+        {
+          "address": "aws_ecs_service.batch_worker",
+          "type": "aws_ecs_service",
+          "name": "batch_worker",
+          "values": {
+            "name": "batch-worker",
+            "task_definition": "batch-worker",
+            "network_configuration": [{"security_groups": ["sg-batch-private"]}],
+            "tags": {"Environment": "prod", "Owner": "@team-platform"}
+          }
+        },
+        {
+          "address": "aws_ecs_task_definition.reports",
+          "type": "aws_ecs_task_definition",
+          "name": "reports",
+          "values": {
+            "container_definitions": "[{\"name\":\"reports-api\",\"image\":\"ghcr.io/acme/reports-api:2.1.0\"}]",
+            "task_role_arn": "reports-task-role",
+            "tags": {"Environment": "prod", "Owner": "@team-reporting"}
+          }
+        },
+        {
+          "address": "aws_security_group.reports_internal",
+          "type": "aws_security_group",
+          "name": "reports_internal",
+          "values": {"id": "sg-reports-internal", "name": "reports-internal", "ingress": [{"cidr_blocks": ["10.0.0.0/8"], "from_port": 8080, "to_port": 8080}]}
+        },
+        {
+          "address": "aws_ecs_service.reports",
+          "type": "aws_ecs_service",
+          "name": "reports",
+          "values": {
+            "name": "reports-api",
+            "task_definition": "reports-api",
+            "network_configuration": [{"security_groups": ["sg-reports-internal"]}],
+            "tags": {"Environment": "prod", "Owner": "@team-reporting"}
+          }
+        },
+        {
+          "address": "aws_iam_role_policy.reports_readonly",
+          "type": "aws_iam_role_policy",
+          "name": "reports_readonly",
+          "values": {"name": "reports-readonly", "role": "reports-task-role", "policy": "{\"Statement\": [{\"Effect\": \"Allow\", \"Action\": [\"ecs:DescribeTasks\", \"cloudwatch:GetMetricData\"], \"Resource\": \"*\"}]}"}
+        },
+        {
           "address": "aws_lambda_function.notifier",
           "type": "aws_lambda_function",
           "name": "notifier",

@@ -1,6 +1,6 @@
 # Data Formats
 
-Reachability Advisor is local-first. Inputs are files supplied by the developer pipeline; outputs are JSON/Markdown/SARIF artifacts suitable for CI and IDE integrations.
+Reachability Advisor is local-first. Inputs are files supplied by the developer pipeline; outputs are JSON, Markdown, SARIF, and self-contained HTML artifacts suitable for CI and IDE integrations.
 
 ## CycloneDX SBOM JSON
 
@@ -267,6 +267,22 @@ includes artifact, component, vulnerability, source reachability, context,
 score, tier, confidence, rationale, fix commands, and policy status.
 
 Schema draft: `schemas/findings.schema.json`.
+
+## Visual HTML report
+
+Generated with `--html-out`.
+
+The report is a single HTML file with embedded JSON, CSS, and JavaScript. It does not load external scripts, fonts, or network assets.
+
+It visualizes:
+
+- attacker entry and ingress/path cards derived from Terraform network-path evidence, such as Internet -> public security group/load balancer/application gateway -> workload;
+- deployable asset cards with network, IAM, source, environment, owner, and criticality context;
+- vulnerability cards linked to the affected asset;
+- colors that emphasize the highest tier/criticality on each asset and vulnerability;
+- a searchable, filterable findings list with click-through details.
+
+The graph supports mouse-wheel zoom, drag-to-pan, tier filtering, exposure filtering, active-only filtering, and text search. It is an audit artifact, not a separate source of truth; the canonical machine-readable data remains `--out` findings JSON.
 
 ## Terraform fixture pack JSON
 

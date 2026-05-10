@@ -7,7 +7,7 @@
 - Grype, local vulnerability intelligence, and OSV-style parsers.
 - Java, Node, Python, and basic Go source heuristics.
 - Context JSON, Terraform plan context, and conservative HCL static context.
-- JSON, SARIF, diagnostics, Markdown, and annotation outputs.
+- JSON, SARIF, diagnostics, Markdown, HTML graph, and annotation outputs.
 - Mapping reports, Terraform coverage reports, HCL audit reports, SBOM planning, and remediation groups.
 - PR delta workflow.
 - Release validation against repository JSON schemas.
@@ -21,7 +21,7 @@ Goal: make the published GitHub repository easy to consume from production CI wh
 Priority 1: GitHub Actions consumption
 
 - Harden the composite action so external repositories can use the published action without checking out this repository as their application source.
-- Support multiple SBOMs, source-root mappings, artifact aliases, runtime policy, custom reachability rules, Terraform plan/source context, SARIF, diagnostics, mapping, and Terraform coverage outputs through action inputs.
+- Support multiple SBOMs, source-root mappings, artifact aliases, runtime policy, custom reachability rules, Terraform plan/source context, SARIF, diagnostics, HTML graph, mapping, and Terraform coverage outputs through action inputs.
 - Expose stable action output paths so downstream workflow steps can upload SARIF and artifacts without duplicating path conventions.
 - Add an action usage example to the pipeline documentation.
 

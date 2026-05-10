@@ -29,11 +29,14 @@ Use this checklist when reviewing a new repository, fixture pack, or release can
 - [ ] `--terraform-coverage-out` reports all resources.
 - [ ] `visibility_gaps` are reviewed rather than treated as safe.
 - [ ] Artifact match methods and scores are inspected for important findings.
+- [ ] Fixture/sample coverage includes public, internal/lateral, private, and unknown exposure states when those states are in scope.
+- [ ] Fixture/sample coverage includes admin, sensitive/critical, limited/read-only, and no linked IAM role states when those states are in scope.
 
 ## Developer output
 
 - [ ] SARIF and diagnostics point to source files when available.
 - [ ] PR summaries explain why a finding is high priority.
+- [ ] The HTML graph shows high-priority findings linked to asset, source, network, and IAM evidence.
 - [ ] `compare` gates only new or regressed findings when historical backlog exists.
 
 ## Safety

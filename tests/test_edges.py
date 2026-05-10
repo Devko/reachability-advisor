@@ -268,6 +268,41 @@ class SourceAndScoringEdgeTests(unittest.TestCase):
         )
         self.assertEqual(finding.confidence, Confidence.MEDIUM)
 
+    def test_private_no_ingress_without_blast_radius_is_capped_below_high(self) -> None:
+        sbom_like = type("SbomLike", (), {"artifact": Artifact(name="batch-worker")})()
+        finding = score_finding(
+            sbom_like,
+            Component(name="lodash", version="4.17.20", purl="pkg:npm/lodash@4.17.20"),
+            VulnerabilityRecord(id="CVE-2021-23337", package_name="lodash", cvss=7.5, epss=0.22),
+            SourceEvidence(reachability=Reachability.FUNCTION_REACHABLE, confidence=Confidence.MEDIUM),
+            ContextEvidence(exposure="private", environment="prod", confidence=Confidence.MEDIUM),
+            ScorePolicy(),
+        )
+        self.assertEqual(finding.tier, Tier.MEDIUM)
+        self.assertLess(finding.score, 65)
+        self.assertIn("private/no-ingress", " ".join(finding.rationale))
+
+    def test_private_known_exploited_or_attacker_controlled_can_still_be_high(self) -> None:
+        sbom_like = type("SbomLike", (), {"artifact": Artifact(name="app")})()
+        known_exploited = score_finding(
+            sbom_like,
+            Component(name="lib", version="1", purl="pkg:npm/lib@1"),
+            VulnerabilityRecord(id="CVE-X", package_name="lib", cvss=7.5, known_exploited=True),
+            SourceEvidence(reachability=Reachability.FUNCTION_REACHABLE, confidence=Confidence.MEDIUM),
+            ContextEvidence(exposure="private", environment="prod", confidence=Confidence.MEDIUM),
+            ScorePolicy(),
+        )
+        attacker_controlled = score_finding(
+            sbom_like,
+            Component(name="lib", version="1", purl="pkg:npm/lib@1"),
+            VulnerabilityRecord(id="CVE-Y", package_name="lib", cvss=7.5),
+            SourceEvidence(reachability=Reachability.ATTACKER_CONTROLLED, confidence=Confidence.HIGH),
+            ContextEvidence(exposure="private", environment="prod", confidence=Confidence.MEDIUM),
+            ScorePolicy(),
+        )
+        self.assertGreaterEqual(known_exploited.score, 65)
+        self.assertGreaterEqual(attacker_controlled.score, 65)
+
     def test_remediation_groups_pick_highest_fixed_version(self) -> None:
         artifact = Artifact(name="audit-api")
         component = Component(

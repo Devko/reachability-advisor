@@ -112,6 +112,20 @@ def _confidence(source: SourceEvidence, context: ContextEvidence) -> Confidence:
     return Confidence.LOW
 
 
+def _private_no_ingress_cap_applies(vulnerability: VulnerabilityRecord, source: SourceEvidence, context: ContextEvidence) -> bool:
+    exposure = (context.exposure or "unknown").lower()
+    privilege = (context.privilege or "unknown").lower()
+    criticality = (context.criticality or "unknown").lower()
+    return (
+        exposure in {"private", "none"}
+        and source.reachability != Reachability.ATTACKER_CONTROLLED
+        and not vulnerability.known_exploited
+        and privilege not in {"admin", "sensitive"}
+        and criticality != "high"
+        and not context.iam_impacts
+    )
+
+
 def fix_commands(component: Component, vulnerability: VulnerabilityRecord) -> list[str]:
     if not vulnerability.fixed_versions:
         return []
@@ -167,6 +181,9 @@ def score_finding(
     if source.reachability == Reachability.PACKAGE_PRESENT and component.scope in {"test", "dev", "development"}:
         score = min(score, 39.0)
         rationale.append("dev/test dependency without source usage is capped below high priority")
+    if _private_no_ingress_cap_applies(vulnerability, source, context):
+        score = min(score, policy.tier_thresholds[Tier.HIGH] - 1.0)
+        rationale.append("private/no-ingress finding without attacker-controlled source, known exploitation, privilege, IAM impact, or high criticality is capped below high priority")
     if source.reachability == Reachability.PACKAGE_PRESENT and context.exposure == "unknown":
         score -= 6.0
         rationale.append("weak evidence penalty subtracts 6.0 points")

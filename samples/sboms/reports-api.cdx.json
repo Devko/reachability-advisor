@@ -1,0 +1,26 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "name": "reports-api",
+      "version": "2.1.0",
+      "properties": [
+        {"name": "container:image", "value": "ghcr.io/acme/reports-api:2.1.0"},
+        {"name": "environment", "value": "prod"},
+        {"name": "owner", "value": "@team-reporting"}
+      ]
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "name": "requests",
+      "version": "2.19.0",
+      "purl": "pkg:pypi/requests@2.19.0",
+      "scope": "runtime"
+    }
+  ]
+}

@@ -262,13 +262,23 @@ class TerraformAnalysisTests(unittest.TestCase):
             Artifact(name="notifier", reference="ghcr.io/acme/notifier:0.9.0", properties={"environment": "dev"}),
             Artifact(name="orders-api", reference="ghcr.io/acme/orders-api:3.4.0", properties={"environment": "prod"}),
             Artifact(name="audit-api", reference="ghcr.io/acme/audit-api:2.0.0", properties={"environment": "prod"}),
+            Artifact(name="inventory-api", reference="ghcr.io/acme/inventory-api:1.0.0", properties={"environment": "prod"}),
+            Artifact(name="batch-worker", reference="ghcr.io/acme/batch-worker:0.4.0", properties={"environment": "prod"}),
+            Artifact(name="reports-api", reference="ghcr.io/acme/reports-api:2.1.0", properties={"environment": "prod"}),
         ]
         data = json.loads((ROOT / "samples/tfplan-multicloud.json").read_text(encoding="utf-8"))
         analysis = TerraformAnalyzer(data, artifacts, source_name="sample").analyze()
-        self.assertEqual(set(analysis.contexts), {"payments-api", "notifier", "orders-api", "audit-api"})
+        self.assertEqual(set(analysis.contexts), {"payments-api", "notifier", "orders-api", "audit-api", "inventory-api", "batch-worker", "reports-api"})
         self.assertEqual(analysis.contexts["payments-api"].exposure, "public")
+        self.assertEqual(analysis.contexts["inventory-api"].exposure, "internal")
+        self.assertEqual(analysis.contexts["batch-worker"].exposure, "private")
+        self.assertEqual(analysis.contexts["reports-api"].exposure, "internal")
         self.assertEqual(analysis.contexts["orders-api"].privilege, "admin")
         self.assertEqual(analysis.contexts["audit-api"].privilege, "sensitive")
+        self.assertEqual(analysis.contexts["reports-api"].privilege, "limited")
+        self.assertEqual(analysis.contexts["batch-worker"].privilege, "unknown")
+        self.assertTrue(any("terraform network path: internal" in item for item in analysis.contexts["inventory-api"].evidence))
+        self.assertTrue(any("terraform network path: internal" in item for item in analysis.contexts["reports-api"].evidence))
         self.assertEqual(analysis.coverage["summary"]["resource_accounting_coverage"], 1.0)
         self.assertEqual(analysis.coverage["summary"]["semantic_classification_coverage"], 1.0)
         self.assertEqual(analysis.coverage["summary"]["artifact_match_coverage"], 1.0)
@@ -314,7 +324,7 @@ class TerraformAnalysisTests(unittest.TestCase):
             coverage = json.loads((out / "coverage.json").read_text(encoding="utf-8"))
             self.assertEqual(coverage["summary"]["resource_accounting_coverage"], 1.0)
             findings = json.loads((out / "findings.json").read_text(encoding="utf-8"))
-            self.assertEqual(findings["metadata"]["terraform_resources"], 15)
+            self.assertEqual(findings["metadata"]["terraform_resources"], 26)
 
     def test_all_manifest_resource_types_can_be_accounted(self) -> None:
         resources = [resource(f"{rtype}.x{i}", rtype, {}) for i, rtype in enumerate(SUPPORTED_TYPE_TO_CLASS)]
@@ -461,6 +471,16 @@ class TerraformBranchCoverageTests(unittest.TestCase):
         ])
         analysis = TerraformAnalyzer(data, [Artifact(name="app", reference="repo/app:1")]).analyze()
         self.assertEqual(analysis.contexts["app"].exposure, "public")
+
+    def test_kubernetes_selector_path_does_not_expose_same_named_cloud_workload(self) -> None:
+        data = plan([
+            resource("kubernetes_service.shared", "kubernetes_service", {"type": "LoadBalancer", "metadata": [{"name": "shared"}], "spec": [{"selector": {"app": "shared"}}]}),
+            resource("aws_lambda_function.shared", "aws_lambda_function", {"function_name": "shared", "image_uri": "repo/lambda-app:1"}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="lambda-app", reference="repo/lambda-app:1")]).analyze()
+        context = analysis.contexts["lambda-app"]
+        self.assertEqual(context.exposure, "unknown")
+        self.assertFalse(any("kubernetes_service.shared" in item for item in context.evidence))
 
     def test_app_runner_false_public_access_is_internal(self) -> None:
         data = plan([resource("aws_apprunner_service.app", "aws_apprunner_service", {"service_name": "app", "publicly_accessible": False})])

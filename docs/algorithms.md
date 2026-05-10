@@ -18,7 +18,7 @@ CycloneDX SBOMs
   -> exposure / identity / data context
   -> explainable score
   -> remediation groups by artifact/component/version
-  -> JSON/SARIF/diagnostics/Markdown/annotations/coverage/mapping
+  -> JSON/SARIF/diagnostics/Markdown/HTML/annotations/coverage/mapping
 ```
 
 ## SBOM acquisition model
@@ -189,6 +189,11 @@ score = severity
       + network/IAM-derived criticality points
       - weak-evidence penalty
 ```
+
+Two caps prevent weakly actionable findings from crossing priority gates only because several small signals add up:
+
+- dev/test dependencies without source usage are capped below `high`;
+- private/no-ingress findings without attacker-controlled source evidence, known exploitation, admin/sensitive privilege, IAM impact, or high criticality are capped below `high`.
 
 Default tiers:
 

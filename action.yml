@@ -1,6 +1,6 @@
 name: Reachability Advisor
 summary: Developer-first reachability-aware dependency vulnerability prioritization
-description: Runs Reachability Advisor and emits JSON, SARIF, diagnostics, Markdown, GitHub annotations, mapping, and optional Terraform coverage.
+description: Runs Reachability Advisor and emits JSON, SARIF, diagnostics, Markdown, HTML, GitHub annotations, mapping, and optional Terraform coverage.
 inputs:
   sbom:
     description: One or more CycloneDX SBOM paths. Use newline-separated paths for multiple artifacts.
@@ -57,6 +57,9 @@ outputs:
   markdown:
     description: Markdown summary output path.
     value: ${{ steps.scan.outputs.markdown }}
+  html:
+    description: Interactive HTML graph report output path.
+    value: ${{ steps.scan.outputs.html }}
   annotations:
     description: GitHub Actions annotations text output path.
     value: ${{ steps.scan.outputs.annotations }}
@@ -108,11 +111,12 @@ runs:
         sarif="$output_dir/reachability.sarif"
         diagnostics="$output_dir/reachability-diagnostics.json"
         markdown="$output_dir/reachability-summary.md"
+        html="$output_dir/reachability-graph.html"
         annotations="$output_dir/reachability-annotations.txt"
         mapping="$output_dir/reachability-mapping.json"
         terraform_coverage="$output_dir/terraform-coverage.json"
 
-        args=(scan --vulns "${{ inputs.vulns }}" --out "$findings" --sarif-out "$sarif" --diagnostics-out "$diagnostics" --markdown-out "$markdown" --annotations-out "$annotations" --mapping-out "$mapping" --no-table)
+        args=(scan --vulns "${{ inputs.vulns }}" --out "$findings" --sarif-out "$sarif" --diagnostics-out "$diagnostics" --markdown-out "$markdown" --html-out "$html" --annotations-out "$annotations" --mapping-out "$mapping" --no-table)
 
         add_repeated_args "--sbom" "${{ inputs.sbom }}"
         add_repeated_args "--source-root" "${{ inputs.source-root }}"
@@ -141,6 +145,7 @@ runs:
             echo "sarif=$sarif"
             echo "diagnostics=$diagnostics"
             echo "markdown=$markdown"
+            echo "html=$html"
             echo "annotations=$annotations"
             echo "mapping=$mapping"
             echo "terraform_coverage=$terraform_coverage"
