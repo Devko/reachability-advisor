@@ -1,0 +1,159 @@
+{
+  "schema_version": "1.0",
+  "purpose": "Complex real-world application validation cases for end-to-end SBOM, Grype, source reachability, Terraform context, and visual graph output.",
+  "cases": [
+    {
+      "id": "aws-retail-store-sample-app",
+      "name": "AWS Containers Retail Store Sample App",
+      "repo": "https://github.com/aws-containers/retail-store-sample-app.git",
+      "web": "https://github.com/aws-containers/retail-store-sample-app",
+      "worktree": "aws-retail-store-sample-app",
+      "terraform_source": "terraform",
+      "why_selected": "Large AWS sample with multiple deployable services, Java, Go, Node/TypeScript, Docker/Kubernetes assets, ECS/EKS/App Runner Terraform, databases, queues, secrets, IAM, and public/internal service paths.",
+      "workloads": [
+        {
+          "artifact": "ui",
+          "source": "src/ui",
+          "aliases": ["public.ecr.aws/aws-containers/retail-store-sample-ui:1.5.0"]
+        },
+        {
+          "artifact": "catalog",
+          "source": "src/catalog",
+          "aliases": ["public.ecr.aws/aws-containers/retail-store-sample-catalog:1.5.0"]
+        },
+        {
+          "artifact": "carts",
+          "source": "src/cart",
+          "aliases": ["public.ecr.aws/aws-containers/retail-store-sample-cart:1.5.0"]
+        },
+        {
+          "artifact": "checkout",
+          "source": "src/checkout",
+          "aliases": ["public.ecr.aws/aws-containers/retail-store-sample-checkout:1.5.0"]
+        },
+        {
+          "artifact": "orders",
+          "source": "src/orders",
+          "aliases": ["public.ecr.aws/aws-containers/retail-store-sample-orders:1.5.0"]
+        }
+      ],
+      "expectations": {
+        "min_sboms": 5,
+        "min_vulnerability_matches": 20,
+        "min_findings": 10,
+        "min_services_with_findings": 2,
+        "min_terraform_resources": 10
+      },
+      "expected_limitations": [
+        "Static HCL mode cannot expand Terraform modules, locals, dynamic blocks, or rendered Helm/Kubernetes child manifests.",
+        "Artifact matching is strongest with a generated Terraform plan; source-only Terraform may leave some service image links as visibility gaps.",
+        "Grype results depend on the local vulnerability database snapshot used by the validation runner."
+      ]
+    },
+    {
+      "id": "google-online-boutique",
+      "name": "Google Cloud Online Boutique",
+      "repo": "https://github.com/GoogleCloudPlatform/microservices-demo.git",
+      "web": "https://github.com/GoogleCloudPlatform/microservices-demo",
+      "worktree": "google-online-boutique",
+      "terraform_source": "terraform",
+      "kubernetes_manifest": "release/kubernetes-manifests.yaml",
+      "infer_cluster_lateral_from_public_entry": true,
+      "why_selected": "Large Kubernetes/GKE sample with Go, Python, Node.js, C#, and Java services, Terraform deployment material, public frontend ingress, and internal service-to-service paths.",
+      "workloads": [
+        {
+          "artifact": "frontend",
+          "source": "src/frontend",
+          "aliases": [
+            "us-central1-docker.pkg.dev/google-samples/microservices-demo/frontend:v0.10.5",
+            "gcr.io/google-samples/microservices-demo/frontend:v0.10.5"
+          ]
+        },
+        {
+          "artifact": "cartservice",
+          "source": "src/cartservice",
+          "aliases": [
+            "us-central1-docker.pkg.dev/google-samples/microservices-demo/cartservice:v0.10.5",
+            "gcr.io/google-samples/microservices-demo/cartservice:v0.10.5"
+          ]
+        },
+        {
+          "artifact": "checkoutservice",
+          "source": "src/checkoutservice",
+          "aliases": [
+            "us-central1-docker.pkg.dev/google-samples/microservices-demo/checkoutservice:v0.10.5",
+            "gcr.io/google-samples/microservices-demo/checkoutservice:v0.10.5"
+          ]
+        },
+        {
+          "artifact": "currencyservice",
+          "source": "src/currencyservice",
+          "aliases": [
+            "us-central1-docker.pkg.dev/google-samples/microservices-demo/currencyservice:v0.10.5",
+            "gcr.io/google-samples/microservices-demo/currencyservice:v0.10.5"
+          ]
+        },
+        {
+          "artifact": "emailservice",
+          "source": "src/emailservice",
+          "aliases": [
+            "us-central1-docker.pkg.dev/google-samples/microservices-demo/emailservice:v0.10.5",
+            "gcr.io/google-samples/microservices-demo/emailservice:v0.10.5"
+          ]
+        },
+        {
+          "artifact": "paymentservice",
+          "source": "src/paymentservice",
+          "aliases": [
+            "us-central1-docker.pkg.dev/google-samples/microservices-demo/paymentservice:v0.10.5",
+            "gcr.io/google-samples/microservices-demo/paymentservice:v0.10.5"
+          ]
+        },
+        {
+          "artifact": "productcatalogservice",
+          "source": "src/productcatalogservice",
+          "aliases": [
+            "us-central1-docker.pkg.dev/google-samples/microservices-demo/productcatalogservice:v0.10.5",
+            "gcr.io/google-samples/microservices-demo/productcatalogservice:v0.10.5"
+          ]
+        },
+        {
+          "artifact": "recommendationservice",
+          "source": "src/recommendationservice",
+          "aliases": [
+            "us-central1-docker.pkg.dev/google-samples/microservices-demo/recommendationservice:v0.10.5",
+            "gcr.io/google-samples/microservices-demo/recommendationservice:v0.10.5"
+          ]
+        },
+        {
+          "artifact": "shippingservice",
+          "source": "src/shippingservice",
+          "aliases": [
+            "us-central1-docker.pkg.dev/google-samples/microservices-demo/shippingservice:v0.10.5",
+            "gcr.io/google-samples/microservices-demo/shippingservice:v0.10.5"
+          ]
+        },
+        {
+          "artifact": "adservice",
+          "source": "src/adservice",
+          "aliases": [
+            "us-central1-docker.pkg.dev/google-samples/microservices-demo/adservice:v0.10.5",
+            "gcr.io/google-samples/microservices-demo/adservice:v0.10.5"
+          ]
+        }
+      ],
+      "expectations": {
+        "min_sboms": 10,
+        "min_vulnerability_matches": 30,
+        "min_findings": 30,
+        "min_services_with_findings": 5,
+        "min_terraform_resources": 5
+      },
+      "expected_limitations": [
+        "Kubernetes manifest context is inferred from service selectors and workload names, not from a live cluster or service mesh telemetry.",
+        "Static HCL mode records the Terraform surface, but Kubernetes manifests provide the primary service exposure evidence for this sample.",
+        "Grype results depend on the local vulnerability database snapshot used by the validation runner."
+      ]
+    }
+  ]
+}

@@ -217,7 +217,7 @@ def generate_findings(
         root = source_roots.get(sbom.artifact.name)
         context = contexts.get(sbom.artifact.name, ContextEvidence())
         for component in sbom.components:
-            matches = matching_vulnerabilities(component, vulnerabilities)
+            matches = matching_vulnerabilities(component, vulnerabilities, sbom.artifact.name)
             if not matches:
                 continue
             for vulnerability in matches:

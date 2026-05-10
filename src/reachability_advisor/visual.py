@@ -15,8 +15,8 @@ from .remediation import build_remediation_groups
 
 TIER_RANK = {"informational": 0, "low": 1, "medium": 2, "high": 3, "urgent": 4}
 EXPOSURE_RANK = {"unknown": 0, "isolated": 1, "private": 1, "internal": 2, "external": 3, "public": 4}
-NETWORK_PATH_RE = re.compile(r"^terraform network path: (?P<exposure>[a-z_]+) via (?P<path>.+)$")
-EXPOSURE_INFERENCE_RE = re.compile(r"^terraform exposure inference: (?P<exposure>[a-z_]+) via (?P<target>.+)$")
+NETWORK_PATH_RE = re.compile(r"^(?:terraform|context|kubernetes) network path: (?P<exposure>[a-z_]+) via (?P<path>.+)$")
+EXPOSURE_INFERENCE_RE = re.compile(r"^(?:terraform|context|kubernetes) exposure inference: (?P<exposure>[a-z_]+) via (?P<target>.+)$")
 
 
 def write_html_report(findings: list[Finding], path: str | Path, metadata: dict[str, Any] | None = None) -> None:
@@ -262,6 +262,8 @@ def _entry_kind_for_path(exposure: str, steps: list[str]) -> str:
     if kind != "internal":
         return kind
     text = " ".join(steps).lower()
+    if "loadbalancer" in text or "nodeport" in text or "public ingress" in text:
+        return "public_pivot"
     if "allows traffic from" in text or "security_group_rule" in text or "provider private network reaches" in text:
         return "lateral"
     return "internal"
@@ -273,6 +275,8 @@ def _entry_label(exposure: str) -> str:
 
 def _entry_label_for_kind(kind: str) -> str:
     if kind == "internet":
+        return "Internet / attacker"
+    if kind == "public_pivot":
         return "Internet / attacker"
     if kind == "external":
         return "External source"
@@ -292,6 +296,8 @@ def _entry_subtitle(exposure: str) -> str:
 def _entry_subtitle_for_kind(kind: str) -> str:
     if kind == "internet":
         return "direct public route"
+    if kind == "public_pivot":
+        return "public ingress then internal hop"
     if kind == "external":
         return "restricted public CIDR or external source"
     if kind == "lateral":
@@ -650,6 +656,7 @@ label.check input {
 .chip.covered { background: #dcfce7; color: #166534; }
 .chip.reachable-sink, .chip.import-only { background: #fef3c7; color: #92400e; }
 .chip.not-observed, .chip.no-rule, .chip.absent { background: #e2e8f0; color: #334155; }
+.chip.score, .chip.count, .chip.paths { background: #eef2f7; color: #344054; }
 .card.urgent { border-left-color: var(--urgent); }
 .card.high { border-left-color: var(--high); }
 .card.medium { border-left-color: var(--medium); }
@@ -661,15 +668,27 @@ label.check input {
 .vuln-card .body {
   padding-top: 0;
 }
+.path-card .body .sub,
+.vuln-card .body .sub {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .edge {
   fill: none;
   stroke: #94a3b8;
   stroke-width: 2;
   opacity: .85;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 .edge.network {
   stroke: #475569;
   stroke-width: 2.4;
+}
+.edge.vulnerability {
+  opacity: .76;
 }
 .edge.entry {
   stroke-dasharray: 7 5;
@@ -729,6 +748,9 @@ aside {
 }
 .kv div:nth-child(odd) {
   color: var(--muted);
+}
+.kv div:nth-child(even) {
+  overflow-wrap: anywhere;
 }
 .item {
   padding: 10px;
@@ -825,7 +847,7 @@ const exposureRank = {unknown: 0, isolated: 1, private: 1, internal: 2, external
 const entryWidth = 180;
 const entryHeight = 88;
 const pathWidth = 248;
-const pathHeight = 122;
+const pathHeight = 140;
 const assetWidth = 360;
 const assetHeight = 260;
 const vulnWidth = 430;
@@ -997,10 +1019,11 @@ function renderEdges(assets, vulnerabilities, networkPaths, layout) {
     const target = layout.vulnerabilities.get(vuln.id);
     if (!asset || !target) continue;
     const x1 = asset.x + asset.width;
-    const y1 = target.y + target.height / 2;
+    const y1 = asset.y + asset.height / 2;
     const x2 = target.x;
     const y2 = target.y + target.height / 2;
-    paths.push(edgePath(x1, y1, x2, y2, `edge ${vuln.tier}`));
+    const busX = x1 + 44;
+    paths.push(fanEdgePath(x1, y1, busX, x2, y2, `edge vulnerability ${vuln.tier}`));
   }
   return paths;
 }
@@ -1009,6 +1032,13 @@ function edgePath(x1, y1, x2, y2, className) {
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
   path.setAttribute("class", className);
   path.setAttribute("d", `M ${x1} ${y1} C ${x1 + 42} ${y1}, ${x2 - 42} ${y2}, ${x2} ${y2}`);
+  return path;
+}
+
+function fanEdgePath(x1, y1, busX, x2, y2, className) {
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("class", className);
+  path.setAttribute("d", `M ${x1} ${y1} L ${busX} ${y1} L ${busX} ${y2} L ${x2} ${y2}`);
   return path;
 }
 
@@ -1027,7 +1057,7 @@ function renderEntryCard(path, position) {
   const datum = {...path, id: `${path.id}:entry`, networkKind: "entry"};
   const card = createCard("entry-card", path.exposure || "unknown", position, datum);
   card.append(
-    cardTop(path.entryLabel || "Unknown entry", [path.exposure || "unknown"], path.entrySubtitle || ""),
+    cardTop(path.entryLabel || "Unknown entry", [exposureChip(path.exposure || "unknown")], path.entrySubtitle || ""),
     smallBody(path.exposure === "public" ? "Attacker-controlled traffic can start here." : path.entrySubtitle || "Network entry state is inferred from context evidence.")
   );
   return card;
@@ -1038,7 +1068,7 @@ function renderNetworkPathCard(path, position) {
   const datum = {...path, networkKind: "path"};
   const card = createCard("path-card", path.tier || "informational", position, datum);
   card.append(
-    cardTop("Ingress path", [path.exposure || "unknown", path.tier || "informational", `${pathsForAsset.length} path${pathsForAsset.length === 1 ? "" : "s"}`], path.label || "unknown path"),
+    cardTop("Ingress path", [exposureChip(path.exposure || "unknown"), pathCountChip(pathsForAsset.length)], path.label || "unknown path"),
     smallBody(path.summary || "No linked path evidence.")
   );
   return card;
@@ -1047,7 +1077,7 @@ function renderNetworkPathCard(path, position) {
 function renderAssetCard(asset, position) {
   const card = createCard("asset-card", asset.tier, position, asset);
   card.append(
-    cardTop(asset.name, [asset.tier, `${Number(asset.score).toFixed(1)} max`, `${asset.findingKeys.length} findings`], asset.owner || "unknown owner"),
+    cardTop(asset.name, [priorityChip(asset.tier), scoreChip(asset.score, "max"), countChip(asset.findingKeys.length, "findings")], asset.owner || "unknown owner"),
     assetBody(asset)
   );
   return card;
@@ -1084,9 +1114,9 @@ function assetBody(asset) {
 
 function renderVulnerabilityCard(vuln, position) {
   const card = createCard("vuln-card", vuln.tier, position, vuln);
-  const subtitle = `${vuln.component}@${vuln.componentVersion} | code ${vuln.codeExposure} | ${vuln.exposure} | ${vuln.privilege}`;
+  const subtitle = `${vuln.component}@${vuln.componentVersion} | code ${vuln.codeExposure} | network ${vuln.exposure} | IAM ${vuln.privilege}`;
   card.append(
-    cardTop(vuln.label, [vuln.tier, `${Number(vuln.score).toFixed(1)}`, vuln.severity, vuln.knownExploited ? "known exploited" : ""], subtitle),
+    cardTop(vuln.label, [priorityChip(vuln.tier), scoreChip(vuln.score), vuln.knownExploited ? tag("known exploited", "urgent") : null], subtitle),
     vulnBody(vuln)
   );
   return card;
@@ -1150,12 +1180,47 @@ function chips(values) {
   const wrap = document.createElement("div");
   wrap.className = "chips";
   for (const value of (values || []).filter(Boolean).slice(0, 8)) {
+    const data = chipValue(value);
+    if (!data.text) continue;
     const chip = document.createElement("span");
-    chip.className = `chip ${chipClass(value)}`;
-    chip.textContent = String(value);
+    chip.className = `chip ${data.className}`;
+    chip.textContent = data.text;
     wrap.appendChild(chip);
   }
   return wrap;
+}
+
+function chipValue(value) {
+  if (value && typeof value === "object") {
+    const text = String(value.text || "");
+    return {text, className: chipClass(value.className || text)};
+  }
+  const text = String(value || "");
+  return {text, className: chipClass(text)};
+}
+
+function tag(text, className) {
+  return {text, className};
+}
+
+function priorityChip(value) {
+  return tag(`priority ${value || "unknown"}`, value || "unknown");
+}
+
+function scoreChip(value, suffix = "score") {
+  return tag(`${Number(value || 0).toFixed(1)} ${suffix}`, "score");
+}
+
+function countChip(value, label) {
+  return tag(`${value} ${label}`, "count");
+}
+
+function pathCountChip(value) {
+  return tag(`${value} path${value === 1 ? "" : "s"}`, "paths");
+}
+
+function exposureChip(value) {
+  return tag(`network ${value || "unknown"}`, value || "unknown");
 }
 
 function chipClass(value) {
@@ -1180,7 +1245,7 @@ function renderFindingList(findings) {
     title.append(text(`${finding.vulnerability.id} in ${finding.component.name}`));
     const chip = document.createElement("span");
     chip.className = `chip ${finding.tier}`;
-    chip.textContent = `${finding.tier} ${Number(finding.score).toFixed(1)}`;
+    chip.textContent = `priority ${finding.tier} ${Number(finding.score).toFixed(1)}`;
     title.append(chip);
     const meta = document.createElement("div");
     meta.className = "item-meta";
@@ -1199,11 +1264,11 @@ function renderDetails(datum) {
   if (datum.networkKind) {
     const asset = DATA.assets.find(item => item.id === datum.assetId) || {};
     section.append(heading(datum.networkKind === "entry" ? datum.entryLabel : `${datum.label} -> ${asset.name || "asset"}`));
-    section.append(chips([datum.exposure, datum.tier, `${Number(datum.score || 0).toFixed(1)} max score`]));
+    section.append(chips([exposureChip(datum.exposure), scoreChip(datum.score || 0, "max")]));
     section.append(kv({
       asset: asset.name,
       entry: datum.entryLabel,
-      exposure: datum.exposure,
+      "network exposure": datum.exposure,
       path: datum.summary,
       owner: datum.owner || asset.owner,
     }));
@@ -1211,16 +1276,16 @@ function renderDetails(datum) {
     appendList(section, "Network evidence", networkPathsForAsset(datum.assetId).map(path => path.evidence || path.summary).filter(Boolean));
   } else if (datum.findingKey) {
     section.append(heading(`${datum.label} in ${datum.component}`));
-    section.append(chips([datum.tier, `${Number(datum.score).toFixed(1)} score`, datum.severity, datum.criticality]));
+    section.append(chips([priorityChip(datum.tier), scoreChip(datum.score)]));
     section.append(kv({
       component: `${datum.component}@${datum.componentVersion}`,
       "code exposure": datum.codeExposure,
       "code detail": datum.codeExposureDetail,
       "source state": datum.reachability,
-      exposure: datum.exposure,
-      privilege: datum.privilege,
-      criticality: datum.criticality,
-      IAM: datum.iamImpacts,
+      "network exposure": datum.exposure,
+      "IAM privilege": datum.privilege,
+      "asset criticality": datum.criticality,
+      "IAM impact": datum.iamImpacts,
       policy: datum.policyStatus,
     }));
     appendList(section, "Rationale", datum.rationale || []);
@@ -1230,7 +1295,7 @@ function renderDetails(datum) {
     appendList(section, "Source locations", (datum.sourceLocations || []).map(location => `${location.path}:${location.line}`));
   } else {
     section.append(heading(`Asset: ${datum.name}`));
-    section.append(chips([datum.tier, `${Number(datum.score).toFixed(1)} max score`, `${datum.findingKeys.length} findings`]));
+    section.append(chips([priorityChip(datum.tier), scoreChip(datum.score, "max"), countChip(datum.findingKeys.length, "findings")]));
     section.append(kv({
       owner: datum.owner,
       reference: datum.reference,

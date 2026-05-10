@@ -296,6 +296,20 @@ python scripts/run_external_grype_validation.py
 
 That summary currently covers Petclinic, the AWS ECS demo backend, and the Azure Chainlit app.
 
+For larger end-to-end proof, run the complex app harness. It generates one SBOM and Grype report per service, merges vulnerability matches with artifact scope, runs source plus IaC/context analysis together, and emits the HTML graph. The corpus currently includes AWS Retail Store and Google Cloud Online Boutique:
+
+```bash
+python scripts/run_complex_app_validation.py \
+  --no-clone \
+  --strict
+```
+
+Outputs are written to `outputs/external-complex/`.
+Current local snapshots:
+
+- AWS Retail Store: 5 service SBOMs, 40 Grype matches, 40 findings, 24 remediation groups, 91 Terraform resources, and generated HTML graph.
+- Google Cloud Online Boutique: 10 service SBOMs, 38 Grype matches, 38 findings, 23 remediation groups, Kubernetes context with public frontend ingress and internal service hops, and generated HTML graph.
+
 ## GitHub Actions pipeline
 
 See [docs/pipeline.md](docs/pipeline.md) for a complete GitHub Actions example using GitHub-hosted runners. The workflow generates CycloneDX SBOMs and Grype vulnerability JSON, runs Reachability Advisor, uploads SARIF, stores mapping/Terraform/HTML artifacts, and publishes a Markdown summary to the job page.
@@ -370,7 +384,7 @@ make package
 Current validation snapshot:
 
 ```text
-Ran 332 tests: OK
+Ran 342 tests: OK
 Coverage: 94%
 Coverage gate: 93% passed
 Fixture packs: 4 passed, 0 failed

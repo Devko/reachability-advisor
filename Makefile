@@ -2,7 +2,7 @@ PYTHON ?= python
 PYTHONPATH ?= src
 COVERAGE_FAIL_UNDER ?= 93
 
-.PHONY: test coverage compile sample hcl-sample fixtures release-check package clean
+.PHONY: test coverage compile sample hcl-sample fixtures external-complex release-check package clean
 
 test:
 	PYTHONPATH=$(PYTHONPATH) $(PYTHON) -m unittest discover -s tests -v
@@ -23,6 +23,9 @@ fixtures:
 	mkdir -p outputs/fixtures
 	PYTHONPATH=$(PYTHONPATH) $(PYTHON) -m reachability_advisor fixtures validate --json-out outputs/fixtures-validate.json
 	PYTHONPATH=$(PYTHONPATH) $(PYTHON) -m reachability_advisor fixtures run --out outputs/fixtures-report.json --output-dir outputs/fixtures
+
+external-complex:
+	PYTHONPATH=$(PYTHONPATH) $(PYTHON) scripts/run_complex_app_validation.py --no-clone --strict
 
 release-check:
 	PYTHONPATH=$(PYTHONPATH) $(PYTHON) scripts/validate_release.py

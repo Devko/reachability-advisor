@@ -60,6 +60,24 @@ The Grype adapter reads `matches[]`, normalizes the matched artifact package,
 matched vulnerable version, severity, CVSS, EPSS when present, fixed versions,
 aliases, and references, then the normal source/deployment scoring pipeline runs.
 
+When several per-service Grype reports are merged into one input, stamp each
+match with `reachability_advisor.artifact` to keep matches scoped to the SBOM
+artifact that produced them:
+
+```json
+{
+  "matches": [
+    {
+      "reachability_advisor": {"artifact": "checkout"},
+      "vulnerability": {"id": "GHSA-example", "severity": "High"},
+      "artifact": {"name": "request", "version": "2.88.2", "purl": "pkg:npm/request@2.88.2"}
+    }
+  ]
+}
+```
+
+The complex validation runner does this automatically.
+
 Recommended local format:
 
 ```json
@@ -67,6 +85,7 @@ Recommended local format:
   "vulnerabilities": [
     {
       "id": "CVE-2021-44228",
+      "artifact": "payments-api",
       "package": {"name": "log4j-core", "purl": "pkg:maven/org.apache.logging.log4j/log4j-core"},
       "affected_versions": ["2.14.1"],
       "severity": "critical",
@@ -79,6 +98,9 @@ Recommended local format:
   ]
 }
 ```
+
+`artifact` is optional. Use it when one vulnerability file is shared across
+multiple SBOMs and a record should only apply to one artifact.
 
 Small OSV-Scanner-style inputs are also supported by the vulnerability loader.
 

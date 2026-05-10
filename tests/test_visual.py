@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from reachability_advisor.models import Artifact, Component, Confidence, ContextEvidence, Finding, Reachability, SourceEvidence, Tier, VulnerabilityRecord
-from reachability_advisor.visual import _visual_payload
+from reachability_advisor.visual import _visual_payload, render_html_report
 
 
 def finding_for_visual(
@@ -98,6 +98,42 @@ class VisualPayloadTests(unittest.TestCase):
         self.assertEqual(path["label"], "external exposure")
         self.assertEqual(path["steps"], ["azurerm_application_gateway.gateway"])
 
+    def test_context_network_path_prefix_is_rendered(self) -> None:
+        payload = _visual_payload([
+            finding_for_visual(
+                "frontend",
+                "public",
+                ["context network path: public via kubernetes_service.frontend-external LoadBalancer -> kubernetes_deployment.frontend"],
+                tier=Tier.HIGH,
+                score=71.0,
+            )
+        ])
+
+        path = payload["networkPaths"][0]
+        self.assertEqual(path["entryLabel"], "Internet / attacker")
+        self.assertEqual(path["label"], "kubernetes_service.frontend-external LoadBalancer")
+        self.assertEqual(path["steps"][1], "kubernetes_deployment.frontend")
+
+    def test_internal_path_through_public_kubernetes_entry_shows_attacker_entry(self) -> None:
+        payload = _visual_payload([
+            finding_for_visual(
+                "paymentservice",
+                "internal",
+                [
+                    (
+                        "context network path: internal via kubernetes_service.frontend-external LoadBalancer"
+                        " -> kubernetes_deployment.frontend -> kubernetes_service.paymentservice ClusterIP"
+                        " -> kubernetes_deployment.paymentservice"
+                    )
+                ],
+            )
+        ])
+
+        path = payload["networkPaths"][0]
+        self.assertEqual(path["entryLabel"], "Internet / attacker")
+        self.assertEqual(path["entrySubtitle"], "public ingress then internal hop")
+        self.assertEqual(path["exposure"], "internal")
+
     def test_private_asset_without_path_evidence_is_marked_no_external_entry(self) -> None:
         payload = _visual_payload([finding_for_visual("batch", "private", [])])
 
@@ -133,6 +169,21 @@ class VisualPayloadTests(unittest.TestCase):
         self.assertEqual(vulns["asset:unused"]["codeExposure"], "not observed")
         self.assertEqual(vulns["asset:worker"]["codeExposure"], "no rule")
         self.assertIn("No package-specific source rule", vulns["asset:worker"]["codeExposureDetail"])
+
+    def test_html_uses_explicit_priority_score_labels_and_fan_edges(self) -> None:
+        html = render_html_report([
+            finding_for_visual(
+                "api",
+                "public",
+                ["terraform network path: public via aws_lb.edge public load balancer -> aws_ecs_service.api"],
+                tier=Tier.HIGH,
+                score=80.0,
+            )
+        ])
+
+        self.assertIn("function fanEdgePath", html)
+        self.assertIn("priority ${value || \"unknown\"}", html)
+        self.assertIn("network ${value || \"unknown\"}", html)
 
 
 if __name__ == "__main__":

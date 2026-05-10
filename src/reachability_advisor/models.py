@@ -97,6 +97,7 @@ class SbomDocument:
 class VulnerabilityRecord:
     id: str
     package_name: str
+    artifact_name: str | None = None
     package_purl: str | None = None
     affected_versions: list[str] = field(default_factory=list)
     aliases: list[str] = field(default_factory=list)

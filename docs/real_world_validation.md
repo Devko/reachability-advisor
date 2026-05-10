@@ -113,6 +113,59 @@ python scripts/run_external_grype_validation.py
 
 The script writes `outputs/external-grype/summary.json` and `summary.md`. Current result: 3 cases passed, 0 failed. The two source-heavy app cases intentionally keep Terraform artifact match coverage at `0.0` because static HCL cannot resolve their module/pipeline-driven image identity without a plan or explicit artifact alias; their prioritization proof comes from Grype parsing and source reachability.
 
+## Complex Application Validation
+
+`external_corpus/complex_app_cases.json` defines end-to-end validation cases that combine:
+
+- multiple deployable services;
+- real source trees in different ecosystems;
+- Grype-generated CycloneDX SBOMs;
+- Grype vulnerability JSON;
+- artifact-scoped vulnerability matching;
+- Terraform source analysis and optional Kubernetes manifest context;
+- source reachability;
+- the interactive HTML graph.
+
+The corpus currently contains two scale cases:
+
+| Case | Why it is useful |
+|---|---|
+| `aws-retail-store-sample-app` | Java, Go, and Node/TypeScript services plus AWS Terraform for ECS/EKS/App Runner-style deployment paths. It stresses artifact matching, source reachability, IAM/network context, and dense graph rendering. |
+| `google-online-boutique` | Ten Google Online Boutique microservices across Go, Python, Node.js, C#, and Java. It uses Kubernetes manifests to prove public frontend ingress and internal service hops, while Terraform source provides the GKE infrastructure surface. |
+
+Run the full corpus locally with existing checkouts and Grype DB:
+
+```bash
+python scripts/run_complex_app_validation.py \
+  --no-clone \
+  --strict
+```
+
+Run a single case by adding `--case <case-id>`. If a checkout does not exist and network access is available, omit `--no-clone`. The runner writes:
+
+- per-service SBOMs under `outputs/external-complex/<case>/sboms/`;
+- per-service Grype JSON under `outputs/external-complex/<case>/vulns/`;
+- a merged artifact-scoped Grype file at `outputs/external-complex/<case>/merged-grype.json`;
+- Kubernetes manifest context at `outputs/external-complex/<case>/kubernetes-context.json` when the case defines a manifest;
+- Reachability Advisor findings, mapping, Terraform coverage, and HTML graph under `outputs/external-complex/<case>/`;
+- aggregate `summary.json` and `summary.md` under `outputs/external-complex/`.
+
+Use `--refresh` to regenerate SBOM/vulnerability files. Use `--skip-grype` to reuse already generated SBOM/Grype files without invoking Grype.
+
+Current complex snapshot, using the local Grype DB available on 2026-05-10:
+
+| Case | Status | SBOMs | Grype matches | Findings | Services with findings | Terraform resources | Artifact match coverage |
+|---|---|---:|---:|---:|---:|---:|---:|
+| `aws-retail-store-sample-app` | passed | 5 | 40 | 40 | 2 | 91 | 0.4 |
+| `google-online-boutique` | passed | 10 | 38 | 38 | 5 | 5 | 0.0 |
+
+The low artifact match coverage is expected for source-only Terraform in this
+repository set: many deployable image identities flow through modules, unresolved
+locals, or Kubernetes manifests. The runner still produces a useful proof because
+it makes that gap explicit while validating Grype parsing, source reachability,
+Terraform resource classification, Kubernetes service exposure, IAM/network
+context for matched services, and the HTML graph.
+
 ## Expected findings from manual source inspection
 
 The public source inspection used to build the corpus showed these useful checks:

@@ -170,8 +170,32 @@ BUILTIN_RULES: tuple[ReachabilityRule, ...] = (
         package_name="axios",
         import_patterns=(r"require\(['\"]axios['\"]\)", r"from\s+['\"]axios['\"]", r"import\s+axios\s+from\s+['\"]axios['\"]"),
         function_patterns=(r"axios\.(get|post|put|patch|delete|request)\s*\(", r"axios\s*\(\s*\{"),
-        attacker_patterns=(r"req\.(body|query|params)", r"event\.body", r"request\.(body|query|params)", r"app\.(get|post|put|delete)\s*\("),
+        attacker_patterns=(r"req\.(body|query|params)", r"event\.body", r"request\.(body|query|params)", r"@Body\s*\(", r"@Param\s*\(", r"@Query\s*\(", r"app\.(get|post|put|delete)\s*\("),
         description="Axios outbound request built near request-controlled inputs",
+    ),
+    ReachabilityRule(
+        ecosystem="npm",
+        package_name="request",
+        import_patterns=(
+            r"require\(['\"]request['\"]\)",
+            r"import\s+[A-Za-z_$][\w$]*\s*=\s*require\(['\"]request['\"]\)",
+            r"from\s+['\"]request['\"]",
+        ),
+        function_patterns=(
+            r"\brequest\s*\(",
+            r"\brequest\.(get|post|put|patch|delete|defaults)\s*\(",
+            r"\blocalVarRequest\s*\(",
+            r"\blocalVarRequest\.(get|post|put|patch|delete|defaults)\s*\(",
+        ),
+        attacker_patterns=(
+            r"req\.(body|query|params|headers)",
+            r"event\.body",
+            r"@Body\s*\(",
+            r"@Param\s*\(",
+            r"@Query\s*\(",
+            r"\b(app|router)\.(get|post|put|patch|delete|all)\s*\(",
+        ),
+        description="Node request HTTP client use near HTTP handler inputs",
     ),
     ReachabilityRule(
         ecosystem="npm",
@@ -223,10 +247,25 @@ BUILTIN_RULES: tuple[ReachabilityRule, ...] = (
     ),
     ReachabilityRule(
         ecosystem="npm",
+        package_name="multer",
+        import_patterns=(r"require\(['\"]multer['\"]\)", r"from\s+['\"]multer['\"]", r"import\s+multer\s+from\s+['\"]multer['\"]"),
+        function_patterns=(r"multer\s*\(", r"\.(single|array|fields|none|any)\s*\("),
+        attacker_patterns=(r"req\.(file|files|body)", r"@UploadedFile\s*\(", r"@UploadedFiles\s*\(", r"fileFilter", r"storage"),
+        description="Multer upload handling near request-controlled file inputs",
+    ),
+    ReachabilityRule(
+        ecosystem="npm",
         package_name="minimist",
         import_patterns=(r"require\(['\"]minimist['\"]\)", r"from\s+['\"]minimist['\"]"),
         function_patterns=(r"minimist\s*\(", r"parseArgs\s*\("),
         description="minimist argument parser use",
+    ),
+    ReachabilityRule(
+        ecosystem="npm",
+        package_name="systeminformation",
+        import_patterns=(r"require\(['\"]systeminformation['\"]\)", r"from\s+['\"]systeminformation['\"]", r"from\s+['\"]systeminformation/lib/"),
+        function_patterns=(r"\bsi\.[A-Za-z_]\w*\s*\(", r"\bsysteminformation\.[A-Za-z_]\w*\s*\("),
+        description="systeminformation API use",
     ),
     ReachabilityRule(
         ecosystem="npm",
@@ -552,10 +591,11 @@ def _call_names(text: str) -> set[str]:
 def _regex_function_segments(text: str, language: str) -> list[FunctionSegment]:
     if language == "javascript":
         patterns = (
-            r"(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{",
-            r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\([^)]*\)\s*=>\s*\{",
-            r"exports\.([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?function\s*\([^)]*\)\s*\{",
-            r"module\.exports\.([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?function\s*\([^)]*\)\s*\{",
+            r"(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\([^{};]*\)\s*\{",
+            r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\([^{};]*\)\s*=>\s*\{",
+            r"exports\.([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?function\s*\([^{};]*\)\s*\{",
+            r"module\.exports\.([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?function\s*\([^{};]*\)\s*\{",
+            r"(?:public|private|protected|static|async|\s)*(?<![@\w$])([A-Za-z_$][\w$]*)\s*\([^{};]*\)\s*(?::\s*[^({;]+)?\s*\{",
         )
     elif language == "java":
         patterns = (r"(?:public|private|protected|static|final|synchronized|\s)+[\w<>\[\], ?]+\s+([A-Za-z_]\w*)\s*\([^;{}]*\)\s*(?:throws\s+[^{]+)?\{",)
@@ -568,6 +608,8 @@ def _regex_function_segments(text: str, language: str) -> list[FunctionSegment]:
     seen: set[tuple[str, int]] = set()
     for pattern in patterns:
         for match in re.finditer(pattern, text, flags=re.MULTILINE):
+            if match.group(1) in CALL_KEYWORDS:
+                continue
             open_index = text.find("{", match.end() - 1)
             if open_index == -1:
                 continue

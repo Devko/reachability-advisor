@@ -71,6 +71,30 @@ class SbomAndVulnTests(unittest.TestCase):
         matches = matching_vulnerabilities(sbom.components[0], vulns)
         self.assertEqual([m.id for m in matches], ["CVE-2021-44228"])
 
+    def test_matching_vulnerabilities_filters_artifact_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "scoped.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "vulnerabilities": [
+                            {
+                                "id": "CVE-SCOPED",
+                                "artifact": "checkout",
+                                "package": {"name": "lodash", "purl": "pkg:npm/lodash@4.17.20"},
+                                "affected_versions": ["4.17.20"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            vulns = load_vulnerabilities(path)
+        component = Component(name="lodash", version="4.17.20", purl="pkg:npm/lodash@4.17.20")
+        self.assertEqual([match.id for match in matching_vulnerabilities(component, vulns, "checkout")], ["CVE-SCOPED"])
+        self.assertEqual(matching_vulnerabilities(component, vulns, "ui"), [])
+        self.assertEqual([match.id for match in matching_vulnerabilities(component, vulns)], ["CVE-SCOPED"])
+
     def test_osv_style_parser(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "osv.json"
@@ -123,6 +147,30 @@ class SbomAndVulnTests(unittest.TestCase):
             sbom = load_sbom(ROOT / "samples/sboms/notifier.cdx.json")
             matches = matching_vulnerabilities(sbom.components[0], vulns)
             self.assertEqual([match.id for match in matches], ["GHSA-35jh-r3h4-6jhm"])
+
+    def test_grype_parser_preserves_artifact_scope_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "grype-scoped.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "matches": [
+                            {
+                                "reachability_advisor": {"artifact": "checkout"},
+                                "vulnerability": {"id": "CVE-SCOPED-GRYPE", "severity": "High"},
+                                "artifact": {"name": "request", "version": "2.88.2", "purl": "pkg:npm/request@2.88.2"},
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            vulns = load_vulnerabilities(path)
+        component = Component(name="request", version="2.88.2", purl="pkg:npm/request@2.88.2")
+        self.assertEqual(vulns[0].artifact_name, "checkout")
+        self.assertEqual([match.id for match in matching_vulnerabilities(component, vulns, "checkout")], ["CVE-SCOPED-GRYPE"])
+        self.assertEqual(matching_vulnerabilities(component, vulns, "orders"), [])
+
 
     def test_grype_parser_handles_edge_shapes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

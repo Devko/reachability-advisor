@@ -251,6 +251,43 @@ class SourceReachabilityV4Tests(unittest.TestCase):
         self.assertEqual(evidence.reachability, Reachability.ATTACKER_CONTROLLED)
         self.assertIn("direct source call path", evidence.reason)
 
+    def test_typescript_class_method_route_to_local_sink_is_attacker_controlled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "controller.ts").write_text(
+                "import { fetchUrl } from './sink';\n"
+                "class ReportController {\n"
+                "  @Get(':url')\n"
+                "  async show(@Param('url') url: string) { return fetchUrl(url); }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (root / "sink.ts").write_text(
+                "import axios from 'axios';\n"
+                "export function fetchUrl(url: string) { return axios.get(url); }\n",
+                encoding="utf-8",
+            )
+            evidence = analyze_component_source(Component(name="axios", purl="pkg:npm/axios@1.6.0"), root)
+        self.assertEqual(evidence.reachability, Reachability.ATTACKER_CONTROLLED)
+        self.assertIn("show->fetchUrl", " ".join(evidence.matched_symbols))
+
+    def test_node_request_generated_client_is_function_reachable_without_entrypoint_link(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "client.ts").write_text(
+                "import localVarRequest = require('request');\n"
+                "export class OrdersApi {\n"
+                "  public async createOrder(orderRequest: Order) {\n"
+                "    const localVarRequestOptions = { body: orderRequest };\n"
+                "    return localVarRequest(localVarRequestOptions, () => undefined);\n"
+                "  }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            evidence = analyze_component_source(Component(name="request", purl="pkg:npm/request@2.88.2"), root)
+        self.assertEqual(evidence.reachability, Reachability.FUNCTION_REACHABLE)
+        self.assertIn("request HTTP client", evidence.reason)
+
     def test_expanded_builtin_rules_cover_common_risk_families(self) -> None:
         cases = [
             (

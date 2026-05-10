@@ -2,13 +2,14 @@
 
 ## Current gates
 
-- Unit and workflow tests: 332.
+- Unit and workflow tests: 342.
 - Coverage threshold: 93%.
 - Current measured coverage: 94% line/branch-aware coverage report.
 - Compile check: `python -m compileall`.
 - Sample workflow: `make sample`.
 - Terraform fixture workflow: `make fixtures`.
 - Release validation: `make release-check`.
+- Complex real-world app validation: `make external-complex` (AWS Retail Store and Google Online Boutique).
 - Package build: `make package`.
 - CI matrix: Python 3.10, 3.11, 3.12.
 
@@ -37,6 +38,7 @@ The logic layer has tests for:
 - Weaker rationale when input/entrypoint evidence appears in a different file.
 - Java/Spring, Node/Express/NestJS, Python/FastAPI/Chainlit/aiohttp, common SSRF/template/JWT/XML/deserialization/archive package families, and Go source evidence.
 - CLI generation of mapping, coverage, SARIF, diagnostics, Markdown, HTML, and annotations.
+- Visual graph generation for public, internal, lateral, private, and Kubernetes public-ingress-to-internal-hop paths.
 - Generated output validation against repository JSON schemas through `scripts/validate_release.py`.
 
 ## Terraform quality bar

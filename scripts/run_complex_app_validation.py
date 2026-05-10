@@ -1,0 +1,754 @@
+#!/usr/bin/env python3
+"""Run complex real-world validation with Grype, source roots, and Terraform.
+
+The harness is intentionally local-first. It reuses existing checkouts under
+``external_corpus/worktrees`` and existing Grype cache locations when present.
+Network is only needed when a requested worktree is missing and cloning is
+allowed.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from reachability_advisor.cli import main as advisor_main  # noqa: E402
+from reachability_advisor.hcl_static import audit_hcl_project, render_hcl_audit_markdown  # noqa: E402
+
+
+DEFAULT_CORPUS = ROOT / "external_corpus" / "complex_app_cases.json"
+DEFAULT_WORKTREES = ROOT / "external_corpus" / "worktrees"
+DEFAULT_OUT = ROOT / "outputs" / "external-complex"
+DEFAULT_GRYPE = Path("C:/tmp/grype-install/bin/grype.exe")
+DEFAULT_GRYPE_DB = Path("C:/tmp/grype-db")
+
+
+def _root_path(value: str | Path) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else ROOT / path
+
+
+def _relative_cli_path(path: Path) -> str:
+    resolved = path.resolve()
+    try:
+        return str(resolved.relative_to(ROOT.resolve()))
+    except ValueError:
+        return str(resolved)
+
+
+def _safe_name(value: str) -> str:
+    safe = "".join(char if char.isalnum() or char in {"-", "_", "."} else "-" for char in value.strip())
+    return safe or "artifact"
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _write_json(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def _resolve_grype(explicit: str | None) -> Path | None:
+    candidates: list[Path] = []
+    if explicit:
+        candidates.append(Path(explicit))
+    env_value = os.environ.get("GRYPE")
+    if env_value:
+        candidates.append(Path(env_value))
+    path_value = shutil.which("grype")
+    if path_value:
+        candidates.append(Path(path_value))
+    candidates.append(DEFAULT_GRYPE)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _grype_env(cache_dir: str | None) -> dict[str, str]:
+    env = os.environ.copy()
+    if cache_dir:
+        env["GRYPE_DB_CACHE_DIR"] = str(_root_path(cache_dir))
+    elif "GRYPE_DB_CACHE_DIR" not in env and DEFAULT_GRYPE_DB.exists():
+        env["GRYPE_DB_CACHE_DIR"] = str(DEFAULT_GRYPE_DB)
+    env.setdefault("GRYPE_CHECK_FOR_APP_UPDATE", "false")
+    env.setdefault("GRYPE_DB_AUTO_UPDATE", "false")
+    return env
+
+
+def _run(command: list[str], cwd: Path = ROOT, env: dict[str, str] | None = None, log_base: Path | None = None) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(command, cwd=str(cwd), env=env, text=True, capture_output=True, check=False)
+    if log_base:
+        log_base.parent.mkdir(parents=True, exist_ok=True)
+        (log_base.parent / f"{log_base.name}.stdout.txt").write_text(result.stdout or "", encoding="utf-8")
+        (log_base.parent / f"{log_base.name}.stderr.txt").write_text(result.stderr or "", encoding="utf-8")
+    return result
+
+
+def _clone_or_reuse(case: dict[str, Any], worktrees: Path, no_clone: bool) -> Path:
+    checkout = worktrees / str(case.get("worktree") or case["id"])
+    if checkout.exists():
+        print(f"[reuse] {case['id']}: {checkout}")
+        return checkout
+    if no_clone:
+        raise FileNotFoundError(f"{case['id']}: checkout does not exist and --no-clone was set")
+    print(f"[clone] {case['id']}: {case['repo']}")
+    result = _run(["git", "clone", "--depth", "1", str(case["repo"]), str(checkout)])
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or f"git clone failed for {case['id']}")
+    return checkout
+
+
+def _scan_workload(
+    workload: dict[str, Any],
+    checkout: Path,
+    case_out: Path,
+    grype: Path,
+    env: dict[str, str],
+    refresh: bool,
+    skip_grype: bool,
+) -> dict[str, Any]:
+    artifact = str(workload["artifact"])
+    source = checkout / str(workload["source"])
+    sbom_path = case_out / "sboms" / f"{_safe_name(artifact)}.cdx.json"
+    grype_path = case_out / "vulns" / f"{_safe_name(artifact)}.grype.json"
+    row: dict[str, Any] = {
+        "artifact": artifact,
+        "source": str(source),
+        "sbom": str(sbom_path),
+        "grype": str(grype_path),
+        "status": "pending",
+        "matches": 0,
+        "warnings": [],
+    }
+    if not source.exists():
+        row.update({"status": "failed", "error": f"source path does not exist: {source}"})
+        return row
+    if skip_grype and (not sbom_path.exists() or not grype_path.exists()):
+        row.update({"status": "skipped", "error": "missing cached SBOM or Grype JSON while --skip-grype is set"})
+        return row
+
+    if refresh or not sbom_path.exists():
+        sbom_path.parent.mkdir(parents=True, exist_ok=True)
+        result = _run(
+            [
+                str(grype),
+                f"dir:{_relative_cli_path(source)}",
+                "-o",
+                "cyclonedx-json",
+                "--name",
+                artifact,
+                "--file",
+                str(sbom_path),
+            ],
+            env=env,
+            log_base=case_out / "logs" / f"{_safe_name(artifact)}.sbom",
+        )
+        if result.returncode != 0:
+            row.update({"status": "failed", "error": result.stderr.strip() or result.stdout.strip() or "Grype SBOM generation failed"})
+            return row
+        if result.stderr.strip():
+            row["warnings"].append(result.stderr.strip())
+
+    if refresh or not grype_path.exists():
+        grype_path.parent.mkdir(parents=True, exist_ok=True)
+        result = _run(
+            [str(grype), f"sbom:{_relative_cli_path(sbom_path)}", "-o", "json", "--file", str(grype_path)],
+            env=env,
+            log_base=case_out / "logs" / f"{_safe_name(artifact)}.vulns",
+        )
+        if result.returncode != 0:
+            row.update({"status": "failed", "error": result.stderr.strip() or result.stdout.strip() or "Grype vulnerability scan failed"})
+            return row
+        if result.stderr.strip():
+            row["warnings"].append(result.stderr.strip())
+
+    matches = _read_json(grype_path).get("matches")
+    row.update({"status": "passed", "matches": len(matches) if isinstance(matches, list) else 0})
+    return row
+
+
+def _merge_grype_reports(workload_rows: list[dict[str, Any]], output: Path) -> dict[str, Any]:
+    merged_matches: list[dict[str, Any]] = []
+    inputs: list[dict[str, Any]] = []
+    for row in workload_rows:
+        if row.get("status") != "passed":
+            continue
+        grype_path = Path(str(row["grype"]))
+        data = _read_json(grype_path)
+        matches = data.get("matches") if isinstance(data.get("matches"), list) else []
+        inputs.append({"artifact": row["artifact"], "path": str(grype_path), "matches": len(matches)})
+        for match in matches:
+            if not isinstance(match, dict):
+                continue
+            stamped = dict(match)
+            metadata = dict(stamped.get("reachability_advisor") or {})
+            metadata["artifact"] = row["artifact"]
+            stamped["reachability_advisor"] = metadata
+            merged_matches.append(stamped)
+    merged = {
+        "schema_version": "1.0",
+        "source": {"type": "reachability-advisor-complex-validation", "generated_at": dt.datetime.now(dt.UTC).isoformat()},
+        "inputs": inputs,
+        "matches": merged_matches,
+    }
+    _write_json(output, merged)
+    return {"path": str(output), "matches": len(merged_matches), "inputs": inputs}
+
+
+def _run_hcl_audit(terraform_source: Path, case_out: Path) -> dict[str, Any]:
+    audit_json = case_out / "hcl-audit.json"
+    audit_md = case_out / "hcl-audit.md"
+    report = audit_hcl_project(terraform_source).to_json()
+    _write_json(audit_json, report)
+    audit_md.write_text(render_hcl_audit_markdown(report), encoding="utf-8")
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    coverage = report.get("coverage") if isinstance(report.get("coverage"), dict) else {}
+    coverage_summary = coverage.get("summary") if isinstance(coverage.get("summary"), dict) else {}
+    return {
+        "path": str(audit_json),
+        "markdown": str(audit_md),
+        "tf_files": summary.get("tf_files", 0),
+        "resource_blocks": summary.get("resource_blocks", 0),
+        "module_blocks": summary.get("module_blocks", 0),
+        "semantic_classification_coverage": coverage_summary.get("semantic_classification_coverage"),
+        "visibility_gaps": len(coverage.get("visibility_gaps") or []),
+    }
+
+
+def _strip_yaml_value(value: str) -> str:
+    value = value.strip()
+    if value.startswith(("'", '"')) and value.endswith(("'", '"')) and len(value) >= 2:
+        return value[1:-1]
+    return value
+
+
+def _parse_simple_yaml_documents(path: Path) -> list[dict[str, Any]]:
+    """Parse the small scalar subset needed from Kubernetes manifests.
+
+    The validation harness only needs names, labels, selectors, and service
+    types. Keeping this local avoids adding a runtime YAML dependency just for
+    external corpus validation.
+    """
+
+    docs: list[dict[str, Any]] = []
+    for raw in path.read_text(encoding="utf-8").split("\n---"):
+        root: dict[str, Any] = {}
+        stack: list[tuple[int, dict[str, Any]]] = [(-1, root)]
+        for line in raw.splitlines():
+            without_comment = line.split("#", 1)[0].rstrip()
+            if not without_comment.strip() or without_comment.lstrip().startswith("- "):
+                continue
+            if ":" not in without_comment:
+                continue
+            indent = len(line) - len(line.lstrip(" "))
+            key, raw_value = without_comment.strip().split(":", 1)
+            key = key.strip()
+            if not key:
+                continue
+            while stack and indent <= stack[-1][0]:
+                stack.pop()
+            parent = stack[-1][1] if stack else root
+            value = raw_value.strip()
+            if value:
+                parent[key] = _strip_yaml_value(value)
+            else:
+                child: dict[str, Any] = {}
+                parent[key] = child
+                stack.append((indent, child))
+        if root.get("kind"):
+            docs.append(root)
+    return docs
+
+
+def _nested(mapping: dict[str, Any], *path: str) -> Any:
+    current: Any = mapping
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _manifest_metadata_name(doc: dict[str, Any]) -> str:
+    return str(_nested(doc, "metadata", "name") or "")
+
+
+def _label_values(mapping: Any) -> set[str]:
+    if not isinstance(mapping, dict):
+        return set()
+    keys = {"app", "name", "k8s-app", "app.kubernetes.io/name", "component"}
+    return {str(value) for key, value in mapping.items() if key in keys and value}
+
+
+def _deployment_names(doc: dict[str, Any]) -> set[str]:
+    names = {_manifest_metadata_name(doc)}
+    names.update(_label_values(_nested(doc, "metadata", "labels")))
+    names.update(_label_values(_nested(doc, "spec", "selector", "matchLabels")))
+    names.update(_label_values(_nested(doc, "spec", "template", "metadata", "labels")))
+    return {name for name in names if name}
+
+
+def _service_selector_names(doc: dict[str, Any]) -> set[str]:
+    names = {_manifest_metadata_name(doc)}
+    names.update(_label_values(_nested(doc, "spec", "selector")))
+    return {name for name in names if name}
+
+
+def _service_exposure(doc: dict[str, Any]) -> str:
+    service_type = str(_nested(doc, "spec", "type") or "ClusterIP")
+    name = _manifest_metadata_name(doc).lower()
+    if service_type in {"LoadBalancer", "NodePort"}:
+        return "public"
+    if service_type == "ExternalName" or "external" in name:
+        return "external"
+    return "internal"
+
+
+def _max_exposure(values: list[str]) -> str:
+    rank = {"unknown": 0, "isolated": 1, "private": 1, "internal": 2, "external": 3, "public": 4}
+    return max(values or ["unknown"], key=lambda value: rank.get(value, 0))
+
+
+def _generate_kubernetes_context(case: dict[str, Any], checkout: Path, workload_rows: list[dict[str, Any]], case_out: Path) -> dict[str, Any] | None:
+    manifest_name = case.get("kubernetes_manifest")
+    if not manifest_name:
+        return None
+    manifest = checkout / str(manifest_name)
+    if not manifest.exists():
+        return {"status": "missing", "path": str(manifest), "contexts": 0}
+
+    documents = _parse_simple_yaml_documents(manifest)
+    deployments = [doc for doc in documents if str(doc.get("kind")) in {"Deployment", "StatefulSet", "DaemonSet"}]
+    services = [doc for doc in documents if str(doc.get("kind")) == "Service"]
+    deployment_by_name: dict[str, dict[str, Any]] = {}
+    for deployment in deployments:
+        for name in _deployment_names(deployment):
+            deployment_by_name[name] = deployment
+    public_entry: tuple[dict[str, Any], dict[str, Any] | None] | None = None
+    for service in services:
+        if _service_exposure(service) != "public":
+            continue
+        target_names = _service_selector_names(service)
+        deployment = next((deployment_by_name[name] for name in target_names if name in deployment_by_name), None)
+        public_entry = (service, deployment)
+        break
+
+    passed_artifacts = {str(row["artifact"]) for row in workload_rows if row.get("status") == "passed"}
+    context: dict[str, Any] = {"schema_version": "1.0", "artifacts": {}}
+    matched_services = 0
+    for workload in case.get("workloads") or []:
+        artifact = str(workload["artifact"])
+        if artifact not in passed_artifacts:
+            continue
+        deployment = deployment_by_name.get(artifact)
+        service_matches = [service for service in services if artifact in _service_selector_names(service)]
+        exposures = [_service_exposure(service) for service in service_matches]
+        exposure = _max_exposure(exposures or (["private"] if deployment else ["unknown"]))
+        evidence: list[str] = []
+        deployment_ref = f"kubernetes_deployment.{_manifest_metadata_name(deployment) or artifact}" if deployment else f"kubernetes_workload.{artifact}"
+        for service in service_matches:
+            service_name = _manifest_metadata_name(service)
+            service_type = str(_nested(service, "spec", "type") or "ClusterIP")
+            service_exposure = _service_exposure(service)
+            evidence.append(f"context network path: {service_exposure} via kubernetes_service.{service_name} {service_type} -> {deployment_ref}")
+        if case.get("infer_cluster_lateral_from_public_entry") and public_entry and exposure == "internal":
+            entry_service, entry_deployment = public_entry
+            entry_service_name = _manifest_metadata_name(entry_service)
+            entry_service_type = str(_nested(entry_service, "spec", "type") or "ClusterIP")
+            entry_deployment_ref = (
+                f"kubernetes_deployment.{_manifest_metadata_name(entry_deployment)}" if entry_deployment else "kubernetes_workload.public-entry"
+            )
+            service_step = ""
+            if service_matches:
+                service = service_matches[0]
+                service_step = f" -> kubernetes_service.{_manifest_metadata_name(service)} {str(_nested(service, 'spec', 'type') or 'ClusterIP')}"
+            evidence.insert(
+                0,
+                f"context network path: internal via kubernetes_service.{entry_service_name} {entry_service_type} -> {entry_deployment_ref}{service_step} -> {deployment_ref}",
+            )
+        if not evidence:
+            evidence.append(f"context exposure inference: {exposure} via {deployment_ref}")
+        matched_services += len(service_matches)
+        context["artifacts"][artifact] = {
+            "environment": "prod",
+            "exposure": exposure,
+            "privilege": "unknown",
+            "criticality": "unknown",
+            "confidence": "medium",
+            "evidence": evidence,
+        }
+
+    output = case_out / "kubernetes-context.json"
+    _write_json(output, context)
+    return {
+        "status": "passed",
+        "path": str(output),
+        "manifest": str(manifest),
+        "workloads": len(context["artifacts"]),
+        "services": len(services),
+        "service_matches": matched_services,
+        "exposure_counts": _count_by([item for item in context["artifacts"].values()], "exposure"),
+    }
+
+
+def _run_advisor(
+    case: dict[str, Any],
+    checkout: Path,
+    workload_rows: list[dict[str, Any]],
+    merged_vulns: Path,
+    case_out: Path,
+    context_path: Path | None = None,
+) -> dict[str, Any]:
+    terraform_source = checkout / str(case["terraform_source"])
+    findings_out = case_out / "findings.json"
+    markdown_out = case_out / "summary.md"
+    html_out = case_out / "reachability-graph.html"
+    coverage_out = case_out / "terraform-coverage.json"
+    mapping_out = case_out / "mapping.json"
+    args = ["scan"]
+    for row in workload_rows:
+        if row.get("status") == "passed":
+            args.extend(["--sbom", str(row["sbom"])])
+    if context_path:
+        args.extend(["--context", str(context_path)])
+    args.extend(
+        [
+            "--vulns",
+            str(merged_vulns),
+            "--terraform-source",
+            str(terraform_source),
+            "--terraform-coverage-out",
+            str(coverage_out),
+            "--mapping-out",
+            str(mapping_out),
+            "--out",
+            str(findings_out),
+            "--markdown-out",
+            str(markdown_out),
+            "--html-out",
+            str(html_out),
+            "--no-table",
+        ]
+    )
+    for workload in case.get("workloads") or []:
+        artifact = str(workload["artifact"])
+        row = next((item for item in workload_rows if item.get("artifact") == artifact and item.get("status") == "passed"), None)
+        if not row:
+            continue
+        args.extend(["--source-root", f"{artifact}={checkout / str(workload['source'])}"])
+        for alias in workload.get("aliases") or []:
+            args.extend(["--artifact-alias", f"{artifact}={alias}"])
+    exit_code = advisor_main(args)
+    return {
+        "exit_code": exit_code,
+        "findings": str(findings_out),
+        "markdown": str(markdown_out),
+        "html": str(html_out),
+        "terraform_coverage": str(coverage_out),
+        "mapping": str(mapping_out),
+    }
+
+
+def _count_by(items: list[dict[str, Any]], key: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        value = item.get(key)
+        if value is None:
+            continue
+        counts[str(value)] = counts.get(str(value), 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _advisor_summary(advisor: dict[str, Any]) -> dict[str, Any]:
+    findings_path = Path(str(advisor["findings"]))
+    coverage_path = Path(str(advisor["terraform_coverage"]))
+    mapping_path = Path(str(advisor["mapping"]))
+    findings_doc = _read_json(findings_path) if findings_path.exists() else {}
+    coverage_doc = _read_json(coverage_path) if coverage_path.exists() else {}
+    mapping_doc = _read_json(mapping_path) if mapping_path.exists() else {}
+    findings = findings_doc.get("findings") if isinstance(findings_doc.get("findings"), list) else []
+    remediations = findings_doc.get("remediations") if isinstance(findings_doc.get("remediations"), list) else []
+    services_with_findings = sorted({str(item.get("artifact", {}).get("name")) for item in findings if isinstance(item.get("artifact"), dict)})
+    source_states: list[dict[str, Any]] = []
+    contexts: list[dict[str, Any]] = []
+    for finding in findings:
+        if isinstance(finding.get("source_reachability"), dict):
+            source_states.append({"state": finding["source_reachability"].get("state")})
+        if isinstance(finding.get("context"), dict):
+            contexts.append({"exposure": finding["context"].get("exposure"), "privilege": finding["context"].get("privilege")})
+    coverage_summary = coverage_doc.get("summary") if isinstance(coverage_doc.get("summary"), dict) else {}
+    mapping_summary = mapping_doc.get("summary") if isinstance(mapping_doc.get("summary"), dict) else {}
+    return {
+        "finding_count": len(findings),
+        "remediation_count": len(remediations),
+        "services_with_findings": len(services_with_findings),
+        "service_names_with_findings": services_with_findings,
+        "tier_counts": _count_by(remediations, "tier"),
+        "source_reachability_counts": _count_by(source_states, "state"),
+        "exposure_counts": _count_by(contexts, "exposure"),
+        "privilege_counts": _count_by(contexts, "privilege"),
+        "terraform_resources": coverage_summary.get("total_resources", 0),
+        "terraform_semantic_coverage": coverage_summary.get("semantic_classification_coverage"),
+        "terraform_artifact_match_coverage": coverage_summary.get("artifact_match_coverage"),
+        "terraform_artifacts_matched": coverage_summary.get("artifacts_matched", 0),
+        "mapping_warnings": len(mapping_doc.get("warnings") or []),
+        "mapping_artifacts_with_matches": mapping_summary.get("artifacts_with_terraform_matches", 0),
+        "top_remediations": [
+            {
+                "artifact": item.get("artifact", {}).get("name"),
+                "component": item.get("component", {}).get("display_name") or item.get("component", {}).get("name"),
+                "tier": item.get("tier"),
+                "score": item.get("max_score"),
+                "reachability": item.get("reachability"),
+                "exposure": item.get("context", {}).get("exposure") if isinstance(item.get("context"), dict) else None,
+            }
+            for item in remediations[:10]
+        ],
+    }
+
+
+def _evaluate_expectations(metrics: dict[str, Any], expectations: dict[str, Any]) -> list[dict[str, Any]]:
+    checks = [
+        ("min_sboms", metrics.get("sbom_count", 0), "SBOMs generated"),
+        ("min_vulnerability_matches", metrics.get("vulnerability_matches", 0), "Grype vulnerability matches"),
+        ("min_findings", metrics.get("finding_count", 0), "Reachability Advisor findings"),
+        ("min_services_with_findings", metrics.get("services_with_findings", 0), "services with findings"),
+        ("min_terraform_resources", metrics.get("terraform_resources", 0), "Terraform resources"),
+    ]
+    results: list[dict[str, Any]] = []
+    for key, actual, label in checks:
+        if key not in expectations:
+            continue
+        expected = expectations[key]
+        passed = float(actual or 0) >= float(expected)
+        results.append({"id": key, "label": label, "expected_min": expected, "actual": actual, "status": "passed" if passed else "failed"})
+    if metrics.get("html_exists") is not None:
+        results.append({"id": "html_report", "label": "HTML graph report exists", "expected": True, "actual": metrics["html_exists"], "status": "passed" if metrics["html_exists"] else "failed"})
+    return results
+
+
+def _run_case(case: dict[str, Any], args: argparse.Namespace, grype: Path | None) -> dict[str, Any]:
+    case_out = _root_path(args.outdir) / str(case["id"])
+    case_out.mkdir(parents=True, exist_ok=True)
+    row: dict[str, Any] = {
+        "id": case["id"],
+        "name": case.get("name"),
+        "repo": case.get("repo"),
+        "web": case.get("web"),
+        "status": "failed",
+        "started_at": dt.datetime.now(dt.UTC).isoformat(),
+        "output_dir": str(case_out),
+    }
+    try:
+        checkout = _clone_or_reuse(case, _root_path(args.worktrees), args.no_clone)
+        terraform_source = checkout / str(case["terraform_source"])
+        if not terraform_source.exists():
+            raise FileNotFoundError(f"Terraform source does not exist: {terraform_source}")
+        if grype is None and not args.skip_grype:
+            row.update({"status": "skipped", "error": "grype executable was not found"})
+            return row
+
+        env = _grype_env(args.grype_db_cache_dir)
+        workload_rows: list[dict[str, Any]] = []
+        for workload in case.get("workloads") or []:
+            if args.workload and workload.get("artifact") != args.workload:
+                continue
+            if args.skip_grype:
+                result = _scan_workload(workload, checkout, case_out, grype or Path("grype"), env, refresh=False, skip_grype=True)
+            else:
+                assert grype is not None
+                result = _scan_workload(workload, checkout, case_out, grype, env, args.refresh, skip_grype=False)
+            print(f"[{result['status']}] {case['id']}/{result['artifact']}: {result.get('matches', 0)} matches")
+            workload_rows.append(result)
+        passed_workloads = [item for item in workload_rows if item.get("status") == "passed"]
+        if not passed_workloads:
+            row.update({"status": "skipped", "workloads": workload_rows, "error": "no workload scans passed"})
+            return row
+
+        merged_vulns = case_out / "merged-grype.json"
+        merged_summary = _merge_grype_reports(passed_workloads, merged_vulns)
+        hcl_summary = _run_hcl_audit(terraform_source, case_out)
+        kubernetes_context = _generate_kubernetes_context(case, checkout, passed_workloads, case_out)
+        context_path = Path(str(kubernetes_context["path"])) if kubernetes_context and kubernetes_context.get("status") == "passed" else None
+        advisor = _run_advisor(case, checkout, passed_workloads, merged_vulns, case_out, context_path=context_path)
+        advisor_metrics = _advisor_summary(advisor)
+        metrics = {
+            "sbom_count": len(passed_workloads),
+            "vulnerability_matches": merged_summary["matches"],
+            "html_exists": Path(str(advisor["html"])).exists(),
+            **advisor_metrics,
+        }
+        expectation_results = _evaluate_expectations(metrics, case.get("expectations") or {})
+        failed_expectations = [item for item in expectation_results if item["status"] != "passed"]
+        failed_workloads = [item for item in workload_rows if item.get("status") not in {"passed"}]
+        status = "passed" if advisor["exit_code"] == 0 and not failed_expectations and not failed_workloads else "failed"
+        row.update(
+            {
+                "status": status,
+                "checkout": str(checkout),
+                "terraform_source": str(terraform_source),
+                "workloads": workload_rows,
+                "merged_vulnerabilities": merged_summary,
+                "hcl_audit": hcl_summary,
+                "kubernetes_context": kubernetes_context,
+                "advisor": advisor,
+                "metrics": metrics,
+                "expectations": expectation_results,
+                "expected_limitations": case.get("expected_limitations") or [],
+            }
+        )
+    except Exception as exc:  # noqa: BLE001 - validation should record all case failures.
+        row.update({"status": "failed", "error": str(exc)})
+    finally:
+        row["finished_at"] = dt.datetime.now(dt.UTC).isoformat()
+    _write_json(case_out / "case-summary.json", row)
+    _write_case_markdown(row, case_out / "case-summary.md")
+    return row
+
+
+def _write_case_markdown(row: dict[str, Any], path: Path) -> None:
+    lines = [f"# {row.get('name') or row['id']}", "", f"Status: `{row['status']}`", ""]
+    if row.get("error"):
+        lines.extend(["## Error", "", str(row["error"]), ""])
+    if row.get("metrics"):
+        metrics = row["metrics"]
+        lines.extend(
+            [
+                "## Metrics",
+                "",
+                "| Metric | Value |",
+                "|---|---:|",
+                f"| SBOMs | {metrics.get('sbom_count', 0)} |",
+                f"| Grype matches | {metrics.get('vulnerability_matches', 0)} |",
+                f"| Findings | {metrics.get('finding_count', 0)} |",
+                f"| Remediation groups | {metrics.get('remediation_count', 0)} |",
+                f"| Services with findings | {metrics.get('services_with_findings', 0)} |",
+                f"| Terraform resources | {metrics.get('terraform_resources', 0)} |",
+                f"| Terraform semantic coverage | {metrics.get('terraform_semantic_coverage')} |",
+                f"| Terraform artifact match coverage | {metrics.get('terraform_artifact_match_coverage')} |",
+                "",
+            ]
+        )
+    if row.get("expectations"):
+        lines.extend(["## Expectations", "", "| Check | Expected | Actual | Status |", "|---|---:|---:|---|"])
+        for check in row["expectations"]:
+            expected = check.get("expected_min", check.get("expected"))
+            lines.append(f"| {check['label']} | {expected} | {check.get('actual')} | {check['status']} |")
+        lines.append("")
+    top = (row.get("metrics") or {}).get("top_remediations") or []
+    if top:
+        lines.extend(["## Top Remediations", "", "| Artifact | Component | Tier | Score | Reachability | Exposure |", "|---|---|---|---:|---|---|"])
+        for item in top:
+            lines.append(
+                f"| `{item.get('artifact')}` | `{item.get('component')}` | {item.get('tier')} | {item.get('score')} | {item.get('reachability')} | {item.get('exposure')} |"
+            )
+        lines.append("")
+    if row.get("advisor"):
+        advisor = row["advisor"]
+        lines.extend(
+            [
+                "## Outputs",
+                "",
+                f"- Findings JSON: `{advisor.get('findings')}`",
+                f"- HTML graph: `{advisor.get('html')}`",
+                f"- Terraform coverage: `{advisor.get('terraform_coverage')}`",
+                f"- Mapping report: `{advisor.get('mapping')}`",
+                "",
+            ]
+        )
+    if row.get("expected_limitations"):
+        lines.extend(["## Known Limitations", ""])
+        lines.extend(f"- {item}" for item in row["expected_limitations"])
+        lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _write_aggregate_markdown(report: dict[str, Any], path: Path) -> None:
+    lines = [
+        "# Complex App Validation Summary",
+        "",
+        "| Case | Status | Workloads | Grype matches | Findings | Services | Terraform resources | Artifact match |",
+        "|---|---|---:|---:|---:|---:|---:|---:|",
+    ]
+    for row in report["cases"]:
+        metrics = row.get("metrics") or {}
+        lines.append(
+            f"| `{row['id']}` | {row['status']} | {metrics.get('sbom_count', 0)} | {metrics.get('vulnerability_matches', 0)} | "
+            f"{metrics.get('finding_count', 0)} | {metrics.get('services_with_findings', 0)} | {metrics.get('terraform_resources', 0)} | "
+            f"{metrics.get('terraform_artifact_match_coverage')} |"
+        )
+    lines.extend(["", "Outputs are written below `outputs/external-complex/<case-id>/`.", ""])
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def run(args: argparse.Namespace) -> int:
+    corpus_path = _root_path(args.corpus)
+    outdir = _root_path(args.outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    corpus = _read_json(corpus_path)
+    grype = _resolve_grype(args.grype)
+    if grype:
+        print(f"[tool] grype: {grype}")
+    elif not args.skip_grype:
+        print("[tool] grype: not found")
+    cases = []
+    for case in corpus.get("cases") or []:
+        if args.case and case.get("id") != args.case:
+            continue
+        cases.append(_run_case(case, args, grype))
+    report = {
+        "schema_version": "1.0",
+        "generated_at": dt.datetime.now(dt.UTC).isoformat(),
+        "corpus": str(corpus_path),
+        "case_count": len(cases),
+        "passed_count": sum(1 for case in cases if case["status"] == "passed"),
+        "failed_count": sum(1 for case in cases if case["status"] == "failed"),
+        "skipped_count": sum(1 for case in cases if case["status"] == "skipped"),
+        "cases": cases,
+    }
+    _write_json(outdir / "summary.json", report)
+    _write_aggregate_markdown(report, outdir / "summary.md")
+    print(f"Summary written to {outdir / 'summary.json'}")
+    if report["failed_count"] or (args.strict and report["skipped_count"]):
+        return 2
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--corpus", default=str(DEFAULT_CORPUS), help="Complex app corpus JSON path.")
+    parser.add_argument("--case", help="Run only one case id.")
+    parser.add_argument("--workload", help="Run only one workload artifact from the selected case.")
+    parser.add_argument("--worktrees", default=str(DEFAULT_WORKTREES), help="Directory containing or receiving repository checkouts.")
+    parser.add_argument("--outdir", default=str(DEFAULT_OUT), help="Directory for validation reports.")
+    parser.add_argument("--grype", help="Path to grype executable. Defaults to GRYPE, PATH, or C:/tmp/grype-install/bin/grype.exe.")
+    parser.add_argument("--grype-db-cache-dir", help="Grype DB cache directory. Defaults to GRYPE_DB_CACHE_DIR or C:/tmp/grype-db when present.")
+    parser.add_argument("--refresh", action="store_true", help="Regenerate SBOM and Grype JSON even when cached outputs exist.")
+    parser.add_argument("--skip-grype", action="store_true", help="Reuse existing SBOM and Grype JSON files only.")
+    parser.add_argument("--no-clone", action="store_true", help="Do not clone missing repositories.")
+    parser.add_argument("--strict", action="store_true", help="Return non-zero on skipped cases as well as failed cases.")
+    return parser
+
+
+def main() -> int:
+    return run(build_parser().parse_args())
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
