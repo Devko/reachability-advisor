@@ -2,7 +2,7 @@
 
 ## Current gates
 
-- Unit and workflow tests: 327.
+- Unit and workflow tests: 332.
 - Coverage threshold: 93%.
 - Current measured coverage: 94% line/branch-aware coverage report.
 - Compile check: `python -m compileall`.
@@ -33,9 +33,9 @@ The logic layer has tests for:
 - SBOM-to-source-root mapping reports.
 - Vulnerability-specific source reachability rules.
 - Custom reachability rule loading.
-- Same-file gating for `attacker_controlled` evidence.
+- Same-file and direct handler-to-sink gating for `attacker_controlled` evidence.
 - Weaker rationale when input/entrypoint evidence appears in a different file.
-- Java/Spring, Node/Express/NestJS, Python/FastAPI/Chainlit/aiohttp, and basic Go source evidence.
+- Java/Spring, Node/Express/NestJS, Python/FastAPI/Chainlit/aiohttp, common SSRF/template/JWT/XML/deserialization/archive package families, and Go source evidence.
 - CLI generation of mapping, coverage, SARIF, diagnostics, Markdown, HTML, and annotations.
 - Generated output validation against repository JSON schemas through `scripts/validate_release.py`.
 

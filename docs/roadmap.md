@@ -5,7 +5,7 @@
 - Local-first CLI.
 - CycloneDX JSON ingestion.
 - Grype, local vulnerability intelligence, and OSV-style parsers.
-- Java, Node, Python, and basic Go source heuristics.
+- Java, Node, Python, and Go source heuristics with direct handler-to-sink evidence.
 - Context JSON, Terraform plan context, and conservative HCL static context.
 - JSON, SARIF, diagnostics, Markdown, HTML graph, and annotation outputs.
 - Mapping reports, Terraform coverage reports, HCL audit reports, SBOM planning, and remediation groups.
@@ -72,9 +72,9 @@ Priority 4: Baseline and developer workflow
 - Conservative artifact identity matching with digest/repository/tag scores and reduced substring matching.
 - `--mapping-out` to inspect SBOM candidates, source roots, Terraform match scores, and warnings.
 - Vulnerability-aware source reachability rules.
-- Same-file requirement for `attacker_controlled` evidence.
+- Same-file and direct handler-to-sink requirement for `attacker_controlled` evidence.
 - Custom reachability rule JSON.
-- Basic Go import evidence.
+- Go import evidence plus common JWT/YAML sink hints.
 - Expanded test suite to 224 tests and raised the coverage gate to 93%.
 
 ## Completed milestone: Grype handoff and real-world validation
@@ -83,7 +83,7 @@ Priority 4: Baseline and developer workflow
 - Package-level remediation grouping with fixed-version recommendations when scanner data includes them.
 - HCL static audit mode for public Terraform repositories and early PR/IDE checks.
 - Real-world replay scripts for external HCL corpus validation and existing Grype/CycloneDX outputs.
-- Expanded source rules for Express, NestJS/Express, Spring Web, FastAPI, Chainlit, and aiohttp.
+- Expanded source rules for Express, NestJS/Express, Spring Web, FastAPI, Chainlit, aiohttp, common SSRF/template/JWT/XML/deserialization/archive families, and direct call-path evidence.
 - Linked IaC exposure inference instead of provider-wide public fallback for supported workload patterns.
 - Expanded test suite to 269 tests while keeping the coverage gate at 93%.
 

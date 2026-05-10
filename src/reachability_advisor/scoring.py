@@ -37,6 +37,7 @@ class ScorePolicy:
     reachability_points: dict[Reachability, float] = field(
         default_factory=lambda: {
             Reachability.ABSENT: -10.0,
+            Reachability.UNKNOWN_DUE_TO_NO_RULE: 3.0,
             Reachability.PACKAGE_PRESENT: 4.0,
             Reachability.IMPORTED: 14.0,
             Reachability.FUNCTION_REACHABLE: 24.0,
@@ -178,13 +179,13 @@ def score_finding(
         if points:
             score += points
             rationale.append(f"{label} {value} contributes {points:.1f} points")
-    if source.reachability == Reachability.PACKAGE_PRESENT and component.scope in {"test", "dev", "development"}:
+    if source.reachability in {Reachability.PACKAGE_PRESENT, Reachability.UNKNOWN_DUE_TO_NO_RULE} and component.scope in {"test", "dev", "development"}:
         score = min(score, 39.0)
         rationale.append("dev/test dependency without source usage is capped below high priority")
     if _private_no_ingress_cap_applies(vulnerability, source, context):
         score = min(score, policy.tier_thresholds[Tier.HIGH] - 1.0)
         rationale.append("private/no-ingress finding without attacker-controlled source, known exploitation, privilege, IAM impact, or high criticality is capped below high priority")
-    if source.reachability == Reachability.PACKAGE_PRESENT and context.exposure == "unknown":
+    if source.reachability in {Reachability.PACKAGE_PRESENT, Reachability.UNKNOWN_DUE_TO_NO_RULE} and context.exposure == "unknown":
         score -= 6.0
         rationale.append("weak evidence penalty subtracts 6.0 points")
     score = max(0.0, min(100.0, score))

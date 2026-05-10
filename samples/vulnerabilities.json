@@ -104,6 +104,24 @@
         "2.9.9.1"
       ],
       "summary": "Jackson Databind deserialization advisory sample."
+    },
+    {
+      "id": "RA-DEMO-NORULE",
+      "package": {
+        "name": "left-pad",
+        "purl": "pkg:npm/left-pad"
+      },
+      "affected_versions": [
+        "1.1.0"
+      ],
+      "severity": "high",
+      "cvss": 7.0,
+      "epss": 0.02,
+      "known_exploited": false,
+      "fixed_versions": [
+        "1.3.0"
+      ],
+      "summary": "Demo package with no built-in source reachability rule so visual output shows an uncovered code example."
     }
   ]
 }

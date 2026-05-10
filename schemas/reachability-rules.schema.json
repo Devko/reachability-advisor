@@ -9,14 +9,15 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["ecosystem", "package"],
+        "required": ["ecosystem", "package", "import_patterns"],
         "properties": {
           "ecosystem": {"type": "string"},
           "package": {"type": "string"},
           "vulnerabilities": {"type": "array", "items": {"type": "string"}},
           "import_patterns": {"type": "array", "items": {"type": "string"}},
           "function_patterns": {"type": "array", "items": {"type": "string"}},
-          "attacker_patterns": {"type": "array", "items": {"type": "string"}}
+          "attacker_patterns": {"type": "array", "items": {"type": "string"}},
+          "description": {"type": "string"}
         },
         "additionalProperties": false
       }

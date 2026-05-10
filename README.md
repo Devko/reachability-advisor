@@ -138,11 +138,14 @@ inventory-api / requests: high
 batch-worker / lodash: medium
   AWS ECS private security group + no detected ingress path + function-level source use
 
+batch-worker / left-pad: medium
+  AWS ECS private security group + package present, but no source rule/import evidence
+
 reports-api / requests: high
   AWS ECS internal-only security group + read-only IAM + function-level source use
 ```
 
-The checked-in sample intentionally covers the main network and IAM combinations:
+The checked-in sample intentionally covers the main network, IAM, and code-exposure combinations:
 
 | Case | Sample asset |
 |---|---|
@@ -154,6 +157,13 @@ The checked-in sample intentionally covers the main network and IAM combinations
 | No linked role | `batch-worker`, `notifier` |
 | Critical data-access role | `payments-api`, `audit-api` |
 | Read-only/limited role | `reports-api` |
+
+| Code exposure case | Sample finding |
+|---|---|
+| Covered by attacker-controlled code path | `payments-api / log4j-core`, `orders-api / requests`, `audit-api / jackson-databind`, `inventory-api / requests` |
+| Vulnerable sink observed, no attacker-controlled path proven | `batch-worker / lodash`, `reports-api / requests` |
+| Package present, source usage not observed | `payments-api / guava`, `notifier / minimist` |
+| Package present, no source rule/import evidence | `batch-worker / left-pad` |
 
 ## How mapping works
 
@@ -174,7 +184,7 @@ The mapper uses three guardrails:
 |---|---|
 | SBOM identity | Reads metadata component properties and external references; supports artifact aliases. |
 | Artifact matching | Uses explicit image/reference/digest/repository-tag scoring instead of permissive substring matching. |
-| Source reachability | Uses vulnerability-aware rules and requires same-file input evidence for `attacker_controlled`. |
+| Source reachability | Uses vulnerability-aware rules and requires same-file input evidence or a direct handler-to-sink call path for `attacker_controlled`. |
 
 Verify the logic with:
 
@@ -339,7 +349,7 @@ The `ide/vscode` directory contains a minimal VS Code extension skeleton. It inv
 | SBOM | CycloneDX JSON |
 | SBOM acquisition support | `sbom-plan` command with Syft, Trivy, Maven, npm, and Python suggestions |
 | Vulnerability input | Grype JSON, local JSON, and small OSV-Scanner-style JSON |
-| Source reachability | Java/Maven, Node/npm including Express, Python/PyPI including FastAPI/Chainlit/aiohttp, and basic Go import evidence |
+| Source reachability | Java/Maven, Node/npm, Python/PyPI, and Go rules with direct same-file and one-hop handler-to-sink evidence |
 | Custom source rules | `--reachability-rules` JSON |
 | Terraform context | AWS, Azure, GCP, and Kubernetes provider plan/source hints with coverage reporting and linked workload exposure inference |
 | Context JSON | Optional explicit context keyed by artifact name |
@@ -360,7 +370,7 @@ make package
 Current validation snapshot:
 
 ```text
-Ran 327 tests: OK
+Ran 332 tests: OK
 Coverage: 94%
 Coverage gate: 93% passed
 Fixture packs: 4 passed, 0 failed

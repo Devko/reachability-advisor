@@ -266,6 +266,8 @@ package-level fix queue before individual advisory rows. Each finding still
 includes artifact, component, vulnerability, source reachability, context,
 score, tier, confidence, rationale, fix commands, and policy status.
 
+`source_reachability.state` is one of `absent`, `unknown_due_to_no_rule`, `package_present`, `imported`, `function_reachable`, or `attacker_controlled`. The `unknown_due_to_no_rule` state is a coverage warning: the vulnerable package is present, but no package-specific source rule exists and generic import evidence was not observed.
+
 Schema draft: `schemas/findings.schema.json`.
 
 ## Visual HTML report
@@ -277,8 +279,8 @@ The report is a single HTML file with embedded JSON, CSS, and JavaScript. It doe
 It visualizes:
 
 - attacker entry and ingress/path cards derived from Terraform network-path evidence, such as Internet -> public security group/load balancer/application gateway -> workload;
-- deployable asset cards with network, IAM, source, environment, owner, and criticality context;
-- vulnerability cards linked to the affected asset;
+- deployable asset cards with network, IAM, code exposure, source, environment, owner, and criticality context;
+- vulnerability cards linked to the affected asset, including a plain code-exposure label such as `covered`, `reachable sink`, `not observed`, or `no rule`;
 - colors that emphasize the highest tier/criticality on each asset and vulnerability;
 - a searchable, filterable findings list with click-through details.
 

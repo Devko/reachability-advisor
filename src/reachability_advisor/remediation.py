@@ -11,10 +11,11 @@ from .models import Component, Finding, Reachability, Tier
 TIER_ORDER = {Tier.INFORMATIONAL: 0, Tier.LOW: 1, Tier.MEDIUM: 2, Tier.HIGH: 3, Tier.URGENT: 4}
 REACHABILITY_ORDER = {
     Reachability.ABSENT: 0,
-    Reachability.PACKAGE_PRESENT: 1,
-    Reachability.IMPORTED: 2,
-    Reachability.FUNCTION_REACHABLE: 3,
-    Reachability.ATTACKER_CONTROLLED: 4,
+    Reachability.UNKNOWN_DUE_TO_NO_RULE: 1,
+    Reachability.PACKAGE_PRESENT: 2,
+    Reachability.IMPORTED: 3,
+    Reachability.FUNCTION_REACHABLE: 4,
+    Reachability.ATTACKER_CONTROLLED: 5,
 }
 
 

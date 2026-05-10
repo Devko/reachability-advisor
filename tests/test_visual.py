@@ -6,13 +6,21 @@ from reachability_advisor.models import Artifact, Component, Confidence, Context
 from reachability_advisor.visual import _visual_payload
 
 
-def finding_for_visual(asset: str, exposure: str, evidence: list[str], *, tier: Tier = Tier.HIGH, score: float = 80.0) -> Finding:
+def finding_for_visual(
+    asset: str,
+    exposure: str,
+    evidence: list[str],
+    *,
+    tier: Tier = Tier.HIGH,
+    score: float = 80.0,
+    reachability: Reachability = Reachability.ATTACKER_CONTROLLED,
+) -> Finding:
     return Finding(
         key=f"{asset}|demo|1.0|CVE-DEMO",
         artifact=Artifact(name=asset, reference=f"repo/{asset}:1.0"),
         component=Component(name="demo", version="1.0", purl="pkg:npm/demo@1.0"),
         vulnerability=VulnerabilityRecord(id="CVE-DEMO", package_name="demo", severity="high", cvss=8.0, summary="demo vulnerability"),
-        source=SourceEvidence(reachability=Reachability.ATTACKER_CONTROLLED, confidence=Confidence.HIGH, reason="test evidence"),
+        source=SourceEvidence(reachability=reachability, confidence=Confidence.HIGH, reason="test evidence"),
         context=ContextEvidence(
             environment="prod",
             exposure=exposure,
@@ -105,6 +113,26 @@ class VisualPayloadTests(unittest.TestCase):
         self.assertEqual(path["entryLabel"], "Unknown entry")
         self.assertEqual(path["label"], "Unresolved network path")
         self.assertEqual(path["summary"], "The supplied context does not prove a network entry path.")
+
+    def test_code_exposure_labels_are_visible_on_assets_and_vulnerabilities(self) -> None:
+        payload = _visual_payload([
+            finding_for_visual("api", "public", [], reachability=Reachability.ATTACKER_CONTROLLED, tier=Tier.URGENT, score=95.0),
+            finding_for_visual("job", "private", [], reachability=Reachability.FUNCTION_REACHABLE, tier=Tier.MEDIUM, score=55.0),
+            finding_for_visual("unused", "private", [], reachability=Reachability.PACKAGE_PRESENT, tier=Tier.LOW, score=25.0),
+            finding_for_visual("worker", "private", [], reachability=Reachability.UNKNOWN_DUE_TO_NO_RULE, tier=Tier.MEDIUM, score=45.0),
+        ])
+
+        assets = {asset["name"]: asset for asset in payload["assets"]}
+        self.assertIn("covered", assets["api"]["codeExposures"])
+        self.assertIn("reachable sink", assets["job"]["codeExposures"])
+        self.assertIn("not observed", assets["unused"]["codeExposures"])
+        self.assertIn("no rule", assets["worker"]["codeExposures"])
+        vulns = {vuln["assetId"]: vuln for vuln in payload["vulnerabilities"]}
+        self.assertEqual(vulns["asset:api"]["codeExposure"], "covered")
+        self.assertEqual(vulns["asset:job"]["codeExposure"], "reachable sink")
+        self.assertEqual(vulns["asset:unused"]["codeExposure"], "not observed")
+        self.assertEqual(vulns["asset:worker"]["codeExposure"], "no rule")
+        self.assertIn("No package-specific source rule", vulns["asset:worker"]["codeExposureDetail"])
 
 
 if __name__ == "__main__":

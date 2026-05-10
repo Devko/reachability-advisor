@@ -61,6 +61,7 @@ def _visual_payload(findings: list[Finding], metadata: dict[str, Any] | None = N
                 "environments": [],
                 "iamImpacts": [],
                 "sourceStates": [],
+                "codeExposures": [],
                 "evidence": [],
                 "networkPaths": [],
             },
@@ -81,6 +82,8 @@ def _visual_payload(findings: list[Finding], metadata: dict[str, Any] | None = N
             "cvss": vulnerability.get("cvss"),
             "knownExploited": bool(vulnerability.get("known_exploited")),
             "reachability": source.get("state") or "unknown",
+            "codeExposure": _code_exposure_label(source.get("state") or "unknown"),
+            "codeExposureDetail": _code_exposure_detail(source.get("state") or "unknown"),
             "exposure": context.get("exposure") or "unknown",
             "privilege": context.get("privilege") or "unknown",
             "criticality": context.get("criticality") or "unknown",
@@ -140,6 +143,7 @@ def _raise_asset(asset: dict[str, Any], finding: dict[str, Any]) -> None:
     _append_unique(asset["criticalities"], context.get("criticality") or "unknown")
     _append_unique(asset["environments"], context.get("environment") or "unknown")
     _append_unique(asset["sourceStates"], source.get("state") or "unknown")
+    _append_unique(asset["codeExposures"], _code_exposure_label(source.get("state") or "unknown"))
     for impact in context.get("iam_impacts") or []:
         _append_unique(asset["iamImpacts"], impact)
     for item in context.get("evidence") or []:
@@ -335,6 +339,40 @@ def _fallback_path_summary(exposure: str) -> str:
     if exposure in {"private", "isolated"}:
         return "No direct or lateral ingress path was observed in the supplied context."
     return "The supplied context does not prove a network entry path."
+
+
+def _code_exposure_label(state: str) -> str:
+    state = str(state or "unknown").lower()
+    if state == "attacker_controlled":
+        return "covered"
+    if state == "function_reachable":
+        return "reachable sink"
+    if state == "imported":
+        return "import only"
+    if state == "unknown_due_to_no_rule":
+        return "no rule"
+    if state == "package_present":
+        return "not observed"
+    if state == "absent":
+        return "absent"
+    return "unknown"
+
+
+def _code_exposure_detail(state: str) -> str:
+    state = str(state or "unknown").lower()
+    if state == "attacker_controlled":
+        return "Source evidence links request/input handling to vulnerable package usage."
+    if state == "function_reachable":
+        return "Vulnerable package usage was observed, but no attacker-controlled entry path was proven."
+    if state == "imported":
+        return "The package is imported, but no vulnerable sink pattern was observed."
+    if state == "unknown_due_to_no_rule":
+        return "No package-specific source rule exists and generic import evidence was not observed."
+    if state == "package_present":
+        return "The package is present in the SBOM, but source usage was not observed."
+    if state == "absent":
+        return "The analyzer has explicit evidence that the package is absent from the scanned source scope."
+    return "Source reachability is unknown."
 
 
 def _append_unique(items: list[Any], value: Any) -> None:
@@ -609,6 +647,9 @@ label.check input {
 .chip.medium { background: #fef3c7; color: #92400e; }
 .chip.low { background: #dbeafe; color: #1e40af; }
 .chip.informational { background: #e2e8f0; color: #334155; }
+.chip.covered { background: #dcfce7; color: #166534; }
+.chip.reachable-sink, .chip.import-only { background: #fef3c7; color: #92400e; }
+.chip.not-observed, .chip.no-rule, .chip.absent { background: #e2e8f0; color: #334155; }
 .card.urgent { border-left-color: var(--urgent); }
 .card.high { border-left-color: var(--high); }
 .card.medium { border-left-color: var(--medium); }
@@ -786,7 +827,7 @@ const entryHeight = 88;
 const pathWidth = 248;
 const pathHeight = 122;
 const assetWidth = 360;
-const assetHeight = 218;
+const assetHeight = 260;
 const vulnWidth = 430;
 const vulnHeight = 94;
 const rowGap = 54;
@@ -1031,6 +1072,7 @@ function assetBody(asset) {
     contextRow("Ingress", paths.map(path => path.label).slice(0, 3)),
     contextRow("IAM", [...asset.privileges, ...asset.iamImpacts]),
     contextRow("Criticality", asset.criticalities),
+    contextRow("Code", asset.codeExposures),
     contextRow("Source", asset.sourceStates),
     contextRow("Environment", asset.environments)
   );
@@ -1042,7 +1084,7 @@ function assetBody(asset) {
 
 function renderVulnerabilityCard(vuln, position) {
   const card = createCard("vuln-card", vuln.tier, position, vuln);
-  const subtitle = `${vuln.component}@${vuln.componentVersion} | ${vuln.reachability} | ${vuln.exposure} | ${vuln.privilege}`;
+  const subtitle = `${vuln.component}@${vuln.componentVersion} | code ${vuln.codeExposure} | ${vuln.exposure} | ${vuln.privilege}`;
   card.append(
     cardTop(vuln.label, [vuln.tier, `${Number(vuln.score).toFixed(1)}`, vuln.severity, vuln.knownExploited ? "known exploited" : ""], subtitle),
     vulnBody(vuln)
@@ -1109,11 +1151,15 @@ function chips(values) {
   wrap.className = "chips";
   for (const value of (values || []).filter(Boolean).slice(0, 8)) {
     const chip = document.createElement("span");
-    chip.className = `chip ${String(value).toLowerCase()}`;
+    chip.className = `chip ${chipClass(value)}`;
     chip.textContent = String(value);
     wrap.appendChild(chip);
   }
   return wrap;
+}
+
+function chipClass(value) {
+  return String(value).toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "unknown";
 }
 
 function renderFindingList(findings) {
@@ -1138,7 +1184,7 @@ function renderFindingList(findings) {
     title.append(chip);
     const meta = document.createElement("div");
     meta.className = "item-meta";
-    meta.textContent = `${finding.artifact.name} | ${finding.source_reachability.state} | exposure ${(finding.context || {}).exposure || "unknown"} | privilege ${(finding.context || {}).privilege || "unknown"}`;
+    meta.textContent = `${finding.artifact.name} | code ${codeExposureFromState((finding.source_reachability || {}).state)} | source ${(finding.source_reachability || {}).state} | exposure ${(finding.context || {}).exposure || "unknown"} | privilege ${(finding.context || {}).privilege || "unknown"}`;
     item.append(title, meta);
     return item;
   }));
@@ -1168,7 +1214,9 @@ function renderDetails(datum) {
     section.append(chips([datum.tier, `${Number(datum.score).toFixed(1)} score`, datum.severity, datum.criticality]));
     section.append(kv({
       component: `${datum.component}@${datum.componentVersion}`,
-      reachability: datum.reachability,
+      "code exposure": datum.codeExposure,
+      "code detail": datum.codeExposureDetail,
+      "source state": datum.reachability,
       exposure: datum.exposure,
       privilege: datum.privilege,
       criticality: datum.criticality,
@@ -1178,6 +1226,7 @@ function renderDetails(datum) {
     appendList(section, "Rationale", datum.rationale || []);
     appendList(section, "Fix commands", datum.fixCommands || []);
     appendList(section, "Context evidence", datum.contextEvidence || []);
+    appendList(section, "Source evidence", datum.sourceReason ? [datum.sourceReason] : []);
     appendList(section, "Source locations", (datum.sourceLocations || []).map(location => `${location.path}:${location.line}`));
   } else {
     section.append(heading(`Asset: ${datum.name}`));
@@ -1188,6 +1237,7 @@ function renderDetails(datum) {
       network: datum.exposures,
       IAM: [...datum.privileges, ...datum.iamImpacts],
       criticality: datum.criticalities,
+      "code exposure": datum.codeExposures,
       source: datum.sourceStates,
       environment: datum.environments,
     }));
@@ -1196,6 +1246,16 @@ function renderDetails(datum) {
     appendList(section, "Linked vulnerabilities", DATA.vulnerabilities.filter(vuln => vuln.assetId === datum.id).map(vuln => `${vuln.tier} ${Number(vuln.score).toFixed(1)} ${vuln.label} in ${vuln.component}`));
   }
   details.replaceChildren(section);
+}
+
+function codeExposureFromState(state) {
+  if (state === "attacker_controlled") return "covered";
+  if (state === "function_reachable") return "reachable sink";
+  if (state === "imported") return "import only";
+  if (state === "unknown_due_to_no_rule") return "no rule";
+  if (state === "package_present") return "not observed";
+  if (state === "absent") return "absent";
+  return "unknown";
 }
 
 function heading(value) {

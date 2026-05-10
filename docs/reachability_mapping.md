@@ -52,21 +52,23 @@ States:
 
 | State | Meaning |
 |---|---|
+| `absent` | Reserved for explicit evidence that a package is not present in analyzed source or runtime scope. |
+| `unknown_due_to_no_rule` | Package is in the SBOM, but no package-specific source rule exists and generic import usage was not observed. |
 | `package_present` | Package is in the SBOM; no stronger source evidence was observed. |
 | `imported` | A matching import/require/use statement was observed. |
 | `function_reachable` | Import plus risky function/class usage was observed. |
-| `attacker_controlled` | Import, risky usage, and input/entrypoint evidence appear in the same file. |
+| `attacker_controlled` | Import, risky usage, and input/entrypoint evidence appear in the same file, or a direct static call path links an attacker-controlled handler to a sink function. |
 
-Same-file attacker control is deliberate. A web handler in one file and a risky library call in another file is useful evidence, but it is not enough to claim attacker-controlled reachability without a call graph. That case becomes `function_reachable` with explicit rationale.
+Same-file attacker control is still the conservative baseline. The analyzer also builds a lightweight function index and can promote direct handler-to-sink calls, including one-hop cross-file calls such as a route handler calling a service function that contains the vulnerable sink. Unlinked handlers elsewhere remain `function_reachable` with explicit rationale; the tool does not claim multi-hop dataflow proof.
 
 Supported built-in rule families:
 
 | Ecosystem | Examples |
 |---|---|
-| Maven/Java | Log4j, Jackson Databind, Guava |
-| npm/Node | lodash, minimist, Express |
-| PyPI/Python | requests, FastAPI, Chainlit, aiohttp |
-| Go | Generic import/package evidence |
+| Maven/Java | Log4j, Jackson Databind, SnakeYAML, Commons Text, JJWT, XML parsing, Commons Compress, Guava |
+| npm/Node | lodash, axios, jsonwebtoken, EJS, Handlebars, js-yaml, xml2js, adm-zip, minimist, Express, NestJS |
+| PyPI/Python | requests, PyYAML, Jinja2, PyJWT, lxml, Django, FastAPI, Chainlit, aiohttp |
+| Go | Generic import/package evidence plus common JWT/YAML sink hints |
 
 ## Step 4: custom reachability rules
 

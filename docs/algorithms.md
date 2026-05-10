@@ -75,21 +75,25 @@ Source reachability states:
 
 | State | Meaning |
 |---|---|
+| `absent` | Reserved for explicit evidence that a package is not present in analyzed source or runtime scope. |
+| `unknown_due_to_no_rule` | Component appears in the SBOM, but no package-specific source rule exists; generic import evidence was also not observed. |
 | `package_present` | Component appears in the SBOM, but no stronger source evidence was found. |
 | `imported` | Source imports/requires/uses the package. |
 | `function_reachable` | Source imports the package and contains usage patterns associated with vulnerable APIs or high-risk library functions. |
-| `attacker_controlled` | The same source file contains package import, risky usage, and input/entrypoint evidence. |
+| `attacker_controlled` | The same source file contains package import, risky usage, and input/entrypoint evidence, or a direct static handler-to-sink call path links entrypoint code to the vulnerable sink. |
 
-The same-file requirement prevents overclaiming. If an HTTP handler appears in one file and a risky library call appears in another file, the tool reports weaker `function_reachable` evidence unless a future call-graph plugin proves the path.
+The default analyzer now builds a lightweight function index for Python, JavaScript/TypeScript, Java, and Go. Python functions are extracted with the standard-library `ast` module; the other languages use conservative syntax patterns. It can promote direct same-file helper calls and one-hop cross-file handler-to-sink calls to `attacker_controlled`. It does not attempt full interprocedural dataflow, dependency injection resolution, async framework lifecycle modeling, or multi-hop call graphs.
 
 Rules are visible in `src/reachability_advisor/source.py`. Additional project-specific rules can be supplied with `--reachability-rules`.
 
 Built-in high-risk source rules currently cover common Java, Node, Python, and Go evidence:
 
-- Java/Maven import and sink patterns, including Log4j and Spring Web entrypoints;
-- Node/npm import and route/request patterns, including Express and NestJS on Express;
-- Python/PyPI import and handler patterns, including FastAPI, Chainlit, and aiohttp;
-- basic Go import evidence, with stronger evidence available through custom rules.
+- Java/Maven import and sink patterns, including Log4j, Jackson, SnakeYAML, Commons Text, JJWT, XML parsing, archive extraction, and Spring Web entrypoints;
+- Node/npm import and route/request patterns, including lodash, axios, jsonwebtoken, EJS, Handlebars, js-yaml, xml2js, archive extraction, Express, and NestJS on Express;
+- Python/PyPI import and handler patterns, including requests, PyYAML, Jinja2, PyJWT, lxml, Django, FastAPI, Chainlit, and aiohttp;
+- Go import and sink evidence for common JWT/YAML packages plus generic import evidence.
+
+The HTML report exposes these states as code-exposure labels. `attacker_controlled` is shown as `covered`; `function_reachable` as `reachable sink`; `imported` as `import only`; `package_present` as `not observed`; and `unknown_due_to_no_rule` as `no rule`.
 
 ## Remediation grouping
 

@@ -20,7 +20,8 @@ Use this checklist when reviewing a new repository, fixture pack, or release can
 
 - [ ] Source roots are supplied by artifact name.
 - [ ] Built-in rules or custom rules cover the package family under test.
-- [ ] `attacker_controlled` findings include same-file input/entrypoint evidence.
+- [ ] `attacker_controlled` findings include same-file input/entrypoint evidence or a direct handler-to-sink call path.
+- [ ] `unknown_due_to_no_rule` findings are reviewed as rule coverage gaps, not safe states.
 - [ ] Different-file input evidence is reported as weaker rationale, not overclaimed.
 
 ## Terraform reachability
@@ -36,7 +37,7 @@ Use this checklist when reviewing a new repository, fixture pack, or release can
 
 - [ ] SARIF and diagnostics point to source files when available.
 - [ ] PR summaries explain why a finding is high priority.
-- [ ] The HTML graph shows high-priority findings linked to asset, source, network, and IAM evidence.
+- [ ] The HTML graph shows high-priority findings linked to asset, code exposure, source, network, and IAM evidence.
 - [ ] `compare` gates only new or regressed findings when historical backlog exists.
 
 ## Safety

@@ -62,7 +62,7 @@ class SbomAndVulnTests(unittest.TestCase):
 
     def test_load_vulnerabilities(self) -> None:
         vulns = load_vulnerabilities(ROOT / "samples/vulnerabilities.json")
-        self.assertEqual(len(vulns), 6)
+        self.assertEqual(len(vulns), 7)
         self.assertTrue(any(v.known_exploited for v in vulns))
 
     def test_matching_vulnerabilities_filters_version(self) -> None:

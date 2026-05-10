@@ -7,12 +7,14 @@ Version 4 improves the logic in two important ways:
 * rules can be vulnerability-specific, so a package can have different sinks for
   different CVEs or advisories;
 * attacker-controlled classification requires import/use/input evidence in the
-  same file. Entry points elsewhere still increase confidence, but do not create
-  an unsafe exploitability claim.
+  same file or a direct handler-to-sink call path. Unlinked entry points
+  elsewhere still increase confidence, but do not create an unsafe exploitability
+  claim.
 """
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 from dataclasses import dataclass, field
@@ -59,6 +61,19 @@ class FileSignal:
     has_attacker: bool = False
     locations: list[SourceLocation] = field(default_factory=list)
     matched_symbols: set[str] = field(default_factory=set)
+    defined_functions: set[str] = field(default_factory=set)
+    sink_functions: set[str] = field(default_factory=set)
+    attacker_functions: set[str] = field(default_factory=set)
+    calls_by_function: dict[str, set[str]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class CallPath:
+    attacker_file: Path
+    attacker_function: str
+    sink_file: Path
+    sink_function: str
+    called_name: str
 
 
 BUILTIN_RULES: tuple[ReachabilityRule, ...] = (
@@ -75,9 +90,49 @@ BUILTIN_RULES: tuple[ReachabilityRule, ...] = (
         ecosystem="maven",
         package_name="jackson-databind",
         import_patterns=(r"import\s+com\.fasterxml\.jackson\.databind\.",),
-        function_patterns=(r"new\s+ObjectMapper\s*\(", r"\.readValue\s*\(", r"\.writeValueAsString\s*\("),
+        function_patterns=(r"new\s+ObjectMapper\s*\(", r"\.readValue\s*\(", r"\.writeValueAsString\s*\(", r"enableDefaultTyping\s*\(", r"activateDefaultTyping\s*\("),
         attacker_patterns=(r"@RequestBody", r"HttpServletRequest", r"request\.get", r"@PostMapping"),
         description="Jackson ObjectMapper use on request-like inputs",
+    ),
+    ReachabilityRule(
+        ecosystem="maven",
+        package_name="snakeyaml",
+        import_patterns=(r"import\s+org\.yaml\.snakeyaml\.",),
+        function_patterns=(r"new\s+Yaml\s*\(", r"\.load(?:All|As)?\s*\("),
+        attacker_patterns=(r"@RequestBody", r"HttpServletRequest", r"request\.get", r"@PostMapping", r"@RequestParam"),
+        description="SnakeYAML deserialization of request-controlled YAML",
+    ),
+    ReachabilityRule(
+        ecosystem="maven",
+        package_name="commons-text",
+        import_patterns=(r"import\s+org\.apache\.commons\.text\.",),
+        function_patterns=(r"StringSubstitutor\s*\(", r"StringSubstitutor\.createInterpolator\s*\(", r"\.replace\s*\("),
+        attacker_patterns=(r"@RequestBody", r"@RequestParam", r"HttpServletRequest", r"request\.get"),
+        description="Commons Text interpolation/template processing",
+    ),
+    ReachabilityRule(
+        ecosystem="maven",
+        package_name="jjwt-api",
+        import_patterns=(r"import\s+io\.jsonwebtoken\.",),
+        function_patterns=(r"Jwts\.parser(?:Builder)?\s*\(", r"\.parseClaimsJws\s*\(", r"\.parse\s*\("),
+        attacker_patterns=(r"Authorization", r"@RequestHeader", r"HttpServletRequest", r"request\.getHeader"),
+        description="JJWT token parsing or verification on request headers",
+    ),
+    ReachabilityRule(
+        ecosystem="maven",
+        package_name="xercesImpl",
+        import_patterns=(r"import\s+javax\.xml\.", r"import\s+org\.w3c\.dom\.", r"import\s+org\.xml\.sax\."),
+        function_patterns=(r"DocumentBuilderFactory\.newInstance\s*\(", r"SAXParserFactory\.newInstance\s*\(", r"\.parse\s*\("),
+        attacker_patterns=(r"@RequestBody", r"HttpServletRequest", r"request\.getInputStream", r"MultipartFile"),
+        description="XML parser use on request-controlled XML",
+    ),
+    ReachabilityRule(
+        ecosystem="maven",
+        package_name="commons-compress",
+        import_patterns=(r"import\s+org\.apache\.commons\.compress\.",),
+        function_patterns=(r"ArchiveStreamFactory\s*\(", r"ZipArchiveInputStream\s*\(", r"TarArchiveInputStream\s*\(", r"\.getNext.*Entry\s*\("),
+        attacker_patterns=(r"MultipartFile", r"@RequestBody", r"HttpServletRequest", r"request\.getInputStream"),
+        description="Archive extraction from request-controlled uploads",
     ),
     ReachabilityRule(
         ecosystem="maven",
@@ -109,6 +164,62 @@ BUILTIN_RULES: tuple[ReachabilityRule, ...] = (
         function_patterns=(r"_\.merge\s*\(", r"_\.template\s*\(", r"_\.set\s*\(", r"lodash\.merge\s*\("),
         attacker_patterns=(r"req\.(body|query|params)", r"event\.body", r"JSON\.parse\s*\(.*event\.body", r"exports\.handler", r"app\.(get|post|put|delete)\s*\("),
         description="Lodash merge/template/set usage near request or Lambda inputs",
+    ),
+    ReachabilityRule(
+        ecosystem="npm",
+        package_name="axios",
+        import_patterns=(r"require\(['\"]axios['\"]\)", r"from\s+['\"]axios['\"]", r"import\s+axios\s+from\s+['\"]axios['\"]"),
+        function_patterns=(r"axios\.(get|post|put|patch|delete|request)\s*\(", r"axios\s*\(\s*\{"),
+        attacker_patterns=(r"req\.(body|query|params)", r"event\.body", r"request\.(body|query|params)", r"app\.(get|post|put|delete)\s*\("),
+        description="Axios outbound request built near request-controlled inputs",
+    ),
+    ReachabilityRule(
+        ecosystem="npm",
+        package_name="jsonwebtoken",
+        import_patterns=(r"require\(['\"]jsonwebtoken['\"]\)", r"from\s+['\"]jsonwebtoken['\"]", r"import\s+(?:jwt|\*)\s+from\s+['\"]jsonwebtoken['\"]"),
+        function_patterns=(r"\bjwt\.(verify|decode|sign)\s*\(", r"jsonwebtoken\.(verify|decode|sign)\s*\("),
+        attacker_patterns=(r"req\.(headers|cookies|body)", r"Authorization", r"event\.headers", r"request\.headers"),
+        description="JWT parsing or verification on request-controlled tokens",
+    ),
+    ReachabilityRule(
+        ecosystem="npm",
+        package_name="ejs",
+        import_patterns=(r"require\(['\"]ejs['\"]\)", r"from\s+['\"]ejs['\"]"),
+        function_patterns=(r"ejs\.(render|compile|renderFile)\s*\(", r"\.render\s*\("),
+        attacker_patterns=(r"req\.(body|query|params)", r"event\.body", r"app\.(get|post|put|delete)\s*\("),
+        description="EJS template rendering near request-controlled inputs",
+    ),
+    ReachabilityRule(
+        ecosystem="npm",
+        package_name="handlebars",
+        import_patterns=(r"require\(['\"]handlebars['\"]\)", r"from\s+['\"]handlebars['\"]"),
+        function_patterns=(r"Handlebars\.compile\s*\(", r"handlebars\.compile\s*\("),
+        attacker_patterns=(r"req\.(body|query|params)", r"event\.body", r"app\.(get|post|put|delete)\s*\("),
+        description="Handlebars template compilation near request-controlled inputs",
+    ),
+    ReachabilityRule(
+        ecosystem="npm",
+        package_name="js-yaml",
+        import_patterns=(r"require\(['\"]js-yaml['\"]\)", r"from\s+['\"]js-yaml['\"]"),
+        function_patterns=(r"yaml\.load\s*\(", r"jsyaml\.load\s*\(", r"safeLoad\s*\("),
+        attacker_patterns=(r"req\.(body|query|params)", r"event\.body", r"app\.(get|post|put|delete)\s*\("),
+        description="js-yaml deserialization near request-controlled inputs",
+    ),
+    ReachabilityRule(
+        ecosystem="npm",
+        package_name="xml2js",
+        import_patterns=(r"require\(['\"]xml2js['\"]\)", r"from\s+['\"]xml2js['\"]"),
+        function_patterns=(r"parseString(?:Promise)?\s*\(", r"new\s+xml2js\.Parser\s*\(", r"\.parseString\s*\("),
+        attacker_patterns=(r"req\.(body|query|params)", r"event\.body", r"app\.(get|post|put|delete)\s*\("),
+        description="XML parsing near request-controlled input",
+    ),
+    ReachabilityRule(
+        ecosystem="npm",
+        package_name="adm-zip",
+        import_patterns=(r"require\(['\"]adm-zip['\"]\)", r"from\s+['\"]adm-zip['\"]"),
+        function_patterns=(r"new\s+AdmZip\s*\(", r"\.extractAllTo\s*\("),
+        attacker_patterns=(r"req\.(body|file|files)", r"multer", r"event\.body"),
+        description="Archive extraction from request-controlled uploads",
     ),
     ReachabilityRule(
         ecosystem="npm",
@@ -151,6 +262,46 @@ BUILTIN_RULES: tuple[ReachabilityRule, ...] = (
     ),
     ReachabilityRule(
         ecosystem="pypi",
+        package_name="pyyaml",
+        import_patterns=(r"^\s*import\s+yaml\b", r"^\s*from\s+yaml\s+import\s+"),
+        function_patterns=(r"yaml\.load\s*\(", r"\bload\s*\("),
+        attacker_patterns=(r"flask\.request", r"request\.(args|json|data|form|files|body)", r"FastAPI\(", r"@app\.(get|post|put|delete)"),
+        description="PyYAML deserialization of request-controlled YAML",
+    ),
+    ReachabilityRule(
+        ecosystem="pypi",
+        package_name="jinja2",
+        import_patterns=(r"^\s*import\s+jinja2\b", r"^\s*from\s+jinja2\s+import\s+"),
+        function_patterns=(r"Environment\s*\(", r"Template\s*\(", r"\.from_string\s*\(", r"\.render\s*\("),
+        attacker_patterns=(r"flask\.request", r"request\.(args|json|data|form)", r"FastAPI\(", r"@app\.(get|post|put|delete)"),
+        description="Jinja2 template construction/rendering near request-controlled input",
+    ),
+    ReachabilityRule(
+        ecosystem="pypi",
+        package_name="pyjwt",
+        import_patterns=(r"^\s*import\s+jwt\b", r"^\s*from\s+jwt\s+import\s+"),
+        function_patterns=(r"jwt\.(decode|encode)\s*\(", r"\bdecode\s*\("),
+        attacker_patterns=(r"Authorization", r"request\.(headers|cookies|json)", r"flask\.request", r"FastAPI\("),
+        description="PyJWT token parsing or verification on request-controlled tokens",
+    ),
+    ReachabilityRule(
+        ecosystem="pypi",
+        package_name="lxml",
+        import_patterns=(r"^\s*import\s+lxml\b", r"^\s*from\s+lxml\s+import\s+"),
+        function_patterns=(r"etree\.(fromstring|parse|XMLParser)\s*\(", r"\.xpath\s*\("),
+        attacker_patterns=(r"request\.(data|body|files|json|form)", r"flask\.request", r"@app\.(get|post|put|delete)"),
+        description="lxml XML parsing near request-controlled input",
+    ),
+    ReachabilityRule(
+        ecosystem="pypi",
+        package_name="django",
+        import_patterns=(r"^\s*import\s+django\b", r"^\s*from\s+django\s+import\s+", r"^\s*from\s+django\.",),
+        function_patterns=(r"render\s*\(", r"redirect\s*\(", r"JsonResponse\s*\(", r"Template\s*\("),
+        attacker_patterns=(r"\brequest\.(GET|POST|body|headers|FILES|META)\b", r"def\s+\w+\s*\(\s*request\b"),
+        description="Django view handling request-controlled input",
+    ),
+    ReachabilityRule(
+        ecosystem="pypi",
         package_name="fastapi",
         import_patterns=(r"^\s*import\s+fastapi\b", r"^\s*from\s+fastapi\s+import\s+"),
         function_patterns=(r"FastAPI\s*\(", r"APIRouter\s*\(", r"@(app|router)\.(get|post|put|patch|delete|api_route)\s*\("),
@@ -172,6 +323,22 @@ BUILTIN_RULES: tuple[ReachabilityRule, ...] = (
         function_patterns=(r"\bClientSession\s*\(", r"\bweb\.Application\s*\(", r"\bweb\.RouteTableDef\s*\(", r"@routes\.(get|post|put|patch|delete)\s*\("),
         attacker_patterns=(r"\bweb\.Request\b", r"\brequest\.(query|query_string|match_info|headers|json|post)\b", r"@routes\.(get|post|put|patch|delete)\s*\("),
         description="aiohttp client/server use with HTTP request or route entrypoint evidence",
+    ),
+    ReachabilityRule(
+        ecosystem="go",
+        package_name="jwt",
+        import_patterns=(r"import\s+\(?[^;]*[\"']github\.com/golang-jwt/jwt(?:/v[0-9]+)?[\"']", r"import\s+\(?[^;]*[\"']github\.com/dgrijalva/jwt-go[\"']"),
+        function_patterns=(r"jwt\.Parse(?:WithClaims)?\s*\(", r"ParseWithClaims\s*\("),
+        attacker_patterns=(r"\*http\.Request", r"\.Header\.Get\s*\(", r"\.URL\.Query\s*\(", r"gin\.Context"),
+        description="Go JWT parsing from HTTP request context",
+    ),
+    ReachabilityRule(
+        ecosystem="go",
+        package_name="yaml.v2",
+        import_patterns=(r"import\s+\(?[^;]*[\"']gopkg\.in/yaml\.v2[\"']", r"import\s+\(?[^;]*[\"']gopkg\.in/yaml\.v3[\"']"),
+        function_patterns=(r"yaml\.Unmarshal\s*\(", r"yaml\.NewDecoder\s*\("),
+        attacker_patterns=(r"\*http\.Request", r"\.Body", r"gin\.Context"),
+        description="Go YAML parsing from HTTP request context",
     ),
 )
 
@@ -264,6 +431,224 @@ def _snippet(text: str, index: int) -> str:
     return text[start:end].strip()[:200]
 
 
+@dataclass(frozen=True)
+class FunctionSegment:
+    name: str
+    start: int
+    end: int
+    text: str
+    calls: frozenset[str]
+
+
+CALL_KEYWORDS = {
+    "catch",
+    "class",
+    "def",
+    "for",
+    "function",
+    "if",
+    "new",
+    "return",
+    "switch",
+    "while",
+}
+
+
+def _line_offsets(text: str) -> list[int]:
+    offsets = [0]
+    for match in re.finditer(r"\n", text):
+        offsets.append(match.end())
+    return offsets
+
+
+def _line_start(text: str, index: int) -> int:
+    return text.rfind("\n", 0, index) + 1
+
+
+def _include_decorators(text: str, start: int) -> int:
+    cursor = _line_start(text, start)
+    while cursor > 0:
+        previous_end = cursor - 1
+        previous_start = _line_start(text, previous_end)
+        line = text[previous_start:previous_end].strip()
+        if not line or not line.startswith("@"):
+            break
+        cursor = previous_start
+    return cursor
+
+
+def _python_call_names(node: ast.AST) -> set[str]:
+    if isinstance(node, ast.Name):
+        return {node.id}
+    if isinstance(node, ast.Attribute):
+        parent = _python_call_names(node.value)
+        full = {f"{item}.{node.attr}" for item in parent}
+        full.add(node.attr)
+        return full
+    return set()
+
+
+def _python_function_segments(text: str) -> list[FunctionSegment]:
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return []
+    offsets = _line_offsets(text)
+    segments: list[FunctionSegment] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        start_line = node.lineno
+        for decorator in node.decorator_list:
+            start_line = min(start_line, getattr(decorator, "lineno", start_line))
+        end_line = getattr(node, "end_lineno", None) or node.lineno
+        start = offsets[max(0, start_line - 1)]
+        end = offsets[end_line] if end_line < len(offsets) else len(text)
+        calls: set[str] = set()
+        for child in ast.walk(node):
+            if isinstance(child, ast.Call):
+                calls.update(_python_call_names(child.func))
+        segments.append(FunctionSegment(name=node.name, start=start, end=end, text=text[start:end], calls=frozenset(calls)))
+    return segments
+
+
+def _matching_brace(text: str, open_index: int) -> int:
+    depth = 0
+    in_string: str | None = None
+    escape = False
+    for index in range(open_index, len(text)):
+        char = text[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == in_string:
+                in_string = None
+            continue
+        if char in {"'", '"', "`"}:
+            in_string = char
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return index + 1
+    return len(text)
+
+
+def _call_names(text: str) -> set[str]:
+    calls: set[str] = set()
+    for match in re.finditer(r"\b([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*\(", text):
+        name = match.group(1)
+        leaf = name.rsplit(".", 1)[-1]
+        if leaf in CALL_KEYWORDS:
+            continue
+        calls.add(name)
+        calls.add(leaf)
+    return calls
+
+
+def _regex_function_segments(text: str, language: str) -> list[FunctionSegment]:
+    if language == "javascript":
+        patterns = (
+            r"(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{",
+            r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\([^)]*\)\s*=>\s*\{",
+            r"exports\.([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?function\s*\([^)]*\)\s*\{",
+            r"module\.exports\.([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?function\s*\([^)]*\)\s*\{",
+        )
+    elif language == "java":
+        patterns = (r"(?:public|private|protected|static|final|synchronized|\s)+[\w<>\[\], ?]+\s+([A-Za-z_]\w*)\s*\([^;{}]*\)\s*(?:throws\s+[^{]+)?\{",)
+    elif language == "go":
+        patterns = (r"func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)\s*\([^)]*\)\s*(?:[^{]*)\{",)
+    else:
+        return []
+
+    segments: list[FunctionSegment] = []
+    seen: set[tuple[str, int]] = set()
+    for pattern in patterns:
+        for match in re.finditer(pattern, text, flags=re.MULTILINE):
+            open_index = text.find("{", match.end() - 1)
+            if open_index == -1:
+                continue
+            start = _include_decorators(text, match.start())
+            end = _matching_brace(text, open_index)
+            key = (match.group(1), start)
+            if key in seen:
+                continue
+            seen.add(key)
+            body = text[start:end]
+            segments.append(FunctionSegment(name=match.group(1), start=start, end=end, text=body, calls=frozenset(_call_names(body))))
+    return segments
+
+
+def _function_segments(path: Path, text: str) -> list[FunctionSegment]:
+    language = _language_for(path)
+    if language == "python":
+        return _python_function_segments(text)
+    return _regex_function_segments(text, language)
+
+
+def _matches_any(patterns: tuple[str, ...], text: str) -> bool:
+    for pattern in patterns:
+        try:
+            if re.search(pattern, text, flags=re.MULTILINE):
+                return True
+        except re.error:
+            continue
+    return False
+
+
+def _route_handler_names(text: str, language: str) -> set[str]:
+    names: set[str] = set()
+    if language == "javascript":
+        for match in re.finditer(r"\b(?:app|router)\.(?:get|post|put|patch|delete|all|use)\s*\([^,\n]+,\s*([A-Za-z_$][\w$]*)", text):
+            names.add(match.group(1))
+    return names
+
+
+def _add_semantic_signals(signal: FileSignal, text: str, function_patterns: tuple[str, ...], attacker_patterns: tuple[str, ...]) -> None:
+    segments = _function_segments(signal.path, text)
+    route_handlers = _route_handler_names(text, signal.language)
+    for segment in segments:
+        signal.defined_functions.add(segment.name)
+        signal.calls_by_function[segment.name] = set(segment.calls)
+        if _matches_any(function_patterns, segment.text):
+            signal.sink_functions.add(segment.name)
+        if _matches_any(attacker_patterns, segment.text) or segment.name in route_handlers:
+            signal.attacker_functions.add(segment.name)
+    for handler in route_handlers:
+        signal.attacker_functions.add(handler)
+
+
+def _find_direct_call_path(signals: list[FileSignal]) -> CallPath | None:
+    sinks: dict[str, tuple[FileSignal, str]] = {}
+    for signal in signals:
+        if not signal.has_import or not signal.has_function:
+            continue
+        for name in signal.sink_functions:
+            sinks.setdefault(name.lower(), (signal, name))
+    if not sinks:
+        return None
+    for signal in signals:
+        for attacker_function in sorted(signal.attacker_functions):
+            for called_name in sorted(signal.calls_by_function.get(attacker_function, set())):
+                sink = sinks.get(called_name.lower())
+                if not sink:
+                    continue
+                sink_signal, sink_function = sink
+                if signal.path == sink_signal.path and attacker_function == sink_function:
+                    continue
+                return CallPath(
+                    attacker_file=signal.path,
+                    attacker_function=attacker_function,
+                    sink_file=sink_signal.path,
+                    sink_function=sink_function,
+                    called_name=called_name,
+                )
+    return None
+
+
 def _rules_for(component: Component, vulnerability: VulnerabilityRecord | None, custom_rules: Iterable[ReachabilityRule]) -> tuple[ReachabilityRule, ...]:
     custom = tuple(rule for rule in custom_rules if rule.applies_to(component, vulnerability))
     builtin = tuple(rule for rule in BUILTIN_RULES if rule.applies_to(component, vulnerability))
@@ -332,6 +717,7 @@ def _scan_file(path: Path, text: str, import_patterns: tuple[str, ...], function
                     signal.has_function = True
                 elif marker == "attacker":
                     signal.has_attacker = True
+    _add_semantic_signals(signal, text, function_patterns, attacker_patterns)
     return signal
 
 
@@ -358,7 +744,9 @@ def analyze_component_source(
         )
 
     rules = _rules_for(component, vulnerability, custom_rules)
-    import_patterns = tuple(dict.fromkeys(pattern for rule in rules for pattern in rule.import_patterns)) or _generic_patterns(component)
+    has_package_rule = bool(rules)
+    generic_patterns = _generic_patterns(component)
+    import_patterns = tuple(dict.fromkeys(pattern for rule in rules for pattern in rule.import_patterns)) or generic_patterns
     function_patterns = tuple(dict.fromkeys(pattern for rule in rules for pattern in rule.function_patterns))
     attacker_patterns = tuple(dict.fromkeys(pattern for rule in rules for pattern in rule.attacker_patterns))
 
@@ -371,6 +759,15 @@ def analyze_component_source(
         signal = _scan_file(file_path, text, import_patterns, function_patterns, attacker_patterns)
         if signal.has_import or signal.has_function or signal.has_attacker:
             signals.append(signal)
+
+    if not signals and not has_package_rule:
+        language = _language_for(files[0]) if files else "unknown"
+        return SourceEvidence(
+            reachability=Reachability.UNKNOWN_DUE_TO_NO_RULE,
+            confidence=Confidence.LOW,
+            language=language,
+            reason="component appears in SBOM; no package-specific source rule exists and generic import usage was not observed",
+        )
 
     if not signals:
         language = _language_for(files[0]) if files else "unknown"
@@ -387,10 +784,26 @@ def analyze_component_source(
     same_file_attacker = any(signal.has_import and signal.has_function and signal.has_attacker for signal in signals)
     same_file_function = any(signal.has_import and signal.has_function for signal in signals)
     imported_only = any(signal.has_import for signal in signals)
+    call_path = _find_direct_call_path(signals)
     locations = [location for signal in signals for location in signal.locations][:8]
     symbols = sorted({symbol for signal in signals for symbol in signal.matched_symbols})
     language = _dominant_language(signals)
     rule_text = _rule_text(rules, vulnerability)
+
+    if call_path:
+        call_symbol = f"call_path:{call_path.attacker_function}->{call_path.called_name}->{call_path.sink_function}"
+        return SourceEvidence(
+            reachability=Reachability.ATTACKER_CONTROLLED,
+            confidence=Confidence.HIGH if vulnerability and rules else Confidence.MEDIUM,
+            language=language,
+            reason=(
+                f"{rule_text}; direct source call path links attacker-controlled entrypoint "
+                f"{call_path.attacker_function} in {call_path.attacker_file.name} to vulnerable-function sink "
+                f"{call_path.sink_function} in {call_path.sink_file.name}"
+            ),
+            locations=locations,
+            matched_symbols=sorted({*symbols, call_symbol}),
+        )
 
     if same_file_attacker:
         return SourceEvidence(
@@ -404,7 +817,7 @@ def analyze_component_source(
     if same_file_function:
         reason = f"{rule_text}; same source file contains import and vulnerable-function usage hints"
         if has_attacker_any:
-            reason += "; attacker entrypoint was observed elsewhere but no same-file link was inferred"
+            reason += "; attacker entrypoint was observed elsewhere but no same-file or direct call-path link was inferred"
         return SourceEvidence(
             reachability=Reachability.FUNCTION_REACHABLE,
             confidence=Confidence.MEDIUM,

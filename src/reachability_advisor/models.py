@@ -22,6 +22,7 @@ class Reachability(str, Enum):
     """
 
     ABSENT = "absent"
+    UNKNOWN_DUE_TO_NO_RULE = "unknown_due_to_no_rule"
     PACKAGE_PRESENT = "package_present"
     IMPORTED = "imported"
     FUNCTION_REACHABLE = "function_reachable"

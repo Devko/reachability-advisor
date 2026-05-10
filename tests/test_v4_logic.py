@@ -206,6 +206,77 @@ class SourceReachabilityV4Tests(unittest.TestCase):
         self.assertEqual(evidence.reachability, Reachability.IMPORTED)
         self.assertEqual(evidence.language, "go")
 
+    def test_unknown_due_to_no_rule_is_explicit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "app.js").write_text("console.log('no package usage here');\n", encoding="utf-8")
+            evidence = analyze_component_source(Component(name="left-pad", purl="pkg:npm/left-pad@1.0.0"), root)
+        self.assertEqual(evidence.reachability, Reachability.UNKNOWN_DUE_TO_NO_RULE)
+        self.assertIn("no package-specific source rule", evidence.reason)
+
+    def test_python_cross_file_handler_to_sink_is_attacker_controlled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "api.py").write_text(
+                "from fastapi import FastAPI, Request\n"
+                "from client import fetch_report\n\n"
+                "app = FastAPI()\n"
+                "@app.get('/report')\n"
+                "async def report(request: Request):\n"
+                "    return fetch_report(request.query_params['url'])\n",
+                encoding="utf-8",
+            )
+            (root / "client.py").write_text(
+                "import requests\n\n"
+                "def fetch_report(url):\n"
+                "    return requests.get(url, timeout=2).text\n",
+                encoding="utf-8",
+            )
+            evidence = analyze_component_source(Component(name="requests", purl="pkg:pypi/requests@2.19.0"), root)
+        self.assertEqual(evidence.reachability, Reachability.ATTACKER_CONTROLLED)
+        self.assertIn("direct source call path", evidence.reason)
+        self.assertTrue(any(symbol.startswith("call_path:") for symbol in evidence.matched_symbols))
+
+    def test_javascript_route_to_local_sink_is_attacker_controlled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "app.js").write_text(
+                "const axios = require('axios');\n"
+                "function fetchUrl(url) { return axios.get(url); }\n"
+                "function showReport(req, res) { return fetchUrl(req.query.url); }\n"
+                "app.get('/report', showReport);\n",
+                encoding="utf-8",
+            )
+            evidence = analyze_component_source(Component(name="axios", purl="pkg:npm/axios@1.6.0"), root)
+        self.assertEqual(evidence.reachability, Reachability.ATTACKER_CONTROLLED)
+        self.assertIn("direct source call path", evidence.reason)
+
+    def test_expanded_builtin_rules_cover_common_risk_families(self) -> None:
+        cases = [
+            (
+                Component(name="pyyaml", purl="pkg:pypi/pyyaml@5.3"),
+                "api.py",
+                "import yaml\nfrom fastapi import FastAPI, Request\napp = FastAPI()\n@app.post('/yaml')\nasync def parse(request: Request):\n    return yaml.load(await request.body())\n",
+            ),
+            (
+                Component(name="jsonwebtoken", purl="pkg:npm/jsonwebtoken@8.5.0"),
+                "auth.js",
+                "const jwt = require('jsonwebtoken');\nfunction auth(req) { return jwt.verify(req.headers.authorization, 'secret'); }\n",
+            ),
+            (
+                Component(name="snakeyaml", purl="pkg:maven/org.yaml/snakeyaml@1.26"),
+                "YamlController.java",
+                "import org.yaml.snakeyaml.Yaml;\nclass C { @PostMapping(\"/yaml\") Object parse(@RequestBody String body) { return new Yaml().load(body); }}\n",
+            ),
+        ]
+        for component, filename, source in cases:
+            with self.subTest(component=component.name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    (root / filename).write_text(source, encoding="utf-8")
+                    evidence = analyze_component_source(component, root)
+                self.assertEqual(evidence.reachability, Reachability.ATTACKER_CONTROLLED)
+
     def test_source_scanner_ignores_node_modules(self) -> None:
         component = Component(name="lodash", purl="pkg:npm/lodash@4.17.20")
         with tempfile.TemporaryDirectory() as tmp:
