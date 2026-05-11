@@ -203,7 +203,7 @@ def _merge_grype_reports(workload_rows: list[dict[str, Any]], output: Path) -> d
             merged_matches.append(stamped)
     merged = {
         "schema_version": "1.0",
-        "source": {"type": "reachability-advisor-complex-validation", "generated_at": dt.datetime.now(dt.UTC).isoformat()},
+        "source": {"type": "reachability-advisor-complex-validation", "generated_at": dt.datetime.now(dt.timezone.utc).isoformat()},
         "inputs": inputs,
         "matches": merged_matches,
     }
@@ -555,7 +555,7 @@ def _run_case(case: dict[str, Any], args: argparse.Namespace, grype: Path | None
         "repo": case.get("repo"),
         "web": case.get("web"),
         "status": "failed",
-        "started_at": dt.datetime.now(dt.UTC).isoformat(),
+        "started_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "output_dir": str(case_out),
     }
     try:
@@ -619,7 +619,7 @@ def _run_case(case: dict[str, Any], args: argparse.Namespace, grype: Path | None
     except Exception as exc:  # noqa: BLE001 - validation should record all case failures.
         row.update({"status": "failed", "error": str(exc)})
     finally:
-        row["finished_at"] = dt.datetime.now(dt.UTC).isoformat()
+        row["finished_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
     _write_json(case_out / "case-summary.json", row)
     _write_case_markdown(row, case_out / "case-summary.md")
     return row
@@ -717,7 +717,7 @@ def run(args: argparse.Namespace) -> int:
         cases.append(_run_case(case, args, grype))
     report = {
         "schema_version": "1.0",
-        "generated_at": dt.datetime.now(dt.UTC).isoformat(),
+        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "corpus": str(corpus_path),
         "case_count": len(cases),
         "passed_count": sum(1 for case in cases if case["status"] == "passed"),
