@@ -25,6 +25,7 @@ if str(SRC) not in sys.path:
 
 from reachability_advisor import __version__  # noqa: E402
 from reachability_advisor.cli import main as cli_main  # noqa: E402
+
 from scripts import run_complex_app_validation as complex_validation  # noqa: E402
 
 

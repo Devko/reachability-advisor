@@ -4,8 +4,7 @@ import json
 import unittest
 from pathlib import Path
 
-from scripts import run_complex_app_validation
-from scripts import validate_release
+from scripts import run_complex_app_validation, validate_release
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMAS = ROOT / "schemas"
