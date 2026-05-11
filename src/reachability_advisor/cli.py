@@ -94,6 +94,12 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--artifact-alias", action="append", default=[], help="Add artifact mapping alias: artifact=reference. Repeatable; use when SBOM metadata lacks image refs.")
     scan.add_argument("--reachability-rules", help="Custom source reachability rules JSON.")
     scan.add_argument("--source-evidence-in", action="append", default=[], help="External source evidence JSON, Semgrep JSON, SARIF, or govulncheck JSONL. Repeatable.")
+    scan.add_argument(
+        "--analysis-profile",
+        choices=["advisory", "production"],
+        default="advisory",
+        help="advisory keeps local heuristics permissive; production requires external source evidence and rendered deployment evidence.",
+    )
     scan.add_argument("--min-artifact-match-coverage", type=float, help="Exit 10 when SBOM-to-deployment artifact match coverage is below this 0..1 ratio.")
     scan.add_argument("--min-strong-artifact-identity-coverage", type=float, help="Exit 10 when strong image/digest identity coverage is below this 0..1 ratio.")
     scan.add_argument("--fail-on-mapping-warnings", action="store_true", help="Exit 10 when the mapping report contains artifact identity, source-root, or Terraform match warnings.")
@@ -338,7 +344,9 @@ def run_scan(args: argparse.Namespace) -> int:
         "kubernetes_resources": kubernetes_coverage.get("summary", {}).get("total_resources", 0),
         "source_files": source_coverage.get("summary", {}).get("files_scanned", 0),
         "external_source_evidence_records": source_coverage.get("summary", {}).get("external_evidence_records", 0),
+        "analysis_profile": args.analysis_profile,
     }
+    _annotate_analysis_profile(args, source_coverage, terraform_coverage, kubernetes_coverage)
     if args.out:
         write_json_findings(findings, args.out, metadata=metadata)
     if args.baseline_out:
@@ -414,13 +422,61 @@ def _quality_gate_failures(args: argparse.Namespace, mapping_report: dict[str, A
 
     ratio_gate("artifact match coverage", mapping_summary.get("artifact_match_coverage"), args.min_artifact_match_coverage)
     ratio_gate("strong artifact identity coverage", mapping_summary.get("strong_artifact_identity_coverage"), args.min_strong_artifact_identity_coverage)
-    ratio_gate("source rule coverage", source_summary.get("source_rule_coverage"), args.min_source_rule_coverage)
-    ratio_gate("external source evidence usable ratio", source_summary.get("external_evidence_usable_ratio"), args.min_external_evidence_usable_ratio)
+    production = getattr(args, "analysis_profile", "advisory") == "production"
+    source_rule_minimum = _profile_minimum(args.min_source_rule_coverage, 0.8 if production else None)
+    external_usable_minimum = _profile_minimum(args.min_external_evidence_usable_ratio, 0.8 if production else None)
+    ratio_gate("source rule coverage", source_summary.get("source_rule_coverage"), source_rule_minimum)
+    ratio_gate("external source evidence usable ratio", source_summary.get("external_evidence_usable_ratio"), external_usable_minimum)
     if args.fail_on_mapping_warnings and int(mapping_summary.get("mapping_warnings_count") or 0) > 0:
         failures.append(f"mapping report contains {mapping_summary.get('mapping_warnings_count')} warning(s)")
-    if args.require_external_source_evidence and int(source_summary.get("external_evidence_records") or 0) == 0:
+    if (args.require_external_source_evidence or production) and int(source_summary.get("external_evidence_records") or 0) == 0:
         failures.append("no external source analyzer evidence was imported")
+    if production and not args.terraform_plan and not args.kubernetes_manifest:
+        failures.append("production profile requires rendered deployment evidence: provide --terraform-plan or --kubernetes-manifest")
+    if production and args.terraform_source and not args.terraform_plan:
+        failures.append("production profile treats --terraform-source as advisory; provide --terraform-plan for Terraform-managed resources")
     return failures
+
+
+def _profile_minimum(user_value: float | None, profile_default: float | None) -> float | None:
+    if user_value is None:
+        return profile_default
+    if profile_default is None:
+        return user_value
+    if not math.isfinite(user_value):
+        return user_value
+    return max(user_value, profile_default)
+
+
+def _annotate_analysis_profile(
+    args: argparse.Namespace,
+    source_coverage: dict[str, Any],
+    terraform_coverage: dict[str, Any],
+    kubernetes_coverage: dict[str, Any],
+) -> None:
+    production = args.analysis_profile == "production"
+    source_summary = source_coverage.setdefault("summary", {})
+    source_summary["analysis_profile"] = args.analysis_profile
+    blockers: list[str] = []
+    if production:
+        if int(source_summary.get("external_evidence_records") or 0) == 0:
+            blockers.append("external source evidence is required")
+        if not args.terraform_plan and not args.kubernetes_manifest:
+            blockers.append("rendered deployment evidence is required")
+        if args.terraform_source and not args.terraform_plan:
+            blockers.append("Terraform source mode is advisory")
+    source_coverage["production_readiness"] = {
+        "status": "blocked" if blockers else "ready" if production else "advisory",
+        "blockers": blockers,
+        "source_mode": "external-first" if production else "builtin-fallback",
+        "deployment_evidence": {
+            "terraform_plan": bool(args.terraform_plan),
+            "terraform_source": bool(args.terraform_source),
+            "kubernetes_manifest": bool(args.kubernetes_manifest),
+            "terraform_resources": terraform_coverage.get("summary", {}).get("total_resources", 0),
+            "kubernetes_resources": kubernetes_coverage.get("summary", {}).get("total_resources", 0),
+        },
+    }
 
 
 def run_validate(args: argparse.Namespace) -> int:

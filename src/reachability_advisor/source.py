@@ -1262,6 +1262,7 @@ def source_coverage_report(
         "files_skipped": 0,
         "findings_analyzed": len(findings),
         "findings_with_external_evidence": 0,
+        "findings_with_builtin_only_evidence": 0,
         "findings_with_dependency_graph_path": 0,
         "findings_with_manifest_evidence": 0,
         "findings_with_package_specific_rule": 0,
@@ -1291,6 +1292,8 @@ def source_coverage_report(
                 totals["source_diagnostic_counts"][code] = totals["source_diagnostic_counts"].get(code, 0) + 1
             if finding.source.evidence_source != "builtin":
                 totals["findings_with_external_evidence"] += 1
+            else:
+                totals["findings_with_builtin_only_evidence"] += 1
             if finding.source.dependency_path:
                 totals["findings_with_dependency_graph_path"] += 1
             if any(str(symbol).startswith("manifest:") for symbol in finding.source.matched_symbols):
@@ -1332,6 +1335,7 @@ def source_coverage_report(
     totals["external_evidence_records"] = len(external_evidence.records) if external_evidence else 0
     totals["external_evidence_providers"] = external_evidence.provider_counts() if external_evidence else {}
     totals["external_evidence_selector_diagnostics"] = external_selector_diagnostics
+    totals["external_evidence_selected_ratio"] = round(totals["findings_with_external_evidence"] / len(findings), 4) if findings else 1.0
     return {
         "schema_version": "1.0",
         "summary": totals,
@@ -1341,6 +1345,7 @@ def source_coverage_report(
             "No-rule findings are rule coverage gaps; package-present findings are evidence gaps.",
             "Package-manager manifest evidence is weak dependency evidence. It does not prove runtime import or vulnerable API execution.",
             "External evidence must match a component/package, package URL, or vulnerability selector; artifact only narrows a selector match.",
+            "Built-in source rules are advisory fallback evidence. Production gates should import Semgrep, CodeQL/SARIF, govulncheck, or native evidence.",
         ],
     }
 

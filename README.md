@@ -20,7 +20,7 @@ Outputs:
 - GitHub Actions annotations;
 - PR summary Markdown;
 - self-contained interactive HTML graph report;
-- evidence graph JSON;
+- unified effective exposure graph JSON;
 - PR delta comparison;
 - single-finding explanations;
 - source-analysis coverage reports;
@@ -36,11 +36,13 @@ License: **GNU GPL v3.0 or later**.
 1. The scanner is local. It does not upload SBOMs, source, Terraform plans, or vulnerability data.
 2. Terraform plan analysis is the primary deployment-context path.
 3. Rendered Kubernetes manifests add workload, Service, Ingress, and RBAC context for Kubernetes deployments.
-4. Source-only or HCL-static analysis is for early feedback, not release confidence.
-5. Weak evidence never suppresses a vulnerability or marks it `not_affected`.
-6. Every score includes rationale and every artifact match is visible in `--mapping-out`.
-7. Every Terraform resource in a valid plan is represented in `--terraform-coverage-out`; unsupported resources are reported as visibility gaps.
-8. This project does not provide live cloud inventory, posture management, ticketing, dashboards, secrets scanning, malware scanning, or DSPM.
+4. Semgrep, CodeQL/SARIF, govulncheck, or native source evidence is the production path for code reachability. Built-in source rules are fallback evidence.
+5. Source-only or HCL-static analysis is for early feedback, not release confidence.
+6. Weak evidence never suppresses a vulnerability or marks it `not_affected`.
+7. Every finding has a unified effective exposure path: asset -> network path -> identity -> reachable code/package -> vulnerability -> score.
+8. Every score includes rationale and every artifact match is visible in `--mapping-out`.
+9. Every Terraform resource in a valid plan is represented in `--terraform-coverage-out`; unsupported resources are reported as visibility gaps.
+10. This project does not provide live cloud inventory, posture management, ticketing, dashboards, secrets scanning, malware scanning, or DSPM.
 
 ## Install
 
@@ -106,6 +108,7 @@ grype dir:path/to/app -o json --name app --file vulns/app.grype.json
 
 The sample command below uses the checked-in demo vulnerability file so it can run without downloading a scanner database.
 It includes public, internal/lateral, and private/no-ingress workloads so the HTML graph shows different entry paths.
+It uses the built-in source analyzer and should be treated as an advisory demonstration, not a release gate.
 
 ```bash
 PYTHONPATH=src python -m reachability_advisor scan \
@@ -194,6 +197,7 @@ SBOM artifact
   -> artifact identity candidates
   -> Terraform workload match
   -> exposure / identity / data context
+  -> effective exposure path
   -> score, tier, and outputs
 ```
 
@@ -256,8 +260,12 @@ reachability-advisor scan \
   --vulns vulnerabilities.json \
   --source-root app=. \
   --source-evidence-in semgrep-results.json \
+  --terraform-plan tfplan.json \
+  --analysis-profile production \
   --source-coverage-out source-coverage.json
 ```
+
+`--analysis-profile production` enforces the production defaults: external source evidence, usable external selectors, and rendered deployment evidence from `--terraform-plan` or `--kubernetes-manifest`. Use the default `advisory` profile for IDE scans and early pull-request feedback.
 
 ## Terraform coverage model
 
@@ -323,7 +331,7 @@ PYTHONPATH=src python -m reachability_advisor hcl-audit \
 
 `hcl-audit` accounts for `.tf` resources and modules, classifies known AWS/Azure/GCP/Kubernetes resource types, resolves simple literal variable defaults and `.tfvars` assignments, extracts simple image/exposure/identity literals, and reports unresolved variables, modules, or opaque Helm/kubectl manifest wrappers as visibility gaps.
 
-Use `--terraform-plan` for release gates. Use `--terraform-source` or `hcl-audit` only when a plan is not available.
+Use `--terraform-plan` for release gates. Use `--terraform-source` or `hcl-audit` only when a plan is not available; these modes cannot expand modules, dynamic expressions, provider defaults, Helm output, or rendered child resources.
 
 A curated external corpus is in `external_corpus/popular_terraform_projects.json`. In a network-enabled environment:
 
@@ -407,7 +415,7 @@ reachability-advisor compare \
 
 ## IDE integration
 
-The `ide/vscode` directory contains a minimal VS Code extension skeleton. It invokes the CLI, reads `--diagnostics-out`, and places diagnostics in the editor. Security-sensitive logic stays in the audited Python CLI.
+The `ide/vscode` directory contains a VS Code extension wrapper. It discovers local scan inputs, invokes the Python CLI, filters diagnostics by tier or baseline, and opens finding evidence on demand. Security-sensitive logic stays in the audited Python CLI.
 
 ## Supported evidence
 
@@ -418,11 +426,11 @@ The `ide/vscode` directory contains a minimal VS Code extension skeleton. It inv
 | Vulnerability input | Grype JSON, local JSON, and small OSV-Scanner-style JSON |
 | Source reachability | JVM, Node, Python, and Go rules with same-function input/sink evidence, bounded handler-to-sink paths, CycloneDX dependency-graph evidence, and package-manager manifest evidence for Maven/Gradle, npm/pnpm/Yarn, Poetry/requirements, and Go modules |
 | Custom source rules | `--reachability-rules` JSON and `export-semgrep-rules` starter YAML |
-| External source evidence | `--source-evidence-in` for Reachability Advisor JSON, Semgrep JSON, SARIF, and govulncheck JSONL, with selector diagnostics and quality gates for artifact-only or unscoped evidence |
+| External source evidence | `--source-evidence-in` for Reachability Advisor JSON, Semgrep JSON, SARIF/CodeQL, and govulncheck JSONL, with selector diagnostics and production gates for artifact-only or unscoped evidence |
 | Terraform context | Primary deployment context. AWS, Azure, GCP, and Kubernetes plan/source support with coverage reporting, artifact matching, network graphing, route/private-endpoint/firewall-tag hints, IAM capability records, AWS `sts:AssumeRole` propagation, and IAM impact classification |
 | Kubernetes manifests | Rendered YAML/JSON workload, Service, Ingress, RBAC, and NetworkPolicy context with artifact matching and coverage reporting |
 | Context JSON | Explicit override/enrichment keyed by artifact name |
-| Outputs | JSON with remediation groups and raw findings, evidence graph JSON, baseline JSON, PR delta JSON/Markdown, SARIF, diagnostics JSON, Markdown, interactive HTML, annotations, Terraform coverage JSON, Kubernetes coverage JSON, source coverage JSON, mapping JSON |
+| Outputs | JSON with remediation groups and raw findings, unified effective exposure graph JSON, baseline JSON, PR delta JSON/Markdown, SARIF, diagnostics JSON, Markdown, interactive HTML, annotations, Terraform coverage JSON, Kubernetes coverage JSON, source coverage JSON, mapping JSON |
 | CI quality gates | Built-in scan gates for artifact match coverage, strong artifact identity coverage, mapping warnings, source rule coverage, external evidence presence, and external evidence selector usability |
 
 ## Import/export contract
@@ -471,7 +479,7 @@ src/reachability_advisor/  Python package and CLI
 samples/                   Reproducible demo inputs, including multi-cloud Terraform plan
 fixtures/terraform/        Community Terraform fixture packs and harness inputs
 tests/                     Unit and workflow tests
-ide/vscode/                Minimal VS Code extension skeleton
+ide/vscode/                VS Code extension wrapper
 docs/                      User, maintainer, algorithm, and governance docs
 schemas/                   Output and policy schema drafts
 .github/workflows/         CI and sample pipeline workflows

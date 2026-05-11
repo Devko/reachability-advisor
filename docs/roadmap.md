@@ -13,7 +13,7 @@
 - Mapping reports, source coverage reports, Terraform coverage reports, HCL audit reports, SBOM planning, and remediation groups.
 - PR delta workflow.
 - Release validation against repository JSON schemas.
-- VS Code extension skeleton.
+- VS Code extension wrapper.
 - Governance, contribution, and security docs.
 
 ## v1.1 roadmap: quality, evidence, and CI adoption
@@ -36,7 +36,7 @@ Priority 2: Source reachability coverage
 - Done: source coverage reports rule coverage, rule gaps, weak-source findings, and usable external evidence ratio.
 - Done: native adapters import Semgrep `dataflow_trace` taint paths and CodeQL SARIF `codeFlows` when package, purl, or vulnerability selectors are available.
 - Done: external source evidence reports artifact-only and unscoped selector records instead of silently ignoring them.
-- Done: release pipelines can enforce external analyzer presence and selector usability with scan quality gates.
+- Done: `--analysis-profile production` makes external analyzer evidence and rendered deployment evidence the release-gate default.
 - Add native adapters for more language-specific analyzer output when selectors are available.
 - Done: unknown source states are split into diagnostics for rule gaps, package-manager gaps, missing source roots, unsupported source roots, and unobserved imports.
 
@@ -48,8 +48,10 @@ Priority 3: Terraform and IaC coverage
 - Done: route-table associations, private endpoints, VPC access connectors, and firewall target tags can contribute explicit internal path evidence.
 - Done: provider network adapter signals are emitted in Terraform coverage for route, private endpoint, VPC connector, firewall target, firewall priority, and NSG allow/deny evidence.
 - Done: IAM capability records include effective risk and risk multipliers so scoped or conditional critical permissions are not scored the same as broad unconditioned permissions.
+- Done: Terraform context emits effective-access records per matched workload identity/resource/action with confidence, scope, condition, target, and blocker evidence.
 - Done: explicit AWS `sts:AssumeRole` edges inherit visible target-role capabilities, and rendered Kubernetes NetworkPolicy deny-all ingress can override Service/Ingress exposure.
 - Expand lateral movement evidence for service endpoints, Kubernetes network policies, and deeper firewall priority semantics.
+- Done: Terraform context emits typed network path records with provider, path type, confidence, steps, and blockers/constraints where visible.
 - Keep unsupported IaC resources visible in coverage reports.
 
 Priority 4: Policy and baseline workflow
@@ -69,6 +71,7 @@ Priority 5: Validation corpus
 - Done: release validation includes a synthetic no-cloud Terraform plan E2E fixture for scanner path, artifact proof, source reachability, network context, IAM capability extraction, evidence graph, and HTML output.
 - Publish expected outputs for fixtures so downstream contributors can verify behavior without reading implementation details.
 - Done: visual graph regression tests cover connected network-path rendering and dense multi-asset layouts.
+- Done: VS Code wrapper supports config discovery, scan profiles, diagnostics filtering, baseline filtering, and finding evidence views.
 
 ## Completed milestone: Multi-cloud Terraform context
 

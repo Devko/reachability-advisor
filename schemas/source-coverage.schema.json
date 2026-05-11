@@ -16,6 +16,7 @@
         "files_skipped": {"type": "integer", "minimum": 0},
         "findings_analyzed": {"type": "integer", "minimum": 0},
         "findings_with_external_evidence": {"type": "integer", "minimum": 0},
+        "findings_with_builtin_only_evidence": {"type": "integer", "minimum": 0},
         "findings_with_dependency_graph_path": {"type": "integer", "minimum": 0},
         "findings_with_manifest_evidence": {"type": "integer", "minimum": 0},
         "findings_with_package_specific_rule": {"type": "integer", "minimum": 0},
@@ -27,7 +28,9 @@
         "external_evidence_records": {"type": "integer", "minimum": 0},
         "external_evidence_providers": {"type": "object"},
         "external_evidence_usable_ratio": {"type": "number", "minimum": 0, "maximum": 1},
+        "external_evidence_selected_ratio": {"type": "number", "minimum": 0, "maximum": 1},
         "external_evidence_selector_diagnostics": {"type": "object"},
+        "analysis_profile": {"enum": ["advisory", "production"]},
         "states": {"type": "object"}
       }
     },
@@ -50,6 +53,16 @@
           "skipped_files": {"type": "array"}
         }
       }
+    },
+    "production_readiness": {
+      "type": "object",
+      "properties": {
+        "status": {"enum": ["advisory", "ready", "blocked"]},
+        "blockers": {"type": "array", "items": {"type": "string"}},
+        "source_mode": {"type": "string"},
+        "deployment_evidence": {"type": "object"}
+      },
+      "additionalProperties": true
     },
     "notes": {"type": "array", "items": {"type": "string"}}
   }

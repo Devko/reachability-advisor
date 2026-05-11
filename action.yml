@@ -44,6 +44,10 @@ inputs:
     description: Newline-separated external source evidence files. Supports Reachability Advisor JSON, Semgrep JSON, SARIF, and govulncheck JSONL.
     required: false
     default: ""
+  analysis-profile:
+    description: advisory or production. Production requires external source evidence and rendered deployment evidence.
+    required: false
+    default: "production"
   min-artifact-match-coverage:
     description: Optional 0..1 gate for SBOM artifact to deployment workload match coverage.
     required: false
@@ -192,6 +196,7 @@ runs:
         add_repeated_args "--source-evidence-in" "${{ inputs.source-evidence-in }}"
         add_repeated_args "--kubernetes-manifest" "${{ inputs.kubernetes-manifest }}"
 
+        args+=(--analysis-profile "${{ inputs.analysis-profile }}")
         if [[ -n "${{ inputs.context }}" ]]; then args+=(--context "${{ inputs.context }}"); fi
         if [[ -n "${{ inputs.reachability-rules }}" ]]; then args+=(--reachability-rules "${{ inputs.reachability-rules }}"); fi
         if [[ -n "${{ inputs.policy }}" ]]; then args+=(--policy "${{ inputs.policy }}"); fi

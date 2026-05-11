@@ -169,6 +169,8 @@ class ContextEvidence:
     criticality: str = "unknown"
     iam_impacts: list[str] = field(default_factory=list)
     iam_capabilities: list[dict[str, Any]] = field(default_factory=list)
+    effective_access: list[dict[str, Any]] = field(default_factory=list)
+    network_paths: list[dict[str, Any]] = field(default_factory=list)
     owner: str | None = None
     source: str = "none"
     confidence: Confidence = Confidence.LOW
@@ -240,6 +242,8 @@ class Finding:
                 "criticality": self.context.criticality,
                 "iam_impacts": self.context.iam_impacts,
                 "iam_capabilities": self.context.iam_capabilities,
+                "effective_access": self.context.effective_access,
+                "network_paths": self.context.network_paths,
                 "owner": self.context.owner,
                 "source": self.context.source,
                 "confidence": self.context.confidence.value,

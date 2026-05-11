@@ -8,11 +8,13 @@ rationale strings so downstream tools do not have to scrape prose.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from datetime import datetime, timezone
 from typing import Any
 
 from . import __version__
+from .effective_graph import build_effective_exposure_graph, effective_path_id
 from .iam_capabilities import dedupe_iam_capabilities
 from .models import Finding, reachability_label
 from .numeric import safe_float
@@ -97,6 +99,7 @@ def build_evidence_graph(findings: list[Finding], metadata: dict[str, Any] | Non
                 "score": round(finding.score, 2),
                 "confidence": finding.confidence.value,
                 "policy_status": finding.policy_status,
+                "effective_path_id": effective_path_id(finding),
             }
         )
         finding_edges.extend(
@@ -115,6 +118,7 @@ def build_evidence_graph(findings: list[Finding], metadata: dict[str, Any] | Non
     for path in network_paths.values():
         _add_typed_network_path(path, network_nodes, network_edges)
 
+    effective_exposure_graph = build_effective_exposure_graph(findings)
     ordered_assets = sorted(assets.values(), key=lambda item: (-TIER_RANK.get(item["max_tier"], 0), -safe_float(item["max_score"]), item["name"]))
     return {
         "schema_version": "1.0",
@@ -133,6 +137,7 @@ def build_evidence_graph(findings: list[Finding], metadata: dict[str, Any] | Non
         "network_edges": sorted(network_edges.values(), key=lambda item: (item["path_id"], item["sequence"])),
         "iam_edges": sorted(iam_edges.values(), key=lambda item: (item["asset_id"], item["id"])),
         "code_edges": sorted(code_edges, key=lambda item: item["finding_key"]),
+        "effective_exposure_graph": effective_exposure_graph,
         "edges": finding_edges,
     }
 
@@ -253,6 +258,12 @@ def _network_node_kind(label: str) -> str:
 
 def _network_paths_for_finding(finding: Finding, asset_id: str) -> list[dict[str, Any]]:
     paths: list[dict[str, Any]] = []
+    for index, raw_path in enumerate(finding.context.network_paths):
+        parsed_record = _network_path_from_record(finding, asset_id, raw_path, index)
+        if parsed_record:
+            paths.append(parsed_record)
+    if paths:
+        return paths
     for index, evidence in enumerate(finding.context.evidence):
         parsed = _network_path_from_evidence(finding, asset_id, evidence, index)
         if parsed:
@@ -279,6 +290,37 @@ def _network_paths_for_finding(finding: Finding, asset_id: str) -> list[dict[str
             }
         )
     return paths
+
+
+def _network_path_from_record(finding: Finding, asset_id: str, record: dict[str, Any], index: int) -> dict[str, Any] | None:
+    exposure = str(record.get("exposure") or finding.context.exposure or "unknown").lower()
+    raw_steps = record.get("steps")
+    steps = [str(step) for step in raw_steps if str(step)] if isinstance(raw_steps, list) else []
+    entry_kind = str(record.get("entry") or record.get("entry_kind") or "")
+    if entry_kind in {"internet", "public_pivot"}:
+        entry_kind = "internet" if exposure == "public" else "public_pivot"
+    elif not entry_kind or entry_kind in {"internal_network", "private_network", "isolated_network"}:
+        entry_kind = _entry_kind_for_path(exposure, steps)
+    path_type = str(record.get("path_type") or _network_path_type_from_steps(exposure, steps))
+    evidence = str(record.get("evidence") or "typed network path evidence")
+    return {
+        "id": f"network:{asset_id}:typed:{index}:{_stable_token(jsonish(record))}",
+        "asset_id": asset_id,
+        "source": record.get("source") or finding.context.source,
+        "provider": record.get("provider"),
+        "exposure": exposure,
+        "path_type": path_type,
+        "entry_kind": entry_kind,
+        "entry_label": _entry_label_for_kind(entry_kind),
+        "entry_subtitle": _entry_subtitle_for_kind(entry_kind),
+        "label": str(record.get("label") or (steps[0] if steps else _fallback_path_label(exposure))),
+        "summary": str(record.get("summary") or _path_summary(steps, exposure)),
+        "steps": steps,
+        "evidence": evidence,
+        "confidence": str(record.get("confidence") or finding.context.confidence.value),
+        "blockers": record.get("blockers", []) if isinstance(record.get("blockers"), list) else [],
+        "finding_keys": [finding.key],
+    }
 
 
 def _network_path_from_evidence(finding: Finding, asset_id: str, evidence: str, index: int) -> dict[str, Any] | None:
@@ -327,6 +369,33 @@ def _network_path_from_evidence(finding: Finding, asset_id: str, evidence: str, 
 
 def _iam_edges_for_finding(finding: Finding, asset_id: str) -> list[dict[str, Any]]:
     edges: list[dict[str, Any]] = []
+    for index, access in enumerate(finding.context.effective_access or []):
+        edge_suffix = _stable_token(jsonish(access))
+        edges.append(
+            {
+                "id": f"iam:{asset_id}:effective:{index}:{edge_suffix}",
+                "asset_id": asset_id,
+                "kind": "effective_access",
+                "privilege": finding.context.privilege,
+                "identity": access.get("identity"),
+                "resource": access.get("resource"),
+                "action": access.get("action"),
+                "impact": access.get("impact"),
+                "effect": access.get("effect", "allow"),
+                "access": access.get("access"),
+                "decision": access.get("decision", "allowed"),
+                "confidence": access.get("confidence", finding.context.confidence.value),
+                "blockers": access.get("blockers", []) if isinstance(access.get("blockers"), list) else [],
+                "resource_refs": access.get("resource_refs", []),
+                "target_resources": access.get("target_resources", []),
+                "resource_scope": access.get("resource_scope", "unknown"),
+                "condition_keys": access.get("condition_keys", []),
+                "provider": access.get("provider", "unknown"),
+                "source": access.get("source") or finding.context.source,
+                "evidence": access.get("evidence") or "",
+                "finding_keys": [finding.key],
+            }
+        )
     capabilities = dedupe_iam_capabilities(finding.context.iam_capabilities or [])
     for index, capability in enumerate(capabilities):
         edge_suffix = _stable_token(f"{capability.get('impact') or ''}:{capability.get('action') or ''}:{capability.get('resource_refs') or ''}")
@@ -429,6 +498,23 @@ def _path_summary(steps: list[str], exposure: str) -> str:
     return " -> ".join(short_steps) + suffix
 
 
+def _network_path_type_from_steps(exposure: str, steps: list[str]) -> str:
+    text = " ".join(steps).lower()
+    if "load balancer" in text or "aws_lb" in text or "aws_alb" in text:
+        return "public_load_balancer" if exposure == "public" else "internal_load_balancer"
+    if "application_gateway" in text or "cloudfront" in text or "frontdoor" in text:
+        return "public_gateway"
+    if "allows traffic from" in text or "network bridge" in text:
+        return "lateral_internal_path"
+    if exposure == "public":
+        return "direct_public"
+    if exposure == "internal":
+        return "internal_ingress"
+    if exposure in {"private", "isolated"}:
+        return "no_observed_ingress"
+    return "unresolved"
+
+
 def _fallback_path_label(exposure: str) -> str:
     return {
         "public": "Public ingress",
@@ -467,6 +553,10 @@ def _finding_id(key: str) -> str:
 
 def _stable_token(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+
+
+def jsonish(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, default=str)
 
 
 __all__ = ["build_evidence_graph"]

@@ -25,7 +25,7 @@ Use this checklist when reviewing a new repository, fixture pack, or release can
 - [ ] `dependency_reachable` findings include a CycloneDX dependency path from an imported parent dependency or a package-manager manifest declaration.
 - [ ] `--source-coverage-out` is reviewed for source files, package-manager manifests, skipped files, evidence states, dependency-graph evidence, manifest evidence, and external evidence counts.
 - [ ] `source_rule_coverage`, `findings_with_rule_gap`, `findings_with_weak_source_evidence`, and `external_evidence_usable_ratio` are reviewed before treating the source result as strong.
-- [ ] CI uses `--require-external-source-evidence` and `--min-external-evidence-usable-ratio` when Semgrep, CodeQL, or govulncheck output is required for release confidence.
+- [ ] Release gates use `--analysis-profile production` and import Semgrep, CodeQL/SARIF, govulncheck, or native evidence through `--source-evidence-in`.
 - [ ] `source_reachability.diagnostics[]` and `source_diagnostic_counts` are reviewed before trusting weak or unknown source states.
 - [ ] Semgrep, CodeQL/SARIF, or govulncheck evidence imported through `--source-evidence-in` has component, package URL, or vulnerability selectors. Artifact can narrow a match, but is not enough by itself.
 - [ ] When several external source records match, the selected record is explainable by reachability state, confidence, selector specificity, then provider trust.
@@ -45,7 +45,9 @@ Use this checklist when reviewing a new repository, fixture pack, or release can
 - [ ] Fixture/sample coverage includes public, internal/lateral, private, and unknown exposure states when those states are in scope.
 - [ ] Fixture/sample coverage includes admin, sensitive/critical, limited/read-only, and no linked IAM role states when those states are in scope.
 - [ ] `context.iam_capabilities` shows the concrete action and impact behind important IAM labels, especially secret reads, role passing, network mutation, and workload mutation.
+- [ ] `context.effective_access` shows identity, resource, action, decision, confidence, scope, conditions, target resources, and blockers for important IAM paths.
 - [ ] Critical IAM capabilities include resource scope, condition keys, effective risk, and risk multiplier when the provider policy exposes them.
+- [ ] `context.network_paths` shows path type, provider, confidence, steps, and blockers/constraints for public, external, internal, lateral, and private paths.
 - [ ] Synthetic no-cloud plan fixtures are used only for scanner E2E coverage; real release gates still use repository-generated `terraform show -json` output.
 
 ## Kubernetes manifests
@@ -64,6 +66,8 @@ Use this checklist when reviewing a new repository, fixture pack, or release can
 - [ ] Large HTML reports are reviewed first with the default top-risk/top-per-asset view, then expanded when investigating full backlog.
 - [ ] `evidence-graph.json` is retained when generated and its asset, network, IAM, and code edges support the HTML graph.
 - [ ] `evidence-graph.json` includes typed `network_nodes` and `network_edges` for important ingress and lateral paths.
+- [ ] `evidence_graph.effective_exposure_graph.paths[]` exists for every finding and follows asset -> network path -> identity -> reachable code/package -> vulnerability -> score.
+- [ ] Every effective graph edge has `evidence_layer`, `evidence_source`, `confidence`, `provider`, `language`, `blockers`, `unknowns`, and `blocker_state`.
 - [ ] `source-coverage.json`, `terraform-coverage.json`, `kubernetes-coverage.json`, and `mapping.json` are retained as audit artifacts when generated.
 - [ ] `scan --baseline-out` is produced on the default branch and `compare --baseline` gates only new or worsened findings in pull requests.
 

@@ -95,7 +95,11 @@ class GoldenOutputRegressionTests(unittest.TestCase):
         self.assertEqual(kubernetes["summary"]["exposure_counts"], {"internal": 1, "public": 1})
         self.assertEqual(source["summary"]["states"], {"attacker_controlled": 5, "function_reachable": 2, "package_present": 3})
         self.assertEqual(mapping["summary"]["artifacts_with_terraform_matches"], 7)
-        self.assertEqual({key: len(visual[key]) for key in ("assets", "vulnerabilities", "networkPaths", "links")}, {"assets": 7, "vulnerabilities": 10, "networkPaths": 19, "links": 10})
+        self.assertEqual({key: len(visual[key]) for key in ("assets", "vulnerabilities", "networkPaths", "links")}, {"assets": 7, "vulnerabilities": 10, "networkPaths": 8, "links": 10})
+        self.assertTrue(all("pathType" in item for item in visual["networkPaths"]))
+        effective = visual["evidenceGraph"]["effective_exposure_graph"]
+        self.assertEqual(len(effective["paths"]), len(findings["findings"]))
+        self.assertTrue(all({"evidence_layer", "confidence", "blocker_state"}.issubset(edge) for edge in effective["edges"]))
         self.assertFalse(graph_model["duplicateNodeIds"])
         edge_roles = {edge["role"] for edge in graph_model["edges"]}
         self.assertTrue({"entry-path", "path-asset", "asset-vulnerability"}.issubset(edge_roles))

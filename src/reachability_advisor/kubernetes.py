@@ -765,6 +765,8 @@ def merge_context_evidence(left: ContextEvidence, right: ContextEvidence) -> Con
         criticality=max_criticality(left.criticality, right.criticality),
         iam_impacts=sorted({*left.iam_impacts, *right.iam_impacts}),
         iam_capabilities=dedupe_iam_capabilities([*left.iam_capabilities, *right.iam_capabilities]),
+        effective_access=[*left.effective_access, *right.effective_access],
+        network_paths=[*left.network_paths, *right.network_paths],
         owner=left.owner or right.owner,
         source="+".join(dict.fromkeys(part for part in [*left.source.split("+"), *right.source.split("+")] if part and part != "none")),
         confidence=max_confidence(left.confidence, right.confidence),

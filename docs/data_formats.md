@@ -188,6 +188,8 @@ Generated with `--source-coverage-out`.
     "files_scanned": 42,
     "manifest_files_scanned": 6,
     "findings_analyzed": 12,
+    "findings_with_external_evidence": 7,
+    "findings_with_builtin_only_evidence": 5,
     "findings_with_dependency_graph_path": 3,
     "findings_with_manifest_evidence": 2,
     "findings_with_package_specific_rule": 8,
@@ -195,6 +197,8 @@ Generated with `--source-coverage-out`.
     "findings_with_weak_source_evidence": 2,
     "source_rule_coverage": 0.9167,
     "external_evidence_usable_ratio": 0.6667,
+    "external_evidence_selected_ratio": 0.5833,
+    "analysis_profile": "production",
     "source_diagnostic_counts": {"missing_package_rule": 2},
     "source_evidence_coverage": 0.75,
     "external_evidence_records": 3,
@@ -210,6 +214,16 @@ Generated with `--source-coverage-out`.
       "function_reachable": 4,
       "dependency_reachable": 3,
       "package_present": 3
+    }
+  },
+  "production_readiness": {
+    "status": "ready",
+    "blockers": [],
+    "source_mode": "external-first",
+    "deployment_evidence": {
+      "terraform_plan": true,
+      "terraform_source": false,
+      "kubernetes_manifest": true
     }
   },
   "artifacts": []
@@ -259,6 +273,33 @@ Schema draft: `schemas/runtime-policy.schema.json`.
       "privilege": "sensitive",
       "criticality": "high",
       "iam_impacts": ["data_access"],
+      "iam_capabilities": [
+        {
+          "action": "secretsmanager:GetSecretValue",
+          "impact": "data_access",
+          "resource_refs": ["arn:aws:secretsmanager:eu-central-1:123456789012:secret:payments"]
+        }
+      ],
+      "effective_access": [
+        {
+          "identity": "aws_iam_role.payments",
+          "resource": "aws_ecs_service.payments",
+          "action": "secretsmanager:GetSecretValue",
+          "impact": "data_access",
+          "decision": "allowed",
+          "confidence": "medium",
+          "blockers": [{"kind": "scoped_resource", "evidence": "policy resource scope is constrained"}]
+        }
+      ],
+      "network_paths": [
+        {
+          "exposure": "public",
+          "path_type": "public_load_balancer",
+          "steps": ["aws_lb.edge public load balancer", "aws_lb_target_group.payments", "aws_ecs_service.payments"],
+          "confidence": "medium",
+          "blockers": []
+        }
+      ],
       "owner": "@team-name",
       "confidence": "high",
       "evidence": ["public API", "secrets access"]
@@ -283,7 +324,9 @@ Generated with `--terraform-coverage-out`.
     "unsupported_or_unclassified_resources": 0,
     "artifacts_requested": 4,
     "artifacts_matched": 4,
-    "artifact_match_coverage": 1.0
+    "artifact_match_coverage": 1.0,
+    "network_paths_observed": 4,
+    "effective_access_records": 3
   },
   "artifact_matches": [
     {
@@ -448,7 +491,7 @@ The canonical output is:
 }
 ```
 
-`remediations[]` groups findings by artifact and dependency. Each finding still includes artifact, component, vulnerability, source reachability, context, score, tier, confidence, rationale, fix commands, and policy status. `scoring` contains the scoring model version, per-dimension point contributions, gates/caps that applied, final score, and final tier.
+`remediations[]` groups findings by artifact and dependency. Each finding still includes artifact, component, vulnerability, source reachability, context, score, tier, confidence, rationale, fix commands, and policy status. `scoring` contains the scoring model version, per-dimension point contributions, gates/caps that applied, final score, final tier, and a compact `effective_exposure_path` reference.
 
 `source_reachability.state` is one of `absent`, `unknown_due_to_no_rule`, `package_present`, `dependency_reachable`, `imported`, `function_reachable`, or `attacker_controlled`. `source_reachability.label` is the human-facing version used by reports: `absent from scanned source`, `no source rule`, `SBOM only`, `dependency evidence`, `import observed`, `reachable vulnerable API`, or `request-controlled path`. The `unknown_due_to_no_rule` state is a coverage warning: the vulnerable package is present, but no package-specific source rule exists and generic import evidence was not observed.
 
@@ -462,7 +505,15 @@ Schema draft: `schemas/findings.schema.json`.
 
 Generated with `--evidence-graph-out`. The findings JSON also embeds the same structure under `evidence_graph`.
 
-The evidence graph is the stable machine contract used by the HTML report. It separates assets, components, vulnerabilities, findings, network paths, IAM capability edges, and code reachability edges so consumers do not have to parse rationale text.
+The evidence graph is the stable machine contract used by the HTML report. Its canonical model is `effective_exposure_graph`, where each finding is represented as:
+
+```text
+asset -> network path -> identity -> reachable code/package -> vulnerability -> score
+```
+
+Every effective edge carries `evidence_layer`, `origin_layer`, `evidence_source`, `confidence`, `provider`, `language`, `blockers`, `unknowns`, and `blocker_state`. This is the preferred contract for integrations that need to explain why a finding was prioritized.
+
+The older arrays still exist as compatibility views so consumers can inspect assets, components, vulnerabilities, findings, network paths, IAM capability edges, and code reachability edges without parsing rationale text.
 
 Top-level arrays:
 
@@ -474,6 +525,7 @@ Top-level arrays:
 - `network_nodes` and `network_edges`: typed network graph nodes and path edges derived from network-path evidence;
 - `iam_edges`: per-asset IAM capability edges or summary IAM edges when only aggregate context exists;
 - `code_edges`: source reachability state, provider, locations, symbols, and dependency path;
+- `effective_exposure_graph`: unified path graph with provenance on every edge;
 - `edges`: generic asset-finding-component-vulnerability links.
 
 Schema draft: `schemas/evidence-graph.schema.json`.

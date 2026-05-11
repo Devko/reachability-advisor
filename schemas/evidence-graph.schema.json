@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Reachability Advisor Evidence Graph",
   "type": "object",
-  "required": ["schema_version", "metadata", "assets", "components", "vulnerabilities", "findings", "network_paths", "network_nodes", "network_edges", "iam_edges", "code_edges", "edges"],
+  "required": ["schema_version", "metadata", "assets", "components", "vulnerabilities", "findings", "network_paths", "network_nodes", "network_edges", "iam_edges", "code_edges", "effective_exposure_graph", "edges"],
   "properties": {
     "schema_version": {"const": "1.0"},
     "metadata": {"type": "object"},
@@ -41,7 +41,9 @@
           "id": {"type": "string"},
           "asset_id": {"type": "string"},
           "source": {"type": "string"},
+          "provider": {"type": ["string", "null"]},
           "exposure": {"type": "string"},
+          "path_type": {"type": "string"},
           "entry_kind": {"type": "string"},
           "entry_label": {"type": "string"},
           "entry_subtitle": {"type": "string"},
@@ -50,6 +52,7 @@
           "steps": {"type": "array", "items": {"type": "string"}},
           "evidence": {"type": "string"},
           "confidence": {"enum": ["high", "medium", "low"]},
+          "blockers": {"type": "array", "items": {"type": "object"}},
           "finding_keys": {"type": "array", "items": {"type": "string"}}
         }
       }
@@ -86,6 +89,68 @@
     },
     "iam_edges": {"type": "array", "items": {"type": "object"}},
     "code_edges": {"type": "array", "items": {"type": "object"}},
+    "effective_exposure_graph": {
+      "type": "object",
+      "required": ["schema_version", "path_order", "paths", "nodes", "edges"],
+      "properties": {
+        "schema_version": {"const": "1.0"},
+        "path_order": {
+          "type": "array",
+          "items": {"enum": ["asset", "network_path", "identity", "reachable_code_package", "vulnerability", "score"]}
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "finding_key", "order", "node_ids", "edge_ids", "risk_inputs"],
+            "properties": {
+              "id": {"type": "string"},
+              "finding_key": {"type": "string"},
+              "order": {"type": "array", "items": {"type": "string"}},
+              "node_ids": {"type": "array", "items": {"type": "string"}},
+              "edge_ids": {"type": "array", "items": {"type": "string"}},
+              "risk_inputs": {"type": "object"}
+            }
+          }
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "kind", "label"],
+            "properties": {
+              "id": {"type": "string"},
+              "kind": {"type": "string"},
+              "label": {"type": "string"}
+            }
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "path_id", "source", "target", "kind", "sequence", "evidence_layer", "origin_layer", "evidence_source", "confidence", "provider", "language", "blockers", "unknowns", "blocker_state"],
+            "properties": {
+              "id": {"type": "string"},
+              "path_id": {"type": "string"},
+              "source": {"type": "string"},
+              "target": {"type": "string"},
+              "kind": {"type": "string"},
+              "sequence": {"type": "integer", "minimum": 0},
+              "evidence_layer": {"type": "string"},
+              "origin_layer": {"type": "string"},
+              "evidence_source": {"type": "string"},
+              "confidence": {"enum": ["high", "medium", "low"]},
+              "provider": {"type": "string"},
+              "language": {"type": "string"},
+              "blockers": {"type": "array", "items": {"type": "object"}},
+              "unknowns": {"type": "array", "items": {"type": "string"}},
+              "blocker_state": {"enum": ["none", "blocked", "unknown"]}
+            }
+          }
+        }
+      }
+    },
     "edges": {"type": "array", "items": {"type": "object"}}
   }
 }

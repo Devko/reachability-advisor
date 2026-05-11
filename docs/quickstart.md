@@ -83,6 +83,8 @@ reachability-advisor scan \
   --terraform-coverage-out outputs/terraform-coverage.json \
   --kubernetes-manifest samples/kubernetes-manifest.yaml \
   --kubernetes-coverage-out outputs/kubernetes-coverage.json \
+  --source-evidence-in samples/source-evidence.json \
+  --analysis-profile production \
   --source-coverage-out outputs/source-coverage.json \
   --mapping-out outputs/mapping.json \
   --evidence-graph-out outputs/evidence-graph.json \

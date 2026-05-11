@@ -157,6 +157,97 @@ class CliTests(unittest.TestCase):
 
             self.assertEqual(code, 10)
 
+    def test_scan_production_profile_requires_external_and_rendered_deployment_evidence(self) -> None:
+        code = main([
+            "scan",
+            "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"),
+            "--vulns", str(ROOT / "samples/vulnerabilities.json"),
+            "--analysis-profile", "production",
+            "--no-table",
+        ])
+
+        self.assertEqual(code, 10)
+
+    def test_scan_production_profile_accepts_external_source_and_terraform_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            source = out / "src"
+            source.mkdir()
+            sbom = out / "bom.json"
+            vulns = out / "vulns.json"
+            evidence = out / "source-evidence.json"
+            plan = out / "tfplan.json"
+            sbom.write_text(
+                json.dumps(
+                    {
+                        "bomFormat": "CycloneDX",
+                        "metadata": {
+                            "component": {
+                                "name": "app",
+                                "properties": [{"name": "oci:image:ref", "value": "repo/app:1"}],
+                            }
+                        },
+                        "components": [{"name": "left-pad", "version": "1.0.0", "purl": "pkg:npm/left-pad@1.0.0"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            vulns.write_text(json.dumps({"vulnerabilities": [{"id": "GHSA-leftpad", "package": {"name": "left-pad"}}]}), encoding="utf-8")
+            evidence.write_text(
+                json.dumps(
+                    {
+                        "evidence": [
+                            {
+                                "artifact": "app",
+                                "component": "left-pad",
+                                "vulnerability": "GHSA-leftpad",
+                                "state": "function_reachable",
+                                "confidence": "high",
+                                "tool": "semgrep",
+                                "locations": [{"path": str(source / "index.js"), "line": 1}],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (source / "index.js").write_text("require('left-pad');\n", encoding="utf-8")
+            plan.write_text(
+                json.dumps(
+                    {
+                        "planned_values": {
+                            "root_module": {
+                                "resources": [
+                                    {
+                                        "address": "aws_lambda_function.app",
+                                        "type": "aws_lambda_function",
+                                        "name": "app",
+                                        "values": {"function_name": "app", "image_uri": "repo/app:1"},
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            code = main([
+                "scan",
+                "--sbom", str(sbom),
+                "--vulns", str(vulns),
+                "--source-root", f"app={source}",
+                "--source-evidence-in", str(evidence),
+                "--terraform-plan", str(plan),
+                "--analysis-profile", "production",
+                "--source-coverage-out", str(out / "source-coverage.json"),
+                "--no-table",
+            ])
+
+            self.assertEqual(code, 0)
+            coverage = json.loads((out / "source-coverage.json").read_text(encoding="utf-8"))
+            self.assertEqual(coverage["production_readiness"]["status"], "ready")
+
     def test_scan_accepts_grype_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)

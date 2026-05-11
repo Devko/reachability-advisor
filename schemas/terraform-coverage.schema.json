@@ -19,7 +19,9 @@
         "artifacts_matched": {"type": "integer", "minimum": 0},
         "artifact_match_coverage": {"type": "number", "minimum": 0, "maximum": 1},
         "providers_seen": {"type": "object"},
-        "categories_seen": {"type": "object"}
+        "categories_seen": {"type": "object"},
+        "network_paths_observed": {"type": "integer", "minimum": 0},
+        "effective_access_records": {"type": "integer", "minimum": 0}
       }
     },
     "manifest": {"type": "object"},
@@ -48,7 +50,9 @@
       "items": {
         "type": "object",
         "properties": {
-          "network_adapter_signals": {"type": "array", "items": {"type": "object"}}
+          "network_adapter_signals": {"type": "array", "items": {"type": "object"}},
+          "network_paths": {"type": "array", "items": {"type": "object"}},
+          "effective_access": {"type": "array", "items": {"type": "object"}}
         },
         "additionalProperties": true
       }

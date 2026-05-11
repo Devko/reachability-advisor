@@ -111,6 +111,8 @@ class ArtifactContextAccumulator:
     providers: set[str] = field(default_factory=set)
     iam_impacts: set[str] = field(default_factory=set)
     iam_capabilities: list[dict[str, Any]] = field(default_factory=list)
+    effective_access: list[dict[str, Any]] = field(default_factory=list)
+    network_paths: list[dict[str, Any]] = field(default_factory=list)
 
     def add_resource(self, resource: TerraformResource, image: str | None = None, match_method: str = "unknown", match_score: int = 0) -> None:
         self.providers.add(resource.provider)
@@ -140,6 +142,8 @@ class ArtifactContextAccumulator:
             criticality=self.criticality,
             iam_impacts=sorted(self.iam_impacts),
             iam_capabilities=dedupe_iam_capabilities(self.iam_capabilities),
+            effective_access=_dedupe_record_dicts(self.effective_access),
+            network_paths=_dedupe_record_dicts(self.network_paths),
             owner=self.owner,
             source=source,
             confidence=self.confidence,
@@ -168,6 +172,7 @@ class TerraformNetworkGraph:
         self.privilege_evidence_by_address: dict[str, list[str]] = {}
         self.iam_impacts_by_address: dict[str, set[str]] = {}
         self.iam_capabilities_by_address: dict[str, list[dict[str, Any]]] = {}
+        self.effective_access_by_address: dict[str, list[dict[str, Any]]] = {}
         self.iam_target_evidence_by_address: dict[str, list[str]] = {}
 
     def analyze(self) -> NetworkPathAnalysis:
@@ -176,6 +181,7 @@ class TerraformNetworkGraph:
         exposure_by_node, evidence_by_node = self._walk()
         exposure_by_address: dict[str, str] = {}
         evidence_by_address: dict[str, list[str]] = {}
+        network_paths_by_address: dict[str, list[dict[str, Any]]] = {}
         for resource in self.resources:
             node = self._resource_node(resource)
             exposure = exposure_by_node.get(node, "unknown")
@@ -184,13 +190,18 @@ class TerraformNetworkGraph:
                 path = evidence_by_node.get(node, [])
                 if path:
                     evidence_by_address[resource.address] = [f"terraform network path: {exposure} via {' -> '.join(path)}"]
+                network_paths_by_address[resource.address] = [
+                    self._network_path_record(resource, exposure, path)
+                ]
         return NetworkPathAnalysis(
             exposure_by_address=exposure_by_address,
             evidence_by_address=evidence_by_address,
+            network_paths_by_address=network_paths_by_address,
             privilege_by_address=self.privilege_by_address,
             privilege_evidence_by_address=self.privilege_evidence_by_address,
             iam_impacts_by_address=self.iam_impacts_by_address,
             iam_capabilities_by_address=self.iam_capabilities_by_address,
+            effective_access_by_address=self.effective_access_by_address,
             iam_target_evidence_by_address=self.iam_target_evidence_by_address,
         )
 
@@ -223,6 +234,7 @@ class TerraformNetworkGraph:
             evidence: list[str] = []
             impacts: set[str] = set()
             capabilities: list[dict[str, Any]] = []
+            effective_access: list[dict[str, Any]] = []
             target_evidence: list[str] = []
             for ref in self._workload_identity_refs(resource):
                 ref_privilege = self.identity_privilege_by_ref.get(ref, "unknown")
@@ -233,6 +245,7 @@ class TerraformNetworkGraph:
                 for grant in self.identity_grants_by_ref.get(ref, []):
                     impacts.update(grant.impacts)
                     capabilities.extend(capability.to_json() for capability in grant.capabilities)
+                    effective_access.extend(self._effective_access_records(resource, ref, grant))
                     target_evidence.extend(self._target_evidence_for_grant(grant))
             if privilege != "unknown":
                 self.privilege_by_address[resource.address] = privilege
@@ -241,8 +254,86 @@ class TerraformNetworkGraph:
                 self.iam_impacts_by_address[resource.address] = impacts
             if capabilities:
                 self.iam_capabilities_by_address[resource.address] = dedupe_iam_capabilities(capabilities)
+            if effective_access:
+                self.effective_access_by_address[resource.address] = self._dedupe_effective_access(effective_access)
             if target_evidence:
                 self.iam_target_evidence_by_address[resource.address] = list(dict.fromkeys(target_evidence))
+
+    def _network_path_record(self, resource: TerraformResource, exposure: str, path: list[str]) -> dict[str, Any]:
+        blockers = _network_blockers_for_resource(resource)
+        return {
+            "target": resource.address,
+            "provider": resource.provider,
+            "exposure": exposure,
+            "path_type": _network_path_type(exposure, path),
+            "entry": _network_entry_for_exposure(exposure),
+            "steps": path,
+            "confidence": "medium" if path else "low",
+            "blockers": blockers,
+            "source": "terraform-plan",
+        }
+
+    def _effective_access_records(self, resource: TerraformResource, identity_ref: str, grant: IamGrant) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        target_resources = self._target_resources_for_grant(grant)
+        for capability in grant.capabilities:
+            capability_json = capability.to_json()
+            blockers = _effective_access_blockers(capability_json)
+            records.append(
+                {
+                    "identity": identity_ref,
+                    "resource": resource.address,
+                    "provider": resource.provider,
+                    "action": capability_json.get("action"),
+                    "impact": capability_json.get("impact"),
+                    "access": capability_json.get("access"),
+                    "effect": capability_json.get("effect", "allow"),
+                    "resource_refs": capability_json.get("resource_refs", []),
+                    "resource_scope": capability_json.get("resource_scope", "unknown"),
+                    "condition_keys": capability_json.get("condition_keys", []),
+                    "target_resources": target_resources,
+                    "decision": "allowed",
+                    "confidence": _effective_access_confidence(capability_json, blockers),
+                    "blockers": blockers,
+                    "evidence": grant.evidence,
+                    "source": "terraform-plan",
+                }
+            )
+        return records
+
+    def _target_resources_for_grant(self, grant: IamGrant) -> list[str]:
+        if not grant.resource_refs:
+            return []
+        targets: list[str] = []
+        grant_refs = set(grant.resource_refs)
+        for resource in self.sensitive_resources:
+            if _references_any(grant_refs, _resource_identifiers(resource)):
+                targets.append(resource.address)
+        if targets:
+            return sorted(set(targets))
+        if "*" in grant_refs and "data_access" in grant.impacts:
+            return ["* sensitive resources"]
+        return []
+
+    @staticmethod
+    def _dedupe_effective_access(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        seen: set[tuple[str, str, str, tuple[str, ...], tuple[str, ...]]] = set()
+        deduped: list[dict[str, Any]] = []
+        for record in records:
+            refs = record.get("resource_refs")
+            targets = record.get("target_resources")
+            key = (
+                str(record.get("identity") or ""),
+                str(record.get("action") or ""),
+                str(record.get("impact") or ""),
+                tuple(str(item) for item in refs) if isinstance(refs, list) else (),
+                tuple(str(item) for item in targets) if isinstance(targets, list) else (),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(record)
+        return deduped
 
     def _build_graph(self) -> None:
         for resource in self.resources:
@@ -697,6 +788,7 @@ class TerraformAnalyzer:
                 path_exposure = self._network_paths.exposure_by_address.get(resource.address, "unknown")
                 exposure = max_exposure(exposure, path_exposure)
                 accumulator.exposure = max_exposure(accumulator.exposure, exposure)
+                accumulator.network_paths.extend(self._network_paths.network_paths_by_address.get(resource.address, []))
                 for item in self._network_paths.evidence_by_address.get(resource.address, []):
                     accumulator.evidence.append(item)
                 if exposure != "unknown":
@@ -710,6 +802,7 @@ class TerraformAnalyzer:
                 iam_impacts = self._network_paths.iam_impacts_by_address.get(resource.address, set())
                 accumulator.iam_impacts.update(iam_impacts)
                 accumulator.iam_capabilities.extend(self._network_paths.iam_capabilities_by_address.get(resource.address, []))
+                accumulator.effective_access.extend(self._network_paths.effective_access_by_address.get(resource.address, []))
                 iam_criticality = _network_iam_criticality(exposure, path_privilege, iam_impacts)
                 accumulator.criticality = max_criticality(accumulator.criticality, iam_criticality)
                 if iam_criticality != "unknown":
@@ -730,7 +823,7 @@ class TerraformAnalyzer:
                 )
             if accumulator.matched_resources:
                 contexts[artifact.name] = accumulator.as_context(source=f"terraform:{self.source_name}")
-        return TerraformAnalysis(contexts=contexts, coverage=coverage_report(self.resources, self.artifacts, match_rows))
+        return TerraformAnalysis(contexts=contexts, coverage=coverage_report(self.resources, self.artifacts, match_rows, self._network_paths))
 
     def _global_exposure(self) -> dict[str, str]:
         exposure: dict[str, str] = {}
@@ -1743,6 +1836,89 @@ def _network_iam_criticality(exposure: str, privilege: str, impacts: set[str]) -
     return "medium" if critical_impacts - {"admin_control"} else "unknown"
 
 
+def _network_entry_for_exposure(exposure: str) -> str:
+    return {
+        "public": "internet",
+        "external": "external_cidr",
+        "internal": "internal_network",
+        "private": "private_network",
+        "isolated": "isolated_network",
+    }.get(exposure, "unknown")
+
+
+def _network_path_type(exposure: str, path: list[str]) -> str:
+    text = " ".join(path).lower()
+    if exposure == "public" and ("load balancer" in text or "aws_lb" in text or "aws_alb" in text):
+        return "public_load_balancer"
+    if exposure == "public" and ("application_gateway" in text or "frontdoor" in text or "cloudfront" in text):
+        return "public_gateway"
+    if exposure == "public" and "function url" in text:
+        return "public_serverless_url"
+    if exposure == "public":
+        return "direct_public"
+    if exposure == "external":
+        return "restricted_external_ingress"
+    if "allows traffic from" in text or "private network reaches" in text or "network bridge" in text:
+        return "lateral_internal_path"
+    if exposure == "internal":
+        return "internal_ingress"
+    if exposure in {"private", "isolated"}:
+        return "no_observed_ingress"
+    return "unresolved"
+
+
+def _network_blockers_for_resource(resource: TerraformResource) -> list[dict[str, str]]:
+    values = resource.values
+    blockers: list[dict[str, str]] = []
+    for key in ("authorization_type", "authorization", "auth_type"):
+        auth = str(values.get(key) or "").strip()
+        if auth and auth.upper() not in {"NONE", "ANONYMOUS", "PUBLIC"}:
+            blockers.append({"kind": "auth_required", "evidence": f"{resource.address} {key}={auth}"})
+    if values.get("public_network_access_enabled") is False:
+        blockers.append({"kind": "public_network_disabled", "evidence": f"{resource.address} public_network_access_enabled=false"})
+    if values.get("internal") is True:
+        blockers.append({"kind": "internal_only_endpoint", "evidence": f"{resource.address} internal=true"})
+    ingress = str(values.get("ingress") or "").lower()
+    if "internal" in ingress:
+        blockers.append({"kind": "internal_ingress_only", "evidence": f"{resource.address} ingress={ingress}"})
+    return blockers
+
+
+def _effective_access_blockers(capability: dict[str, Any]) -> list[dict[str, str]]:
+    blockers: list[dict[str, str]] = []
+    scope = str(capability.get("resource_scope") or "unknown").lower()
+    if scope == "unknown":
+        blockers.append({"kind": "unknown_resource_scope", "evidence": "policy resource scope could not be resolved"})
+    elif scope == "scoped":
+        blockers.append({"kind": "scoped_resource", "evidence": "policy resource scope is constrained"})
+    condition_keys = capability.get("condition_keys")
+    if isinstance(condition_keys, list):
+        for key in condition_keys:
+            blockers.append({"kind": "condition", "evidence": f"condition key {key}"})
+    return blockers
+
+
+def _effective_access_confidence(capability: dict[str, Any], blockers: list[dict[str, str]]) -> str:
+    scope = str(capability.get("resource_scope") or "unknown").lower()
+    if scope == "unknown":
+        return "low"
+    if blockers:
+        return "medium"
+    return "high"
+
+
+def _dedupe_record_dicts(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for record in records:
+        token = json.dumps(record, sort_keys=True, default=str)
+        if token in seen:
+            continue
+        seen.add(token)
+        deduped.append(record)
+    return deduped
+
+
 def max_criticality(left: str, right: str) -> str:
     return left if criticality_rank(left) >= criticality_rank(right) else right
 
@@ -1780,7 +1956,12 @@ def tag_or_label(values: dict[str, Any], key: str, fallback: str | None = None) 
     return fallback
 
 
-def coverage_report(resources: list[TerraformResource], artifacts: list[Artifact], matches: list[dict[str, Any]]) -> dict[str, Any]:
+def coverage_report(
+    resources: list[TerraformResource],
+    artifacts: list[Artifact],
+    matches: list[dict[str, Any]],
+    network_analysis: NetworkPathAnalysis | None = None,
+) -> dict[str, Any]:
     total = len(resources)
     classified = sum(1 for resource in resources if resource.supported)
     provider_counts: dict[str, int] = {}
@@ -1801,6 +1982,11 @@ def coverage_report(resources: list[TerraformResource], artifacts: list[Artifact
         adapter_signals = network_adapter_signals(resource.type, resource.values)
         if adapter_signals:
             row["network_adapter_signals"] = [signal.to_json() for signal in adapter_signals]
+        if network_analysis:
+            if resource.address in network_analysis.network_paths_by_address:
+                row["network_paths"] = network_analysis.network_paths_by_address[resource.address]
+            if resource.address in network_analysis.effective_access_by_address:
+                row["effective_access"] = network_analysis.effective_access_by_address[resource.address]
         resource_rows.append(row)
         if not resource.supported:
             gap = {
@@ -1839,6 +2025,8 @@ def coverage_report(resources: list[TerraformResource], artifacts: list[Artifact
             "artifact_match_coverage": round(len(matched_artifacts) / len(artifacts), 4) if artifacts else 1.0,
             "providers_seen": provider_counts,
             "categories_seen": category_counts,
+            "network_paths_observed": sum(len(paths) for paths in network_analysis.network_paths_by_address.values()) if network_analysis else 0,
+            "effective_access_records": sum(len(records) for records in network_analysis.effective_access_by_address.values()) if network_analysis else 0,
         },
         "manifest": manifest,
         "resource_types_seen": sorted({resource.type for resource in resources}),
@@ -1871,6 +2059,8 @@ def empty_coverage_report() -> dict[str, Any]:
             "artifact_match_coverage": 1.0,
             "providers_seen": {},
             "categories_seen": {},
+            "network_paths_observed": 0,
+            "effective_access_records": 0,
         },
         "manifest": manifest_report(),
         "resource_types_seen": [],

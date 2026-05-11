@@ -1,0 +1,23 @@
+{
+  "evidence": [
+    {
+      "artifact": "payments-api",
+      "component": "log4j-core",
+      "vulnerability": "CVE-2021-44228",
+      "state": "attacker_controlled",
+      "confidence": "high",
+      "tool": "semgrep",
+      "reason": "Sample Semgrep evidence: request body reaches Log4j logger call.",
+      "language": "java",
+      "locations": [
+        {
+          "path": "samples/source/payments-api/src/main/java/com/acme/payments/PaymentController.java",
+          "line": 13,
+          "column": 9,
+          "snippet": "logger.info(\"creating payment for \" + request.customerId());"
+        }
+      ],
+      "matched_symbols": ["request_body", "log4j_logger"]
+    }
+  ]
+}

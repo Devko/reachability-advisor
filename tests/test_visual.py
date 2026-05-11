@@ -229,6 +229,7 @@ class VisualPayloadTests(unittest.TestCase):
         self.assertIn("no source rule", assets["worker"]["codeExposures"])
         vulns = {vuln["assetId"]: vuln for vuln in payload["vulnerabilities"]}
         self.assertEqual(vulns["asset:api"]["codeExposure"], "request-controlled path")
+        self.assertEqual(vulns["asset:api"]["effectivePath"]["order"][0], "asset")
         self.assertEqual(vulns["asset:job"]["codeExposure"], "reachable vulnerable API")
         self.assertEqual(vulns["asset:unused"]["codeExposure"], "SBOM only")
         self.assertEqual(vulns["asset:worker"]["codeExposure"], "no source rule")
@@ -258,6 +259,7 @@ class VisualPayloadTests(unittest.TestCase):
         self.assertIn("const vulnerabilityByFindingKey = new Map", html)
         self.assertIn("const vulnerabilitiesByAssetId = new Map", html)
         self.assertIn("const networkPathsByAssetId = new Map", html)
+        self.assertIn("function effectivePathLabels", html)
         self.assertIn('id="topLimit"', html)
         self.assertIn('id="highestPerAsset"', html)
         self.assertIn("top per asset", html)

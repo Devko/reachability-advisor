@@ -34,6 +34,7 @@ def _visual_payload(findings: list[Finding], metadata: dict[str, Any] | None = N
     finding_rows = [finding.to_json() for finding in findings]
     graph = evidence_graph or build_evidence_graph(findings, metadata=metadata)
     graph_paths_by_asset = _graph_network_paths_by_asset(graph)
+    effective_paths_by_key = _effective_paths_by_key(graph)
     assets: dict[str, dict[str, Any]] = {}
     vulnerabilities: list[dict[str, Any]] = []
     links: list[dict[str, Any]] = []
@@ -61,6 +62,7 @@ def _visual_payload(findings: list[Finding], metadata: dict[str, Any] | None = N
                 "criticalities": [],
                 "environments": [],
                 "iamImpacts": [],
+                "effectiveAccess": [],
                 "sourceStates": [],
                 "codeExposures": [],
                 "evidence": [],
@@ -89,6 +91,7 @@ def _visual_payload(findings: list[Finding], metadata: dict[str, Any] | None = N
             "privilege": context.get("privilege") or "unknown",
             "criticality": context.get("criticality") or "unknown",
             "iamImpacts": context.get("iam_impacts") or [],
+            "effectiveAccess": context.get("effective_access") or [],
             "summary": vulnerability.get("summary") or "",
             "rationale": finding.get("rationale") or [],
             "fixCommands": finding.get("fix_commands") or [],
@@ -96,6 +99,7 @@ def _visual_payload(findings: list[Finding], metadata: dict[str, Any] | None = N
             "sourceReason": source.get("reason") or "",
             "sourceLocations": source.get("locations") or [],
             "contextEvidence": context.get("evidence") or [],
+            "effectivePath": (finding.get("scoring") or {}).get("effective_exposure_path") or effective_paths_by_key.get(finding["key"], {}),
         }
         vulnerabilities.append(vulnerability_node)
         links.append(
@@ -152,6 +156,9 @@ def _raise_asset(asset: dict[str, Any], finding: dict[str, Any]) -> None:
     _append_unique(asset["codeExposures"], _code_exposure_label(source))
     for impact in context.get("iam_impacts") or []:
         _append_unique(asset["iamImpacts"], impact)
+    for access in context.get("effective_access") or []:
+        if len(asset["effectiveAccess"]) < 8:
+            _append_unique(asset["effectiveAccess"], access)
     for item in context.get("evidence") or []:
         if len(asset["evidence"]) < 8:
             _append_unique(asset["evidence"], item)
@@ -172,6 +179,10 @@ def _graph_network_paths_by_asset(graph: dict[str, Any]) -> dict[str, list[dict[
             "entryLabel": raw_path.get("entry_label") or _entry_label(str(raw_path.get("exposure") or "unknown")),
             "entrySubtitle": raw_path.get("entry_subtitle") or _entry_subtitle(str(raw_path.get("exposure") or "unknown")),
             "exposure": str(raw_path.get("exposure") or "unknown"),
+            "pathType": raw_path.get("path_type") or "unresolved",
+            "provider": raw_path.get("provider"),
+            "confidence": raw_path.get("confidence") or "low",
+            "blockers": raw_path.get("blockers") if isinstance(raw_path.get("blockers"), list) else [],
             "tier": "informational",
             "score": 0.0,
             "label": raw_path.get("label") or _fallback_path_label(str(raw_path.get("exposure") or "unknown")),
@@ -182,6 +193,21 @@ def _graph_network_paths_by_asset(graph: dict[str, Any]) -> dict[str, list[dict[
         }
         paths_by_asset.setdefault(asset_id, []).append(path)
     return paths_by_asset
+
+
+def _effective_paths_by_key(graph: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    effective = graph.get("effective_exposure_graph") if isinstance(graph, dict) else None
+    paths = effective.get("paths") if isinstance(effective, dict) else None
+    if not isinstance(paths, list):
+        return {}
+    by_key: dict[str, dict[str, Any]] = {}
+    for path in paths:
+        if not isinstance(path, dict):
+            continue
+        key = str(path.get("finding_key") or "")
+        if key:
+            by_key[key] = path
+    return by_key
 
 
 def _finalize_network_paths(assets: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -209,6 +235,10 @@ def _fallback_network_path(asset: dict[str, Any]) -> dict[str, Any]:
         "entryLabel": _entry_label(exposure),
         "entrySubtitle": _entry_subtitle(exposure),
         "exposure": exposure,
+        "pathType": "unresolved",
+        "provider": None,
+        "confidence": "low",
+        "blockers": [],
         "tier": asset.get("tier") or "informational",
         "score": safe_float(asset.get("score")),
         "label": _fallback_path_label(exposure),
@@ -1056,7 +1086,7 @@ function renderNetworkPathCard(path, position) {
   const datum = {...path, networkKind: "path"};
   const card = createCard("path-card", path.tier || "informational", position, datum);
   card.append(
-    cardTop("Ingress path", [exposureChip(path.exposure || "unknown"), pathCountChip(pathsForAsset.length)], path.label || "unknown path"),
+    cardTop("Ingress path", [exposureChip(path.exposure || "unknown"), tag(path.pathType || "unresolved", "count"), pathCountChip(pathsForAsset.length)], path.label || "unknown path"),
     smallBody(path.summary || "No linked path evidence.")
   );
   return card;
@@ -1258,10 +1288,14 @@ function renderDetails(datum) {
       asset: asset.name,
       entry: datum.entryLabel,
       "network exposure": datum.exposure,
+      "path type": datum.pathType,
+      confidence: datum.confidence,
+      provider: datum.provider,
       path: datum.summary,
       owner: datum.owner || asset.owner,
     }));
     appendList(section, "Path steps", datum.steps || []);
+    appendList(section, "Blockers and constraints", (datum.blockers || []).map(blocker => `${blocker.kind}: ${blocker.evidence}`));
     appendList(section, "Network evidence", networkPathsForAsset(datum.assetId).map(path => path.evidence || path.summary).filter(Boolean));
   } else if (datum.findingKey) {
     section.append(heading(`${datum.label} in ${datum.component}`));
@@ -1278,7 +1312,9 @@ function renderDetails(datum) {
       policy: datum.policyStatus,
     }));
     appendList(section, "Rationale", datum.rationale || []);
+    appendList(section, "Effective exposure path", effectivePathLabels(datum.effectivePath));
     appendList(section, "Fix commands", datum.fixCommands || []);
+    appendList(section, "Effective access", (datum.effectiveAccess || []).map(access => `${access.identity || "identity"} ${access.action || "action"} ${access.decision || "allowed"} (${access.confidence || "unknown"})`));
     appendList(section, "Context evidence", datum.contextEvidence || []);
     appendList(section, "Source evidence", datum.sourceReason ? [datum.sourceReason] : []);
     appendList(section, "Source locations", (datum.sourceLocations || []).map(location => `${location.path}:${location.line}`));
@@ -1290,6 +1326,7 @@ function renderDetails(datum) {
       reference: datum.reference,
       network: datum.exposures,
       IAM: [...datum.privileges, ...datum.iamImpacts],
+      "effective access": (datum.effectiveAccess || []).map(access => access.action || access.impact || "access").slice(0, 5),
       criticality: datum.criticalities,
       "code exposure": datum.codeExposures,
       source: datum.sourceStates,
@@ -1313,6 +1350,12 @@ function codeExposureFromState(source) {
   if (state === "package_present") return "SBOM only";
   if (state === "absent") return "absent from scanned source";
   return "unknown source reachability";
+}
+
+function effectivePathLabels(path) {
+  if (!path || !Array.isArray(path.order)) return [];
+  const nodeIds = Array.isArray(path.node_ids) ? path.node_ids : [];
+  return path.order.map((step, index) => `${index + 1}. ${step}: ${nodeIds[index] || "unknown"}`);
 }
 
 function heading(value) {

@@ -145,6 +145,22 @@ def write_diagnostics(findings: list[Finding], path: str | Path) -> None:
                 "component": finding.component.name,
                 "tier": finding.tier.value,
                 "score": round(finding.score, 2),
+                "confidence": finding.confidence.value,
+                "source_reachability": finding.source.reachability.value,
+                "source_evidence": finding.source.evidence_source,
+                "context": {
+                    "exposure": finding.context.exposure,
+                    "privilege": finding.context.privilege,
+                    "criticality": finding.context.criticality,
+                    "owner": finding.context.owner,
+                },
+                "explanation": "; ".join(finding.rationale[:4]),
+                "evidence": {
+                    "source_locations": [location.to_json() for location in finding.source.locations],
+                    "network_paths": finding.context.network_paths,
+                    "effective_access": finding.context.effective_access,
+                    "context_evidence": finding.context.evidence[:12],
+                },
             }
         )
     out = Path(path)

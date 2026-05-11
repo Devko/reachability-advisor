@@ -16,10 +16,33 @@ CycloneDX SBOMs
   -> source reachability evidence
   -> artifact-to-Terraform workload matches
   -> exposure / identity / data context
+  -> effective exposure graph
   -> score and tier
   -> remediation groups by artifact/component/version
   -> JSON/SARIF/diagnostics/Markdown/HTML/annotations/coverage/mapping
 ```
+
+## Effective exposure graph
+
+Every finding is normalized into one path:
+
+```text
+asset -> network path -> identity -> reachable code/package -> vulnerability -> score
+```
+
+This path is the main evidence model. The separate network, IAM, code, and vulnerability views are compatibility views for reporting and debugging.
+
+Each effective edge records:
+
+- `evidence_layer`: `sbom`, `source`, `external_analyzer`, `terraform`, `kubernetes`, `iam`, `context`, or `scoring`;
+- `origin_layer`: where the edge came from when it differs from the semantic layer, for example IAM derived from Terraform;
+- `evidence_source`: the concrete rule, record, analyzer, path, or scoring model that produced the edge;
+- `confidence`: `high`, `medium`, or `low`;
+- `provider` and `language`, when known;
+- `blockers`: concrete constraints such as IAM conditions, private endpoints, network policy denies, or auth gates;
+- `unknowns`: missing evidence that prevents stronger conclusions.
+
+The graph is intentionally evidence-first. A high score should be traceable from the score node back through the vulnerable package, source evidence, identity, and network path to the asset. Missing network, identity, or source evidence stays visible as `unknowns`; it is not treated as proof of safety.
 
 ## SBOM acquisition model
 
@@ -84,13 +107,15 @@ Source reachability states:
 | `function_reachable` | Source imports the package and contains usage patterns associated with vulnerable APIs or high-risk library functions. |
 | `attacker_controlled` | The same function contains risky usage and input/entrypoint evidence, or a bounded static handler-to-sink call path links entrypoint code to the vulnerable sink. |
 
-The default analyzer builds one source index per artifact for Python, JavaScript/TypeScript, Java, and Go. Python functions are extracted with the standard-library `ast` module; other languages use conservative syntax patterns. The analyzer can promote same-function input/sink evidence and bounded handler-to-sink call paths to `attacker_controlled`. It does not model full interprocedural dataflow, dependency injection, async framework lifecycles, reflection, or framework-specific sanitizers.
+The default analyzer builds one source index per artifact for Python, JavaScript/TypeScript, Java, and Go. Python functions are extracted with the standard-library `ast` module; other languages use conservative syntax patterns. The analyzer can promote same-function input/sink evidence and bounded handler-to-sink call paths to `attacker_controlled`. It does not model full interprocedural dataflow, dependency injection, async framework lifecycles, reflection, or framework-specific sanitizers. Treat this as advisory fallback evidence.
 
 Rules are visible in `src/reachability_advisor/source.py`. Additional project-specific rules can be supplied with `--reachability-rules`. Use `export-semgrep-rules` to generate starter Semgrep YAML from built-in and custom rules. Use `--source-evidence-in` to import evidence from Reachability Advisor JSON, Semgrep JSON including native `dataflow_trace`, CodeQL/SARIF data-flow paths, plain SARIF, or govulncheck JSONL.
 
 When multiple source evidence providers match the same finding, the scanner picks the strongest record by reachability state, confidence, selector specificity, then provider trust. Exact package URL or vulnerability selectors beat package-name-only selectors. CodeQL, Semgrep, govulncheck, and native Reachability Advisor evidence are preserved as provider names in `source_reachability.evidence_source`, `source-coverage.json`, and the evidence graph.
 
-External source evidence must include a component/package, package URL, or vulnerability selector. Artifact-only records are retained for diagnostics but do not upgrade findings, because artifact names can only narrow a dependency match. `source-coverage.json` reports unmatchable external records under `external_evidence_selector_diagnostics`. CI can enforce this with `--require-external-source-evidence` and `--min-external-evidence-usable-ratio`.
+External source evidence must include a component/package, package URL, or vulnerability selector. Artifact-only records are retained for diagnostics but do not upgrade findings, because artifact names can only narrow a dependency match. `source-coverage.json` reports unmatchable external records under `external_evidence_selector_diagnostics`.
+
+Use `--analysis-profile production` for release gates. It requires external source evidence, enforces selector usability, and requires rendered deployment evidence from `--terraform-plan` or `--kubernetes-manifest`. The default `advisory` profile keeps built-in source rules useful for local development and early pull requests.
 
 Built-in high-risk source rules currently cover common Java, Node, Python, and Go evidence:
 
@@ -117,9 +142,10 @@ Terraform evidence is derived from a local `terraform show -json` plan. Plan mod
 4. Extract likely container image or artifact references from provider-specific and generic fields.
 5. Match those references against SBOM artifact candidates and preserve candidate source/strength in the match proof.
 6. Build a bounded network graph from ingress, load balancer, target attachment, gateway backend, service, security-group, private-network, and provider bridge edges.
-7. Infer exposure from graph paths linked to the matched workload.
-8. Infer direct workload identity privilege and IAM impact classes from IAM/role/policy resources, including targeted sensitive resources where visible. Unrelated provider-level IAM is not applied to every workload.
-9. Emit coverage and mapping reports.
+7. Infer exposure from graph paths linked to the matched workload. The emitted context includes typed `network_paths` with path type, provider, confidence, steps, and blocker/constraint evidence where visible.
+8. Build effective-access records per matched workload identity, resource/action, impact, scope, condition keys, target resources, confidence, and blockers. This is a local evidence graph, not a full cloud IAM simulator.
+9. Infer direct workload identity privilege and IAM impact classes from IAM/role/policy resources, including targeted sensitive resources where visible. Unrelated provider-level IAM is not applied to every workload.
+10. Emit coverage and mapping reports.
 
 Helm and kubectl wrapper resources are classified as Kubernetes supporting
 resources, but they still emit `opaque_manifest_wrapper` visibility gaps because
@@ -198,7 +224,7 @@ Missing context is `unknown`; it is not isolation evidence.
 
 ## Scoring
 
-The score is explainable and capped at 100. It starts from vulnerability severity, then adds exploit likelihood, source evidence, dependency scope, network exposure, environment, and the strongest context impact:
+The score is derived from the effective exposure path and capped at 100. It starts from vulnerability severity, then adds exploit likelihood, source evidence, dependency scope, network exposure, environment, and the strongest context impact:
 
 ```text
 score = severity
@@ -221,6 +247,8 @@ Priority gates prevent weakly actionable findings from crossing high-severity th
 - import-only evidence is capped below `high` unless it is public/external and has critical context;
 - private/no-ingress findings without exploit signal or critical context are capped below `high`;
 - `urgent` requires known exploitation, high EPSS, a request-controlled public/external path, or critical reachable context.
+
+Each JSON finding includes `scoring.effective_exposure_path`, a compact reference to the path used for the score. The full node and edge details are in `evidence_graph.effective_exposure_graph`.
 
 The default model is meant to separate these common cases:
 

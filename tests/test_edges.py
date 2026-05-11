@@ -13,6 +13,7 @@ from reachability_advisor.context import (
     infer_context_from_terraform,
     load_context_file,
 )
+from reachability_advisor.evidence_graph import build_evidence_graph
 from reachability_advisor.iam_capabilities import dedupe_iam_capabilities, strongest_capability
 from reachability_advisor.models import (
     Artifact,
@@ -321,6 +322,77 @@ class SourceAndScoringEdgeTests(unittest.TestCase):
         )
         self.assertGreater(critical.score, base.score)
         self.assertIn("highest context impact (criticality high) contributes", " ".join(critical.rationale))
+
+    def test_effective_exposure_graph_carries_provenance_on_each_edge(self) -> None:
+        sbom_like = type("SbomLike", (), {"artifact": Artifact(name="api", reference="ghcr.io/acme/api:1")})()
+        finding = score_finding(
+            sbom_like,
+            Component(name="requests", version="2.19.0", purl="pkg:pypi/requests@2.19.0"),
+            VulnerabilityRecord(id="CVE-X", package_name="requests", package_purl="pkg:pypi/requests@2.19.0", cvss=8.0),
+            SourceEvidence(
+                reachability=Reachability.ATTACKER_CONTROLLED,
+                confidence=Confidence.HIGH,
+                language="python",
+                evidence_source="semgrep",
+            ),
+            ContextEvidence(
+                exposure="public",
+                privilege="sensitive",
+                criticality="high",
+                confidence=Confidence.HIGH,
+                source="terraform",
+                network_paths=[
+                    {
+                        "source": "terraform",
+                        "provider": "aws",
+                        "exposure": "public",
+                        "path_type": "public_load_balancer",
+                        "label": "aws_lb.edge",
+                        "steps": ["aws_lb.edge", "aws_ecs_service.api"],
+                        "confidence": "high",
+                        "evidence": "terraform network path: public via aws_lb.edge -> aws_ecs_service.api",
+                    }
+                ],
+                effective_access=[
+                    {
+                        "identity": "aws_iam_role.api",
+                        "resource": "aws_secretsmanager_secret.db",
+                        "action": "secretsmanager:GetSecretValue",
+                        "impact": "data_access",
+                        "provider": "aws",
+                        "source": "terraform",
+                        "confidence": "medium",
+                        "blockers": [{"kind": "condition", "evidence": "aws:SourceVpce must match"}],
+                    }
+                ],
+            ),
+            ScorePolicy(),
+        )
+
+        graph = build_evidence_graph([finding])["effective_exposure_graph"]
+        self.assertEqual(graph["path_order"], ["asset", "network_path", "identity", "reachable_code_package", "vulnerability", "score"])
+        self.assertEqual(len(graph["paths"]), 1)
+        node_ids = {node["id"] for node in graph["nodes"]}
+        edge_ids = {edge["id"] for edge in graph["edges"]}
+        required_edge_fields = {
+            "evidence_layer",
+            "origin_layer",
+            "evidence_source",
+            "confidence",
+            "provider",
+            "language",
+            "blockers",
+            "unknowns",
+            "blocker_state",
+        }
+        self.assertTrue(all(required_edge_fields.issubset(edge) for edge in graph["edges"]))
+        self.assertEqual({edge["sequence"] for edge in graph["edges"]}, {0, 1, 2, 3, 4})
+        self.assertTrue(set(graph["paths"][0]["node_ids"]).issubset(node_ids))
+        self.assertTrue(set(graph["paths"][0]["edge_ids"]).issubset(edge_ids))
+        self.assertTrue(all(edge["source"] in node_ids and edge["target"] in node_ids for edge in graph["edges"]))
+        self.assertTrue({"terraform", "iam", "external_analyzer", "sbom", "scoring"}.issubset({edge["evidence_layer"] for edge in graph["edges"]}))
+        self.assertTrue(any(edge["blocker_state"] == "blocked" for edge in graph["edges"]))
+        self.assertEqual(finding.score_details["effective_exposure_path"]["path_id"], graph["paths"][0]["id"])
 
     def test_weak_source_evidence_cannot_stack_into_high(self) -> None:
         sbom_like = type("SbomLike", (), {"artifact": Artifact(name="catalog")})()

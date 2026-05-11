@@ -28,6 +28,10 @@ def _context_from_mapping(raw: dict[str, Any], source: str) -> ContextEvidence:
     evidence = raw_evidence if isinstance(raw_evidence, list) else []
     raw_capabilities = raw.get("iam_capabilities")
     iam_capabilities = dedupe_iam_capabilities([dict(item) for item in raw_capabilities if isinstance(item, dict)]) if isinstance(raw_capabilities, list) else []
+    raw_effective_access = raw.get("effective_access")
+    effective_access = [dict(item) for item in raw_effective_access if isinstance(item, dict)] if isinstance(raw_effective_access, list) else []
+    raw_network_paths = raw.get("network_paths")
+    network_paths = [dict(item) for item in raw_network_paths if isinstance(item, dict)] if isinstance(raw_network_paths, list) else []
     confidence = str(raw.get("confidence") or "medium").lower()
     if confidence not in {"high", "medium", "low"}:
         confidence = "medium"
@@ -38,6 +42,8 @@ def _context_from_mapping(raw: dict[str, Any], source: str) -> ContextEvidence:
         criticality=str(raw.get("criticality") or "unknown").lower(),
         iam_impacts=[str(item).lower() for item in raw.get("iam_impacts", [])] if isinstance(raw.get("iam_impacts"), list) else [],
         iam_capabilities=iam_capabilities,
+        effective_access=effective_access,
+        network_paths=network_paths,
         owner=str(raw.get("owner")) if raw.get("owner") else None,
         source=source,
         confidence=Confidence(confidence),

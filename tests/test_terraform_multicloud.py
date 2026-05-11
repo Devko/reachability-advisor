@@ -345,9 +345,14 @@ class TerraformAnalysisTests(unittest.TestCase):
         self.assertEqual(analysis.contexts["batch-worker"].privilege, "unknown")
         self.assertTrue(any("terraform network path: internal" in item for item in analysis.contexts["inventory-api"].evidence))
         self.assertTrue(any("terraform network path: internal" in item for item in analysis.contexts["reports-api"].evidence))
+        self.assertTrue(analysis.contexts["payments-api"].network_paths)
+        self.assertTrue(analysis.contexts["orders-api"].effective_access)
+        self.assertIn("confidence", analysis.contexts["orders-api"].effective_access[0])
         self.assertEqual(analysis.coverage["summary"]["resource_accounting_coverage"], 1.0)
         self.assertEqual(analysis.coverage["summary"]["semantic_classification_coverage"], 1.0)
         self.assertEqual(analysis.coverage["summary"]["artifact_match_coverage"], 1.0)
+        self.assertGreater(analysis.coverage["summary"]["network_paths_observed"], 0)
+        self.assertGreater(analysis.coverage["summary"]["effective_access_records"], 0)
 
     def test_unsupported_resources_are_reported_as_visibility_gaps(self) -> None:
         artifacts = [Artifact(name="app", reference="ghcr.io/acme/app:1")]

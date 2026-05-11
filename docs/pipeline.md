@@ -1,11 +1,12 @@
 # CI Pipeline Integration
 
-Reachability Advisor runs after SBOM and vulnerability generation. A production gate requires four inputs for each deployable artifact:
+Reachability Advisor runs after SBOM, vulnerability, source-evidence, and deployment-evidence generation. A production gate requires five inputs for each deployable artifact:
 
 1. CycloneDX SBOM.
 2. Grype JSON generated from that SBOM.
-3. Source root for code reachability.
-4. Terraform plan JSON and/or rendered Kubernetes manifests for workload, network, and IAM context.
+3. Source root for local mapping and advisory fallback checks.
+4. External source reachability evidence from Semgrep, CodeQL/SARIF, govulncheck, or native Reachability Advisor evidence.
+5. Terraform plan JSON and/or rendered Kubernetes manifests for workload, network, and IAM context.
 
 The scanner itself does not call external services. Keep Syft, Grype, Terraform, and artifact upload steps in the pipeline so teams can pin versions, cache databases, and control credentials.
 
@@ -42,6 +43,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install git+https://github.com/Devko/reachability-advisor.git@main
+          python -m pip install semgrep
 
       - name: Install Syft and Grype
         run: |
@@ -72,6 +74,11 @@ jobs:
           # Replace this with `helm template`, `kustomize build`, or the checked-in rendered YAML path used by your repository.
           test ! -d k8s || cp k8s/*.yaml reachability/ || true
 
+      - name: Generate source reachability evidence
+        run: |
+          reachability-advisor export-semgrep-rules --out reachability/semgrep-reachability.yml
+          semgrep scan --config reachability/semgrep-reachability.yml --json --output reachability/semgrep.json
+
       - name: Run reachability prioritization
         run: |
           k8s_args=()
@@ -82,9 +89,11 @@ jobs:
             --sbom sboms/app.cdx.json \
             --vulns vulns/app.grype.json \
             --source-root app=. \
+            --source-evidence-in reachability/semgrep.json \
             --terraform-plan reachability/tfplan.json \
             --terraform-coverage-out reachability/terraform-coverage.json \
             "${k8s_args[@]}" \
+            --analysis-profile production \
             --source-coverage-out reachability/source-coverage.json \
             --mapping-out reachability/mapping.json \
             --out reachability/findings.json \
@@ -142,9 +151,12 @@ When you want the scanner installed directly from this repository, use the compo
           vulns: vulns/app.grype.json
           source-root: |
             app=.
-          terraform-source: infra
+          source-evidence-in: |
+            reachability/semgrep.json
+          terraform-plan: reachability/tfplan.json
           kubernetes-manifest: |
             k8s/rendered.yaml
+          analysis-profile: production
           policy: configs/policy.example.json
           baseline: reachability-baseline.json
           min-artifact-match-coverage: "0.9"
@@ -199,17 +211,24 @@ For release branches and deployment gates, scan the built artifact instead of th
           terraform -chdir=infra plan -refresh=false -out=tfplan.binary
           terraform -chdir=infra show -json tfplan.binary > reachability/tfplan.json
 
+      - name: Generate source reachability evidence
+        run: |
+          reachability-advisor export-semgrep-rules --out reachability/semgrep-reachability.yml
+          semgrep scan --config reachability/semgrep-reachability.yml --json --output reachability/semgrep.json
+
       - name: Run release gate
         run: |
           reachability-advisor scan \
             --sbom sboms/app.cdx.json \
             --vulns vulns/app.grype.json \
             --source-root app=. \
+            --source-evidence-in reachability/semgrep.json \
             --artifact-alias app=local/app:${{ github.sha }} \
             --terraform-plan reachability/tfplan.json \
             --terraform-coverage-out reachability/terraform-coverage.json \
             --kubernetes-manifest k8s/rendered.yaml \
             --kubernetes-coverage-out reachability/kubernetes-coverage.json \
+            --analysis-profile production \
             --source-coverage-out reachability/source-coverage.json \
             --mapping-out reachability/mapping.json \
             --out reachability/findings.json \
@@ -221,18 +240,20 @@ For release branches and deployment gates, scan the built artifact instead of th
             --fail-on-tier high
 ```
 
-Use `--terraform-source infra` only when a plan cannot be generated in the job. Source mode cannot evaluate modules, `count`, `for_each`, data sources, provider defaults, or dynamic expressions.
+Use `--terraform-source infra` only for advisory feedback when a plan cannot be generated in the job. Source mode cannot evaluate modules, `count`, `for_each`, data sources, provider defaults, rendered Helm output, or generated Kubernetes child resources. It is rejected by `--analysis-profile production`.
 
 ## Recommended Pattern
 
 1. Generate one CycloneDX SBOM per deployable artifact.
 2. Generate Grype JSON from the same SBOM.
 3. Pass the matching source checkout with `--source-root name=path`.
-4. Pass Terraform plan JSON for release gates.
-5. Pass rendered Kubernetes YAML/JSON when workloads are deployed through Kubernetes, Helm, or Kustomize.
-6. Write `--mapping-out`, `--source-coverage-out`, `--terraform-coverage-out`, `--kubernetes-coverage-out`, and `--evidence-graph-out` when the related inputs are present.
-7. Upload SARIF to GitHub code scanning and upload JSON/Markdown/HTML artifacts for audit.
-8. Fail on `--fail-on-tier high` only when the team is ready to enforce the prioritized queue.
+4. Import source evidence with `--source-evidence-in`; use built-in rules only as fallback.
+5. Pass Terraform plan JSON for release gates.
+6. Pass rendered Kubernetes YAML/JSON when workloads are deployed through Kubernetes, Helm, or Kustomize.
+7. Use `--analysis-profile production` for release gates.
+8. Write `--mapping-out`, `--source-coverage-out`, `--terraform-coverage-out`, `--kubernetes-coverage-out`, and `--evidence-graph-out` when the related inputs are present.
+9. Upload SARIF to GitHub code scanning and upload JSON/Markdown/HTML artifacts for audit.
+10. Fail on `--fail-on-tier high` only when the team is ready to enforce the prioritized queue.
 
 Terraform plan JSON can include sensitive values. Prefer not to upload it. Upload `terraform-coverage.json`, `kubernetes-coverage.json`, `source-coverage.json`, `mapping.json`, and `evidence-graph.json` instead.
 
@@ -296,8 +317,8 @@ reachability-advisor scan \
   --vulns vulns/app.grype.json \
   --source-root app=. \
   --source-evidence-in reachability/semgrep.json \
-  --require-external-source-evidence \
-  --min-external-evidence-usable-ratio 1.0 \
+  --terraform-plan reachability/tfplan.json \
+  --analysis-profile production \
   --source-coverage-out reachability/source-coverage.json \
   --out reachability/findings.json
 ```
@@ -315,7 +336,9 @@ reachability-advisor scan \
   --sbom sboms/app.cdx.json \
   --vulns vulns/app.grype.json \
   --source-root app=. \
+  --source-evidence-in reachability/semgrep.json \
   --terraform-plan tfplan.json \
+  --analysis-profile production \
   --mapping-out reachability/mapping.json \
   --source-coverage-out reachability/source-coverage.json \
   --min-artifact-match-coverage 1.0 \

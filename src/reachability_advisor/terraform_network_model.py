@@ -53,10 +53,12 @@ class NetworkPathEdge:
 class NetworkPathAnalysis:
     exposure_by_address: dict[str, str] = field(default_factory=dict)
     evidence_by_address: dict[str, list[str]] = field(default_factory=dict)
+    network_paths_by_address: dict[str, list[dict[str, object]]] = field(default_factory=dict)
     privilege_by_address: dict[str, str] = field(default_factory=dict)
     privilege_evidence_by_address: dict[str, list[str]] = field(default_factory=dict)
     iam_impacts_by_address: dict[str, set[str]] = field(default_factory=dict)
     iam_capabilities_by_address: dict[str, list[dict[str, object]]] = field(default_factory=dict)
+    effective_access_by_address: dict[str, list[dict[str, object]]] = field(default_factory=dict)
     iam_target_evidence_by_address: dict[str, list[str]] = field(default_factory=dict)
 
 

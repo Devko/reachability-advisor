@@ -14,6 +14,8 @@
           "criticality": {"type": "string"},
           "iam_impacts": {"type": "array", "items": {"type": "string"}},
           "iam_capabilities": {"type": "array", "items": {"type": "object"}},
+          "effective_access": {"type": "array", "items": {"type": "object"}},
+          "network_paths": {"type": "array", "items": {"type": "object"}},
           "owner": {"type": "string"},
           "confidence": {"enum": ["high", "medium", "low"]},
           "evidence": {"type": "array", "items": {"type": "string"}}

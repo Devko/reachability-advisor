@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .effective_graph import scoring_path_summary
 from .iam_capabilities import (
     CRITICAL_CAPABILITY_IMPACTS,
     capability_risk_multiplier,
@@ -358,7 +359,7 @@ def score_finding(
             rationale.append(f"{reason}; score remains below cap")
     score = max(0.0, min(100.0, score))
     tier = tier_for_score(score, policy)
-    return Finding(
+    finding = Finding(
         key=finding_key(sbom.artifact, component, vulnerability),
         artifact=sbom.artifact,
         component=component,
@@ -378,6 +379,8 @@ def score_finding(
             "tier": tier.value,
         },
     )
+    finding.score_details["effective_exposure_path"] = scoring_path_summary(finding)
+    return finding
 
 
 def generate_findings(

@@ -4,18 +4,25 @@
   "description": "Runs Reachability Advisor and displays dependency vulnerability diagnostics.",
   "version": "1.0.0",
   "publisher": "reachability-advisor-contributors",
-  "license": "Apache-2.0",
+  "license": "GPL-3.0-or-later",
   "engines": {
     "vscode": "^1.90.0"
   },
   "categories": ["Linters", "Other"],
-  "activationEvents": ["onCommand:reachabilityAdvisor.scanWorkspace"],
+  "activationEvents": [
+    "onCommand:reachabilityAdvisor.scanWorkspace",
+    "onCommand:reachabilityAdvisor.explainFinding"
+  ],
   "main": "./extension.js",
   "contributes": {
     "commands": [
       {
         "command": "reachabilityAdvisor.scanWorkspace",
         "title": "Reachability Advisor: Scan Workspace"
+      },
+      {
+        "command": "reachabilityAdvisor.explainFinding",
+        "title": "Reachability Advisor: Explain Finding"
       }
     ],
     "configuration": {
@@ -41,10 +48,52 @@
           "default": "",
           "description": "Context JSON path relative to the workspace root."
         },
+        "reachabilityAdvisor.policy": {
+          "type": "string",
+          "default": "",
+          "description": "Runtime policy JSON path relative to the workspace root."
+        },
         "reachabilityAdvisor.sourceRootArtifact": {
           "type": "string",
           "default": "app",
           "description": "Artifact name used for artifact=workspace source-root mapping."
+        },
+        "reachabilityAdvisor.analysisProfile": {
+          "type": "string",
+          "enum": ["advisory", "production"],
+          "default": "advisory",
+          "description": "Scan profile. Production expects external source evidence and rendered deployment evidence."
+        },
+        "reachabilityAdvisor.sourceEvidence": {
+          "type": ["array", "string"],
+          "default": [],
+          "description": "External source evidence paths. Supports Reachability Advisor JSON, Semgrep JSON, SARIF/CodeQL, and govulncheck JSONL."
+        },
+        "reachabilityAdvisor.terraformPlan": {
+          "type": "string",
+          "default": "",
+          "description": "terraform show -json plan path relative to the workspace root."
+        },
+        "reachabilityAdvisor.terraformSource": {
+          "type": "string",
+          "default": "",
+          "description": "Terraform source path for advisory scans when no plan is available."
+        },
+        "reachabilityAdvisor.kubernetesManifest": {
+          "type": ["array", "string"],
+          "default": [],
+          "description": "Rendered Kubernetes YAML/JSON manifest paths or directories."
+        },
+        "reachabilityAdvisor.baseline": {
+          "type": "string",
+          "default": "",
+          "description": "Baseline artifact. When present, diagnostics are filtered to new or worsened findings."
+        },
+        "reachabilityAdvisor.diagnosticMinimumTier": {
+          "type": "string",
+          "enum": ["informational", "low", "medium", "high", "urgent"],
+          "default": "low",
+          "description": "Minimum tier shown as VS Code diagnostics."
         }
       }
     }
