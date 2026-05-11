@@ -26,8 +26,6 @@ if str(SRC) not in sys.path:
 from reachability_advisor import __version__  # noqa: E402
 from reachability_advisor.cli import main as cli_main  # noqa: E402
 
-from scripts import run_complex_app_validation as complex_validation  # noqa: E402
-
 
 class ReleaseCheckError(RuntimeError):
     """Raised when a release check fails."""
@@ -405,6 +403,8 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
     fixture_report = out_dir / "fixtures-report.json"
     run_cli(["fixtures", "run", "--out", str(fixture_report), "--output-dir", str(out_dir / "fixtures")])
     check("generated fixture run report", fixture_report, "fixture-run-report.schema.json")
+
+    from scripts import run_complex_app_validation as complex_validation
 
     complex_benchmark = out_dir / "complex-benchmark.json"
     complex_benchmark_md = out_dir / "complex-benchmark.md"
