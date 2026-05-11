@@ -9,6 +9,8 @@
 - Added golden output regression coverage for sample findings, coverage summaries, and visual graph connectivity.
 - Added hostile-input tests for malformed SBOM/vulnerability/source-evidence inputs and HTML report escaping.
 - Added complex app benchmark JSON/Markdown output for scale validation drift tracking.
+- Added a schema contract for complex benchmark output and direct schema regression tests for repository fixtures/config.
+- Added CI artifact upload for generated reports and built packages.
 - Refactored visual graph ranking and card layout constants into a shared module.
 
 ## 1.0.0 - 2026-05-10

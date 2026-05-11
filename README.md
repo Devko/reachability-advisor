@@ -347,7 +347,7 @@ python scripts/run_complex_app_validation.py \
   --strict
 ```
 
-Outputs are written to `outputs/external-complex/`.
+Outputs are written to `outputs/external-complex/`, including schema-validated `benchmark.json` and `benchmark.md` for release-to-release drift checks.
 Current local snapshots:
 
 - AWS Retail Store: 5 service SBOMs, 40 Grype matches, 40 findings, 24 remediation groups, 91 Terraform resources, and generated HTML graph.
@@ -435,7 +435,7 @@ It verifies:
 - source-evidence imports: native Reachability Advisor JSON, Reachability Advisor findings JSON, Semgrep JSON/dataflow traces, SARIF/CodeQL code flows, and govulncheck JSONL;
 - deployment/context inputs: Terraform plan JSON, Terraform source paths through `hcl-audit`, rendered Kubernetes YAML/JSON, context JSON, and artifact aliases;
 - configuration inputs: custom reachability rules and runtime policy JSON;
-- exports: findings JSON, remediation groups, baseline JSON, PR delta JSON/Markdown, SARIF, diagnostics JSON, PR summary Markdown, GitHub annotations, self-contained HTML graph, source coverage, Terraform coverage, Kubernetes coverage, mapping reports, HCL audit JSON/Markdown, SBOM plan JSON/Markdown, Semgrep starter rules, fixture validation, fixture run reports, and single-finding explanations.
+- exports: findings JSON, remediation groups, baseline JSON, PR delta JSON/Markdown, SARIF, diagnostics JSON, PR summary Markdown, GitHub annotations, self-contained HTML graph, source coverage, Terraform coverage, Kubernetes coverage, mapping reports, HCL audit JSON/Markdown, SBOM plan JSON/Markdown, complex benchmark JSON/Markdown, Semgrep starter rules, fixture validation, fixture run reports, and single-finding explanations.
 
 ## Run quality gates
 
@@ -452,7 +452,7 @@ make package
 Current validation snapshot:
 
 ```text
-Ran 395 tests: OK
+Ran 397 tests: OK
 Coverage: 93%
 Coverage gate: 93% passed
 Fixture packs: 9 passed, 0 failed

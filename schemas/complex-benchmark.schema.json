@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Reachability Advisor Complex Benchmark",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "corpus", "aggregate", "cases"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "generated_at": {"type": ["string", "null"]},
+    "corpus": {"type": ["string", "null"]},
+    "aggregate": {
+      "type": "object",
+      "required": [
+        "case_count",
+        "passed_count",
+        "failed_count",
+        "skipped_count",
+        "sbom_count",
+        "vulnerability_matches",
+        "finding_count",
+        "remediation_count",
+        "services_with_findings",
+        "terraform_resources",
+        "terraform_artifacts_matched",
+        "mapping_warnings",
+        "tier_counts",
+        "remediation_tier_counts",
+        "source_reachability_counts",
+        "exposure_counts",
+        "privilege_counts"
+      ],
+      "properties": {
+        "case_count": {"type": "integer", "minimum": 0},
+        "passed_count": {"type": "integer", "minimum": 0},
+        "failed_count": {"type": "integer", "minimum": 0},
+        "skipped_count": {"type": "integer", "minimum": 0},
+        "sbom_count": {"type": "integer", "minimum": 0},
+        "vulnerability_matches": {"type": "integer", "minimum": 0},
+        "finding_count": {"type": "integer", "minimum": 0},
+        "remediation_count": {"type": "integer", "minimum": 0},
+        "services_with_findings": {"type": "integer", "minimum": 0},
+        "terraform_resources": {"type": "integer", "minimum": 0},
+        "terraform_artifacts_matched": {"type": "integer", "minimum": 0},
+        "mapping_warnings": {"type": "integer", "minimum": 0},
+        "tier_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+        "remediation_tier_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+        "source_reachability_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+        "exposure_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+        "privilege_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}}
+      },
+      "additionalProperties": true
+    },
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "sbom_count",
+          "vulnerability_matches",
+          "finding_count",
+          "remediation_count",
+          "services_with_findings",
+          "terraform_resources",
+          "terraform_artifacts_matched",
+          "terraform_artifact_match_coverage",
+          "mapping_warnings",
+          "tier_counts",
+          "remediation_tier_counts",
+          "source_reachability_counts",
+          "exposure_counts",
+          "privilege_counts",
+          "expectations_passed",
+          "expectations_failed"
+        ],
+        "properties": {
+          "id": {"type": ["string", "null"]},
+          "status": {"type": ["string", "null"], "enum": ["passed", "failed", "skipped", null]},
+          "sbom_count": {"type": "integer", "minimum": 0},
+          "vulnerability_matches": {"type": "integer", "minimum": 0},
+          "finding_count": {"type": "integer", "minimum": 0},
+          "remediation_count": {"type": "integer", "minimum": 0},
+          "services_with_findings": {"type": "integer", "minimum": 0},
+          "terraform_resources": {"type": "integer", "minimum": 0},
+          "terraform_artifacts_matched": {"type": "integer", "minimum": 0},
+          "terraform_artifact_match_coverage": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+          "mapping_warnings": {"type": "integer", "minimum": 0},
+          "tier_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+          "remediation_tier_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+          "source_reachability_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+          "exposure_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+          "privilege_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+          "expectations_passed": {"type": "integer", "minimum": 0},
+          "expectations_failed": {"type": "integer", "minimum": 0}
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

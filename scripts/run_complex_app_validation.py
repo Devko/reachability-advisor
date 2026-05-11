@@ -570,11 +570,14 @@ def _benchmark_snapshot(report: dict[str, Any]) -> dict[str, Any]:
             "remediation_count": metrics.get("remediation_count", 0),
             "services_with_findings": metrics.get("services_with_findings", 0),
             "terraform_resources": metrics.get("terraform_resources", 0),
+            "terraform_artifacts_matched": metrics.get("terraform_artifacts_matched", 0),
             "terraform_artifact_match_coverage": metrics.get("terraform_artifact_match_coverage"),
             "mapping_warnings": metrics.get("mapping_warnings", 0),
             "tier_counts": metrics.get("tier_counts", {}),
+            "remediation_tier_counts": metrics.get("remediation_tier_counts", {}),
             "source_reachability_counts": metrics.get("source_reachability_counts", {}),
             "exposure_counts": metrics.get("exposure_counts", {}),
+            "privilege_counts": metrics.get("privilege_counts", {}),
             "expectations_passed": sum(1 for item in expectations if isinstance(item, dict) and item.get("status") == "passed"),
             "expectations_failed": sum(1 for item in expectations if isinstance(item, dict) and item.get("status") != "passed"),
         }
@@ -628,13 +631,14 @@ def _write_benchmark_markdown(benchmark: dict[str, Any], path: Path) -> None:
         "",
         "## Cases",
         "",
-        "| Case | Status | SBOMs | Matches | Findings | Services | Terraform resources | Expectation failures |",
-        "|---|---|---:|---:|---:|---:|---:|---:|",
+        "| Case | Status | SBOMs | Matches | Findings | Services | Terraform resources | Terraform matches | Expectation failures |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in benchmark["cases"]:
         lines.append(
             f"| `{row.get('id')}` | {row.get('status')} | {row.get('sbom_count', 0)} | {row.get('vulnerability_matches', 0)} | "
             f"{row.get('finding_count', 0)} | {row.get('services_with_findings', 0)} | {row.get('terraform_resources', 0)} | "
+            f"{row.get('terraform_artifacts_matched', 0)} | "
             f"{row.get('expectations_failed', 0)} |"
         )
     lines.append("")

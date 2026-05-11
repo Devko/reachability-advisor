@@ -185,6 +185,7 @@ spec:
                             "terraform_artifacts_matched": 1,
                             "mapping_warnings": 1,
                             "tier_counts": {"medium": 3, "high": 1},
+                            "remediation_tier_counts": {"medium": 2, "high": 1},
                             "source_reachability_counts": {"imported": 2},
                             "exposure_counts": {"internal": 4},
                             "privilege_counts": {"sensitive": 1},
@@ -202,8 +203,10 @@ spec:
                             "services_with_findings": 1,
                             "terraform_resources": 3,
                             "tier_counts": {"low": 1},
+                            "remediation_tier_counts": {"low": 1},
                             "source_reachability_counts": {"package_present": 1},
                             "exposure_counts": {"unknown": 1},
+                            "privilege_counts": {"none": 1},
                         },
                         "expectations": [{"status": "passed"}],
                     },
@@ -213,7 +216,11 @@ spec:
 
         self.assertEqual(benchmark["aggregate"]["sbom_count"], 3)
         self.assertEqual(benchmark["aggregate"]["finding_count"], 5)
+        self.assertEqual(benchmark["aggregate"]["terraform_artifacts_matched"], 1)
         self.assertEqual(benchmark["aggregate"]["tier_counts"], {"high": 1, "low": 1, "medium": 3})
+        self.assertEqual(benchmark["aggregate"]["remediation_tier_counts"], {"high": 1, "low": 1, "medium": 2})
+        self.assertEqual(benchmark["aggregate"]["privilege_counts"], {"none": 1, "sensitive": 1})
+        self.assertEqual(benchmark["cases"][0]["terraform_artifacts_matched"], 1)
         self.assertEqual(benchmark["cases"][0]["expectations_failed"], 1)
 
 

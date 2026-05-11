@@ -2,7 +2,7 @@
 
 ## Current gates
 
-- Unit and workflow tests: 395.
+- Unit and workflow tests: 397.
 - Coverage threshold: 93%.
 - Current measured coverage: passes the 93% line/branch-aware coverage gate.
 - Test runner: `scripts/run_tests.py`.
@@ -16,6 +16,7 @@
 - Package build: `make package` (`python -m build --no-isolation`).
 - CI matrix: Python 3.10, 3.11, 3.12.
 - CI runs compile, lint, strict type-checking, tests, coverage, sample output generation, fixture packs, release validation, package build, and a built-wheel CLI smoke test.
+- CI uploads generated JSON/Markdown/SARIF/HTML/text reports and built distribution files as workflow artifacts.
 
 ## Local quality commands
 
@@ -93,6 +94,7 @@ The logic layer has tests for:
 - Visual graph regression coverage for connected entry/path/asset/vulnerability edges and dense multi-asset layouts.
 - Rendered Kubernetes manifest analysis for workload, Service, Ingress, RBAC, artifact matching, and coverage output.
 - Generated output validation against repository JSON schemas through `scripts/validate_release.py`.
+- Direct schema-contract tests for checked-in sample vulnerability data, context data, runtime policy config, fixture packs, and complex benchmark output.
 - Golden regression tests for the main sample lock finding counts, tier spread, top remediation order, coverage summaries, and visual graph connectivity.
 - Hostile-input tests cover malformed SBOM/vulnerability/source-evidence files and HTML report escaping.
 
@@ -124,7 +126,6 @@ The active pack set covers AWS ECS/Fargate, AWS Lambda function URLs, Azure Cont
 
 ## Future hardening
 
-- Add more JSON schema validation directly in unit tests.
 - Add signed release artifacts.
 - Add property-based parser tests with a dedicated generator once the project accepts a test-only dependency.
 - Expand fuzz-style malformed-input tests for SBOM, vulnerability, source, Kubernetes, and Terraform inputs.

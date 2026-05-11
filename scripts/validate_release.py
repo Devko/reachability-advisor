@@ -18,11 +18,14 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from reachability_advisor import __version__  # noqa: E402
 from reachability_advisor.cli import main as cli_main  # noqa: E402
+from scripts import run_complex_app_validation as complex_validation  # noqa: E402
 
 
 class ReleaseCheckError(RuntimeError):
@@ -401,6 +404,48 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
     fixture_report = out_dir / "fixtures-report.json"
     run_cli(["fixtures", "run", "--out", str(fixture_report), "--output-dir", str(out_dir / "fixtures")])
     check("generated fixture run report", fixture_report, "fixture-run-report.schema.json")
+
+    complex_benchmark = out_dir / "complex-benchmark.json"
+    complex_benchmark_md = out_dir / "complex-benchmark.md"
+    benchmark = complex_validation._benchmark_snapshot(
+        {
+            "schema_version": "1.0",
+            "generated_at": "2026-01-01T00:00:00+00:00",
+            "corpus": str(ROOT / "external_corpus" / "complex_app_cases.json"),
+            "case_count": 1,
+            "passed_count": 1,
+            "failed_count": 0,
+            "skipped_count": 0,
+            "cases": [
+                {
+                    "id": "release-contract",
+                    "status": "passed",
+                    "metrics": {
+                        "sbom_count": 2,
+                        "vulnerability_matches": 3,
+                        "finding_count": 3,
+                        "remediation_count": 2,
+                        "services_with_findings": 2,
+                        "terraform_resources": 5,
+                        "terraform_artifacts_matched": 1,
+                        "terraform_artifact_match_coverage": 0.5,
+                        "mapping_warnings": 1,
+                        "tier_counts": {"medium": 2, "high": 1},
+                        "remediation_tier_counts": {"medium": 1, "high": 1},
+                        "source_reachability_counts": {"import_observed": 2, "no_rule": 1},
+                        "exposure_counts": {"public": 1, "internal": 2},
+                        "privilege_counts": {"limited": 1, "sensitive": 1},
+                    },
+                    "expectations": [{"status": "passed"}],
+                }
+            ],
+        }
+    )
+    complex_benchmark.write_text(json.dumps(benchmark, indent=2), encoding="utf-8")
+    complex_validation._write_benchmark_markdown(benchmark, complex_benchmark_md)
+    check("generated complex benchmark", complex_benchmark, "complex-benchmark.schema.json")
+    require_text(complex_benchmark_md, "Complex App Benchmark", "Aggregate", "Terraform matches")
+    checks.append({"name": "generated complex benchmark Markdown", "status": "passed", "document": str(complex_benchmark_md)})
 
     summary = {"schema_version": "1.0", "status": "passed", "checks": checks}
     (out_dir / "release-validation.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
