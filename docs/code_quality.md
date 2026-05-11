@@ -2,7 +2,7 @@
 
 ## Current gates
 
-- Unit and workflow tests: 388.
+- Unit and workflow tests: 395.
 - Coverage threshold: 93%.
 - Current measured coverage: passes the 93% line/branch-aware coverage gate.
 - Test runner: `scripts/run_tests.py`.
@@ -15,6 +15,7 @@
 - Complex real-world app validation: `make external-complex` (AWS Retail Store and Google Online Boutique).
 - Package build: `make package` (`python -m build --no-isolation`).
 - CI matrix: Python 3.10, 3.11, 3.12.
+- CI runs compile, lint, strict type-checking, tests, coverage, sample output generation, fixture packs, release validation, package build, and a built-wheel CLI smoke test.
 
 ## Local quality commands
 
@@ -92,6 +93,8 @@ The logic layer has tests for:
 - Visual graph regression coverage for connected entry/path/asset/vulnerability edges and dense multi-asset layouts.
 - Rendered Kubernetes manifest analysis for workload, Service, Ingress, RBAC, artifact matching, and coverage output.
 - Generated output validation against repository JSON schemas through `scripts/validate_release.py`.
+- Golden regression tests for the main sample lock finding counts, tier spread, top remediation order, coverage summaries, and visual graph connectivity.
+- Hostile-input tests cover malformed SBOM/vulnerability/source-evidence files and HTML report escaping.
 
 ## Terraform quality bar
 
@@ -121,8 +124,8 @@ The active pack set covers AWS ECS/Fargate, AWS Lambda function URLs, Azure Cont
 
 ## Future hardening
 
-- Add JSON schema validation in tests.
+- Add more JSON schema validation directly in unit tests.
 - Add signed release artifacts.
-- Add property-based parser tests.
-- Add fuzz tests for SBOM, vulnerability, source, and Terraform inputs.
+- Add property-based parser tests with a dedicated generator once the project accepts a test-only dependency.
+- Expand fuzz-style malformed-input tests for SBOM, vulnerability, source, Kubernetes, and Terraform inputs.
 - Expand community-maintained Terraform fixture packs for additional edge cases inside the supported providers.

@@ -6,6 +6,8 @@
 
 ```bash
 make compile
+make lint
+make type-check
 make test
 make coverage
 make sample
@@ -21,6 +23,7 @@ make package
 - classifier is `Development Status :: 5 - Production/Stable`.
 - no alpha/beta package status remains.
 - source distribution and wheel build as `reachability_advisor-<version>`.
+- built wheel installs and `reachability-advisor version` runs.
 
 6. Tag release:
 

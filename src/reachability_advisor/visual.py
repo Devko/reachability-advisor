@@ -13,9 +13,8 @@ from .models import Finding, reachability_label
 from .numeric import safe_float
 from .remediation import build_remediation_groups
 from .visual_graph import visual_graph_model
+from .visual_layout import EXPOSURE_RANK, TIER_RANK
 
-TIER_RANK = {"informational": 0, "low": 1, "medium": 2, "high": 3, "urgent": 4}
-EXPOSURE_RANK = {"unknown": 0, "isolated": 1, "private": 1, "internal": 2, "external": 3, "public": 4}
 NETWORK_PATH_RE = re.compile(r"^(?:terraform|context|kubernetes) network path: (?P<exposure>[a-z_]+) via (?P<path>.+)$")
 EXPOSURE_INFERENCE_RE = re.compile(r"^(?:terraform|context|kubernetes) exposure inference: (?P<exposure>[a-z_]+) via (?P<target>.+)$")
 _visual_graph_model = visual_graph_model

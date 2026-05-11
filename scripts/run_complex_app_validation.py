@@ -524,6 +524,123 @@ def _evaluate_expectations(metrics: dict[str, Any], expectations: dict[str, Any]
     return results
 
 
+def _merge_counts(left: dict[str, int], right: Any) -> None:
+    if not isinstance(right, dict):
+        return
+    for key, value in right.items():
+        try:
+            increment = int(value)
+        except (TypeError, ValueError):
+            continue
+        left[str(key)] = left.get(str(key), 0) + increment
+
+
+def _benchmark_snapshot(report: dict[str, Any]) -> dict[str, Any]:
+    aggregate: dict[str, Any] = {
+        "case_count": report.get("case_count", 0),
+        "passed_count": report.get("passed_count", 0),
+        "failed_count": report.get("failed_count", 0),
+        "skipped_count": report.get("skipped_count", 0),
+        "sbom_count": 0,
+        "vulnerability_matches": 0,
+        "finding_count": 0,
+        "remediation_count": 0,
+        "services_with_findings": 0,
+        "terraform_resources": 0,
+        "terraform_artifacts_matched": 0,
+        "mapping_warnings": 0,
+        "tier_counts": {},
+        "remediation_tier_counts": {},
+        "source_reachability_counts": {},
+        "exposure_counts": {},
+        "privilege_counts": {},
+    }
+    cases: list[dict[str, Any]] = []
+    for row in report.get("cases") or []:
+        if not isinstance(row, dict):
+            continue
+        metrics = row.get("metrics") if isinstance(row.get("metrics"), dict) else {}
+        expectations = row.get("expectations") if isinstance(row.get("expectations"), list) else []
+        case = {
+            "id": row.get("id"),
+            "status": row.get("status"),
+            "sbom_count": metrics.get("sbom_count", 0),
+            "vulnerability_matches": metrics.get("vulnerability_matches", 0),
+            "finding_count": metrics.get("finding_count", 0),
+            "remediation_count": metrics.get("remediation_count", 0),
+            "services_with_findings": metrics.get("services_with_findings", 0),
+            "terraform_resources": metrics.get("terraform_resources", 0),
+            "terraform_artifact_match_coverage": metrics.get("terraform_artifact_match_coverage"),
+            "mapping_warnings": metrics.get("mapping_warnings", 0),
+            "tier_counts": metrics.get("tier_counts", {}),
+            "source_reachability_counts": metrics.get("source_reachability_counts", {}),
+            "exposure_counts": metrics.get("exposure_counts", {}),
+            "expectations_passed": sum(1 for item in expectations if isinstance(item, dict) and item.get("status") == "passed"),
+            "expectations_failed": sum(1 for item in expectations if isinstance(item, dict) and item.get("status") != "passed"),
+        }
+        cases.append(case)
+        for key in (
+            "sbom_count",
+            "vulnerability_matches",
+            "finding_count",
+            "remediation_count",
+            "services_with_findings",
+            "terraform_resources",
+            "terraform_artifacts_matched",
+            "mapping_warnings",
+        ):
+            aggregate[key] += int(metrics.get(key) or 0)
+        _merge_counts(aggregate["tier_counts"], metrics.get("tier_counts"))
+        _merge_counts(aggregate["remediation_tier_counts"], metrics.get("remediation_tier_counts"))
+        _merge_counts(aggregate["source_reachability_counts"], metrics.get("source_reachability_counts"))
+        _merge_counts(aggregate["exposure_counts"], metrics.get("exposure_counts"))
+        _merge_counts(aggregate["privilege_counts"], metrics.get("privilege_counts"))
+    return {
+        "schema_version": "1.0",
+        "generated_at": report.get("generated_at"),
+        "corpus": report.get("corpus"),
+        "aggregate": aggregate,
+        "cases": cases,
+    }
+
+
+def _write_benchmark_markdown(benchmark: dict[str, Any], path: Path) -> None:
+    aggregate = benchmark["aggregate"]
+    lines = [
+        "# Complex App Benchmark",
+        "",
+        "This benchmark captures deterministic metrics from the complex validation corpus.",
+        "",
+        "## Aggregate",
+        "",
+        "| Metric | Value |",
+        "|---|---:|",
+        f"| Cases | {aggregate.get('case_count', 0)} |",
+        f"| Passed | {aggregate.get('passed_count', 0)} |",
+        f"| Skipped | {aggregate.get('skipped_count', 0)} |",
+        f"| Failed | {aggregate.get('failed_count', 0)} |",
+        f"| SBOMs | {aggregate.get('sbom_count', 0)} |",
+        f"| Grype matches | {aggregate.get('vulnerability_matches', 0)} |",
+        f"| Findings | {aggregate.get('finding_count', 0)} |",
+        f"| Remediation groups | {aggregate.get('remediation_count', 0)} |",
+        f"| Services with findings | {aggregate.get('services_with_findings', 0)} |",
+        f"| Terraform resources | {aggregate.get('terraform_resources', 0)} |",
+        "",
+        "## Cases",
+        "",
+        "| Case | Status | SBOMs | Matches | Findings | Services | Terraform resources | Expectation failures |",
+        "|---|---|---:|---:|---:|---:|---:|---:|",
+    ]
+    for row in benchmark["cases"]:
+        lines.append(
+            f"| `{row.get('id')}` | {row.get('status')} | {row.get('sbom_count', 0)} | {row.get('vulnerability_matches', 0)} | "
+            f"{row.get('finding_count', 0)} | {row.get('services_with_findings', 0)} | {row.get('terraform_resources', 0)} | "
+            f"{row.get('expectations_failed', 0)} |"
+        )
+    lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
 def _run_case(case: dict[str, Any], args: argparse.Namespace, grype: Path | None) -> dict[str, Any]:
     case_out = _root_path(args.outdir) / str(case["id"])
     case_out.mkdir(parents=True, exist_ok=True)
@@ -718,6 +835,9 @@ def run(args: argparse.Namespace) -> int:
     }
     _write_json(outdir / "summary.json", report)
     _write_aggregate_markdown(report, outdir / "summary.md")
+    benchmark = _benchmark_snapshot(report)
+    _write_json(outdir / "benchmark.json", benchmark)
+    _write_benchmark_markdown(benchmark, outdir / "benchmark.md")
     print(f"Summary written to {outdir / 'summary.json'}")
     if report["failed_count"] or (args.strict and report["skipped_count"]):
         return 2

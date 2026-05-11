@@ -21,9 +21,10 @@ Goal: make the public repository easy to trust in CI. The scanner should stay lo
 
 Priority 1: CI quality gates
 
-- Install `.[dev]` in CI and run `make lint`, `make type-check`, `make coverage`, `make release-check`, and `make package`.
+- Done: install `.[dev]` in CI and run `make lint`, `make type-check`, `make coverage`, `make release-check`, and `make package`.
 - Keep Python 3.10, 3.11, and 3.12 in the matrix.
 - Keep strict `mypy` passing across all `src` modules.
+- Done: smoke-test the built wheel entry point after packaging.
 - Publish coverage, SARIF, diagnostics, HTML graph, mapping, source coverage, and Terraform coverage as workflow artifacts.
 - Keep generated outputs deterministic so PR reviews can diff them.
 
@@ -55,6 +56,8 @@ Priority 5: Validation corpus
 
 - Keep AWS Retail Store and Google Online Boutique as scale tests.
 - Add compact fixtures for each important exposure class: public, restricted external, lateral, internal-only, IAM admin, critical limited role, read-only role, no role, code reachable, and code not observed.
+- Done: add golden sample-output regressions for finding counts, tier spread, top remediation order, coverage summaries, and graph connectivity.
+- Done: complex validation now emits `benchmark.json` and `benchmark.md` for release-to-release metric drift tracking.
 - Publish expected outputs for fixtures so downstream contributors can verify behavior without reading implementation details.
 - Done: visual graph regression tests cover connected network-path rendering and dense multi-asset layouts.
 

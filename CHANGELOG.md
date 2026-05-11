@@ -5,6 +5,11 @@
 - Hardened release validation so the documented import/export contract is exercised end to end.
 - Fixed `explain --out` so nested output paths are created consistently with the other writers.
 - Refreshed README support and validation claims.
+- Added CI enforcement for lint, strict typing, and built-wheel entry point smoke testing.
+- Added golden output regression coverage for sample findings, coverage summaries, and visual graph connectivity.
+- Added hostile-input tests for malformed SBOM/vulnerability/source-evidence inputs and HTML report escaping.
+- Added complex app benchmark JSON/Markdown output for scale validation drift tracking.
+- Refactored visual graph ranking and card layout constants into a shared module.
 
 ## 1.0.0 - 2026-05-10
 

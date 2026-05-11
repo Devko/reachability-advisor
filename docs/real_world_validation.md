@@ -148,7 +148,8 @@ Run a single case by adding `--case <case-id>`. If a checkout does not exist and
 - a merged artifact-scoped Grype file at `outputs/external-complex/<case>/merged-grype.json`;
 - Kubernetes manifest context at `outputs/external-complex/<case>/kubernetes-context.json` and Kubernetes coverage at `outputs/external-complex/<case>/kubernetes-coverage.json` when the case defines a manifest;
 - Reachability Advisor findings, mapping, source coverage, Terraform coverage, Kubernetes coverage, and HTML graph under `outputs/external-complex/<case>/`;
-- aggregate `summary.json` and `summary.md` under `outputs/external-complex/`.
+- aggregate `summary.json` and `summary.md` under `outputs/external-complex/`;
+- benchmark `benchmark.json` and `benchmark.md` under `outputs/external-complex/` with aggregate finding, remediation, source-reachability, exposure, privilege, and expectation metrics.
 
 Use `--refresh` to regenerate SBOM/vulnerability files. Use `--skip-grype` to reuse already generated SBOM/Grype files without invoking Grype.
 
@@ -166,6 +167,8 @@ the vulnerable Docker package. Online Boutique's highest finding is medium:
 internal shippingservice exposure with `import observed` for gRPC.
 
 The low artifact match coverage is expected for source-only Terraform in this repository set. Many deployable image identities flow through modules, unresolved locals, or Kubernetes manifests. The report exposes that gap while validating Grype parsing, source reachability, Terraform resource classification, Kubernetes service exposure, IAM/network context for matched services, and the HTML graph.
+
+Use `benchmark.json` for drift checks between releases. It is intentionally separate from `summary.json`: the summary is a run log, while the benchmark is the compact metric surface to compare over time.
 
 ## Expected findings from manual source inspection
 

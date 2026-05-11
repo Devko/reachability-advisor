@@ -31,6 +31,10 @@ REACHABILITY_STRENGTH = {
 }
 
 
+class ExternalSourceEvidenceError(ValueError):
+    """Raised when external source evidence cannot be parsed."""
+
+
 @dataclass(frozen=True)
 class ExternalSourceEvidenceRecord:
     evidence: SourceEvidence
@@ -103,11 +107,19 @@ def load_external_source_evidence(paths: Iterable[str | Path]) -> ExternalSource
         try:
             data = json.loads(text)
             store.records.extend(_external_records_from_data(data, evidence_path))
-        except json.JSONDecodeError:
-            for line in text.splitlines():
+        except json.JSONDecodeError as document_error:
+            parsed_line = False
+            for line_number, line in enumerate(text.splitlines(), start=1):
                 if not line.strip():
                     continue
-                store.records.extend(_external_records_from_data(json.loads(line), evidence_path))
+                try:
+                    line_data = json.loads(line)
+                except json.JSONDecodeError as line_error:
+                    raise ExternalSourceEvidenceError(f"{evidence_path}: invalid JSON evidence on line {line_number}: {line_error}") from line_error
+                parsed_line = True
+                store.records.extend(_external_records_from_data(line_data, evidence_path))
+            if not parsed_line:
+                raise ExternalSourceEvidenceError(f"{evidence_path}: invalid JSON evidence: {document_error}") from document_error
     return store
 
 

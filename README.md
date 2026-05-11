@@ -452,7 +452,7 @@ make package
 Current validation snapshot:
 
 ```text
-Ran 389 tests: OK
+Ran 395 tests: OK
 Coverage: 93%
 Coverage gate: 93% passed
 Fixture packs: 9 passed, 0 failed

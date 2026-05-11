@@ -19,12 +19,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: python -m pip install --upgrade pip setuptools wheel coverage build
-      - run: python -m pip install -e .
+      - run: python -m pip install --upgrade pip setuptools wheel
+      - run: python -m pip install -e ".[dev]"
       - run: make compile
+      - run: make lint
+      - run: make type-check
       - run: make test
       - run: make coverage
       - run: make sample
       - run: make fixtures
       - run: make release-check
       - run: make package
+      - run: python -m pip install --force-reinstall dist/*.whl
+      - run: reachability-advisor version

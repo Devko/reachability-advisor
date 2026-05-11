@@ -160,6 +160,62 @@ spec:
         self.assertIn("context network path: public", data["artifacts"]["frontend"]["evidence"][0])
         self.assertIn("frontend-external", data["artifacts"]["checkoutservice"]["evidence"][0])
 
+    def test_benchmark_snapshot_aggregates_scale_metrics(self) -> None:
+        module = _load_script()
+        benchmark = module._benchmark_snapshot(
+            {
+                "schema_version": "1.0",
+                "generated_at": "2026-05-11T00:00:00+00:00",
+                "corpus": "external_corpus/complex_app_cases.json",
+                "case_count": 2,
+                "passed_count": 1,
+                "failed_count": 0,
+                "skipped_count": 1,
+                "cases": [
+                    {
+                        "id": "case-a",
+                        "status": "passed",
+                        "metrics": {
+                            "sbom_count": 2,
+                            "vulnerability_matches": 5,
+                            "finding_count": 4,
+                            "remediation_count": 3,
+                            "services_with_findings": 2,
+                            "terraform_resources": 7,
+                            "terraform_artifacts_matched": 1,
+                            "mapping_warnings": 1,
+                            "tier_counts": {"medium": 3, "high": 1},
+                            "source_reachability_counts": {"imported": 2},
+                            "exposure_counts": {"internal": 4},
+                            "privilege_counts": {"sensitive": 1},
+                        },
+                        "expectations": [{"status": "passed"}, {"status": "failed"}],
+                    },
+                    {
+                        "id": "case-b",
+                        "status": "skipped",
+                        "metrics": {
+                            "sbom_count": 1,
+                            "vulnerability_matches": 2,
+                            "finding_count": 1,
+                            "remediation_count": 1,
+                            "services_with_findings": 1,
+                            "terraform_resources": 3,
+                            "tier_counts": {"low": 1},
+                            "source_reachability_counts": {"package_present": 1},
+                            "exposure_counts": {"unknown": 1},
+                        },
+                        "expectations": [{"status": "passed"}],
+                    },
+                ],
+            }
+        )
+
+        self.assertEqual(benchmark["aggregate"]["sbom_count"], 3)
+        self.assertEqual(benchmark["aggregate"]["finding_count"], 5)
+        self.assertEqual(benchmark["aggregate"]["tier_counts"], {"high": 1, "low": 1, "medium": 3})
+        self.assertEqual(benchmark["cases"][0]["expectations_failed"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
