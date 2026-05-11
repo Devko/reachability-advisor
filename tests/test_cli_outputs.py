@@ -178,7 +178,7 @@ class CliTests(unittest.TestCase):
     def test_explain_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             findings_path = Path(tmp) / "findings.json"
-            explain_path = Path(tmp) / "explain.md"
+            explain_path = Path(tmp) / "nested" / "explain.md"
             main([
                 "scan",
                 "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"),

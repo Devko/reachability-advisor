@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Hardened release validation so the documented import/export contract is exercised end to end.
+- Fixed `explain --out` so nested output paths are created consistently with the other writers.
+- Refreshed README support and validation claims.
+
 ## 1.0.0 - 2026-05-10
 
 Stable public v1 release.
@@ -9,7 +15,7 @@ Stable public v1 release.
 - Added `scripts/validate_release.py` and `make release-check` to validate release metadata and generated output schemas before tagging.
 - Added release validation to CI.
 - Includes the full local-first CLI, CycloneDX ingestion, Grype/local/OSV-style vulnerability adapters, source reachability heuristics, Terraform plan and HCL static context, mapping reports, remediation grouping, SARIF/diagnostics/Markdown/annotation outputs, fixture packs, and real-world replay scripts.
-- Current validation snapshot: 269 tests, 93% coverage gate, clean sdist/wheel build, 4 fixture packs, 9 external HCL corpus projects, and 3 Grype replay cases.
+- Release validation snapshot: 269 tests, 93% coverage gate, clean sdist/wheel build, 4 fixture packs, 9 external HCL corpus projects, and 3 Grype replay cases.
 
 ## Pre-1.0 internal milestones
 

@@ -401,7 +401,9 @@ def run_explain(args: argparse.Namespace) -> int:
     data = load_findings_json(args.findings)
     text = explain_finding(data, key=args.key, artifact=args.artifact, component=args.component, vulnerability=args.vulnerability)
     if args.out:
-        Path(args.out).write_text(text, encoding="utf-8")
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8")
     else:
         print(text, end="")
     return 0

@@ -413,13 +413,29 @@ The `ide/vscode` directory contains a minimal VS Code extension skeleton. It inv
 | SBOM | CycloneDX JSON |
 | SBOM acquisition support | `sbom-plan` command with Syft, Trivy, Maven, npm, and Python suggestions |
 | Vulnerability input | Grype JSON, local JSON, and small OSV-Scanner-style JSON |
-| Source reachability | Java/Maven, Node/npm, Python/PyPI, and Go rules with same-function input/sink evidence, bounded handler-to-sink paths, and CycloneDX dependency-graph evidence |
+| Source reachability | JVM, Node, Python, and Go rules with same-function input/sink evidence, bounded handler-to-sink paths, CycloneDX dependency-graph evidence, and package-manager manifest evidence for Maven/Gradle, npm/pnpm/Yarn, Poetry/requirements, and Go modules |
 | Custom source rules | `--reachability-rules` JSON and `export-semgrep-rules` starter YAML |
 | External source evidence | `--source-evidence-in` for Reachability Advisor JSON, Semgrep JSON, SARIF, and govulncheck JSONL |
 | Terraform context | Primary deployment context. AWS, Azure, GCP, and Kubernetes plan/source support with coverage reporting, artifact matching, network graphing, and IAM impact classification |
 | Kubernetes manifests | Rendered YAML/JSON workload, Service, Ingress, and RBAC context with artifact matching and coverage reporting |
 | Context JSON | Explicit override/enrichment keyed by artifact name |
 | Outputs | JSON with remediation groups and raw findings, baseline JSON, PR delta JSON/Markdown, SARIF, diagnostics JSON, Markdown, interactive HTML, annotations, Terraform coverage JSON, Kubernetes coverage JSON, source coverage JSON, mapping JSON |
+
+## Import/export contract
+
+The release check runs an executable contract for the public import/export claims:
+
+```bash
+python scripts/validate_release.py
+```
+
+It verifies:
+
+- vulnerability imports: local JSON, Grype `matches[]`, and OSV-Scanner-style JSON;
+- source-evidence imports: native Reachability Advisor JSON, Reachability Advisor findings JSON, Semgrep JSON/dataflow traces, SARIF/CodeQL code flows, and govulncheck JSONL;
+- deployment/context inputs: Terraform plan JSON, Terraform source paths through `hcl-audit`, rendered Kubernetes YAML/JSON, context JSON, and artifact aliases;
+- configuration inputs: custom reachability rules and runtime policy JSON;
+- exports: findings JSON, remediation groups, baseline JSON, PR delta JSON/Markdown, SARIF, diagnostics JSON, PR summary Markdown, GitHub annotations, self-contained HTML graph, source coverage, Terraform coverage, Kubernetes coverage, mapping reports, HCL audit JSON/Markdown, SBOM plan JSON/Markdown, Semgrep starter rules, fixture validation, fixture run reports, and single-finding explanations.
 
 ## Run quality gates
 
@@ -436,11 +452,11 @@ make package
 Current validation snapshot:
 
 ```text
-Ran 349 tests: OK
-Coverage: 94%
+Ran 389 tests: OK
+Coverage: 93%
 Coverage gate: 93% passed
-Fixture packs: 4 passed, 0 failed
-Release validation: passed
+Fixture packs: 9 passed, 0 failed
+Release import/export contract: passed
 Package build: sdist and wheel
 ```
 
