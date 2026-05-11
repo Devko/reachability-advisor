@@ -214,6 +214,8 @@ class TerraformNetworkGraph:
                 for grant in inherited_grants:
                     self._record_identity_grant(role_ref, grant)
 
+        self._expand_assumable_identity_grants()
+
         for resource in self.resources:
             if resource.category != "workload":
                 continue
@@ -405,9 +407,16 @@ class TerraformNetworkGraph:
 
     def _add_provider_network_adapter_edges(self, resource: TerraformResource) -> None:
         for signal in network_adapter_signals(resource.type, resource.values):
-            if signal.kind == "private_route_bridge":
+            if signal.kind in {"private_route_bridge", "internet_route"}:
                 for route_table_ref in signal.refs:
-                    self._seed(self._route_table_node(route_table_ref), "internal", f"{resource.address} {signal.reason}")
+                    self._seed(self._route_table_node(route_table_ref), signal.exposure, f"{resource.address} {signal.reason}")
+                    if resource.type == "google_compute_route":
+                        self._add_edge(
+                            self._route_table_node(route_table_ref),
+                            self._subnet_node(route_table_ref),
+                            f"{resource.address} route applies to network {route_table_ref}",
+                            exposure_cap="internal",
+                        )
             elif signal.kind == "route_table_association":
                 route_table_refs = _route_table_refs(resource.values)
                 subnet_refs = _subnet_refs(resource.values)
@@ -494,6 +503,54 @@ class TerraformNetworkGraph:
         self.identity_privilege_by_ref[key] = max_privilege(self.identity_privilege_by_ref.get(key, "unknown"), grant.privilege)
         self.identity_evidence_by_ref.setdefault(key, []).append(grant.evidence)
         self.identity_grants_by_ref.setdefault(key, []).append(grant)
+
+    def _expand_assumable_identity_grants(self) -> None:
+        """Propagate explicit sts:AssumeRole privilege edges.
+
+        Terraform often exposes both the source role policy and the target role
+        policy in one plan. If a linked workload role can assume another role,
+        the target role's capabilities are effective blast-radius evidence for
+        that workload. iam:PassRole is still recorded as escalation evidence,
+        but it is not expanded here because it also requires a compatible
+        compute mutation path.
+        """
+
+        seen: set[tuple[str, str, str]] = set()
+        for _ in range(4):
+            additions: list[tuple[str, IamGrant]] = []
+            for source_ref, source_grants in list(self.identity_grants_by_ref.items()):
+                for source_grant in source_grants:
+                    for target_ref in _assumable_role_refs(source_grant):
+                        for target_grant in self._identity_grants_matching_ref(target_ref):
+                            key = (source_ref, target_ref, target_grant.evidence)
+                            if key in seen:
+                                continue
+                            seen.add(key)
+                            evidence = f"{source_grant.evidence} can assume {target_ref}; inherited {target_grant.evidence}"
+                            additions.append(
+                                (
+                                    source_ref,
+                                    IamGrant(
+                                        privilege=target_grant.privilege,
+                                        impacts=target_grant.impacts,
+                                        capabilities=target_grant.capabilities,
+                                        resource_refs=target_grant.resource_refs,
+                                        evidence=evidence,
+                                    ),
+                                )
+                            )
+            if not additions:
+                break
+            for source_ref, grant in additions:
+                self._record_identity_grant(source_ref, grant)
+
+    def _identity_grants_matching_ref(self, ref: str) -> list[IamGrant]:
+        matches: list[IamGrant] = []
+        ref_set = {ref}
+        for identity_ref, grants in self.identity_grants_by_ref.items():
+            if _references_any(ref_set, {identity_ref}) or _references_any({identity_ref}, ref_set):
+                matches.extend(grants)
+        return matches
 
     def _target_evidence_for_grant(self, grant: IamGrant) -> list[str]:
         if not grant.resource_refs:
@@ -1331,6 +1388,19 @@ def _identity_value_refs(values: Any) -> set[str]:
     return refs
 
 
+def _assumable_role_refs(grant: IamGrant) -> set[str]:
+    refs: set[str] = set()
+    for capability in grant.capabilities:
+        action = str(capability.action or "").lower()
+        if "sts:assumerole" not in action:
+            continue
+        for ref in capability.resource_refs:
+            text = str(ref).strip().lower()
+            if text and text not in {"*", "*:*"}:
+                refs.add(text)
+    return refs
+
+
 def _member_identity_refs(value: Any) -> set[str]:
     refs: set[str] = set()
     if isinstance(value, dict):
@@ -1541,7 +1611,7 @@ def _network_interface_refs(values: dict[str, Any]) -> set[str]:
 def _subnet_refs(values: Any) -> set[str]:
     refs: set[str] = set()
     if isinstance(values, dict):
-        for key in ("subnet", "subnets", "subnet_id", "subnet_ids", "virtual_network_subnet_id", "network_id", "subnetwork", "subnetwork_id"):
+        for key in ("subnet", "subnets", "subnet_id", "subnet_ids", "virtual_network_subnet_id", "network", "networks", "network_id", "subnetwork", "subnetwork_id"):
             if key in values:
                 refs.update(_value_reference_candidates(values.get(key)))
         for key in ("network_interface", "network_interfaces", "network_configuration", "vpc_config", "vpc_access", "ip_configuration", "ip_configurations"):

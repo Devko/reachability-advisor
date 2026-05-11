@@ -69,6 +69,7 @@ WORKLOAD_KINDS = {
     "StatefulSet",
 }
 RBAC_KINDS = {"Role", "ClusterRole", "RoleBinding", "ClusterRoleBinding"}
+NETWORK_POLICY_KINDS = {"NetworkPolicy"}
 MANIFEST_SUFFIXES = {".yaml", ".yml", ".json"}
 MUTATING_VERBS = {"*", "create", "update", "patch", "delete", "deletecollection", "impersonate", "bind", "escalate"}
 READ_VERBS = {"get", "list", "watch"}
@@ -326,6 +327,7 @@ def _contexts_from_resources(
     workloads = [resource for resource in resources if resource.kind in WORKLOAD_KINDS]
     services = [resource for resource in resources if resource.kind == "Service"]
     ingresses = [resource for resource in resources if resource.kind == "Ingress"]
+    network_policies = [resource for resource in resources if resource.kind in NETWORK_POLICY_KINDS]
     targets_by_service = {service.name: _service_targets(service, workloads) for service in services}
     ingress_services = {ingress.name: _ingress_service_names(ingress) for ingress in ingresses}
     public_entry = _public_entry(services, ingresses, targets_by_service, ingress_services)
@@ -357,6 +359,10 @@ def _contexts_from_resources(
             service_name = next(iter(ingress_services.get(ingress.name, set())), "unknown-service")
             evidence.append(f"context network path: {exposure} via {ingress.address} -> kubernetes_service.{service_name} -> {workload_ref}")
         exposure = _max_exposure(exposures)
+        selected_network_policies = _network_policies_for_workload(workload, network_policies)
+        if _network_policies_deny_all_ingress(selected_network_policies):
+            exposure = "private"
+            evidence.append(f"context network policy: private via {workload_ref}; selected NetworkPolicy resources deny all ingress")
         if exposure == "unknown":
             exposure = "private"
             evidence.append(f"context network path: private via {workload_ref}; no Service or Ingress targets this workload")
@@ -498,6 +504,36 @@ def _workload_service_account(workload: KubernetesResource) -> str:
         or "default"
     )
     return str(value)
+
+
+def _network_policies_for_workload(workload: KubernetesResource, policies: list[KubernetesResource]) -> list[KubernetesResource]:
+    labels = _workload_labels(workload)
+    selected: list[KubernetesResource] = []
+    for policy in policies:
+        if policy.namespace != workload.namespace:
+            continue
+        selector = _string_mapping(_nested(policy.values, "spec", "podSelector", "matchLabels"))
+        if selector and not all(labels.get(key) == value for key, value in selector.items()):
+            continue
+        selected.append(policy)
+    return selected
+
+
+def _network_policies_deny_all_ingress(policies: list[KubernetesResource]) -> bool:
+    ingress_policies = [policy for policy in policies if _network_policy_controls_ingress(policy)]
+    if not ingress_policies:
+        return False
+    # Kubernetes NetworkPolicy ingress allows are additive. A selected deny-all
+    # policy only blocks ingress completely when no selected ingress policy has
+    # an explicit allow rule.
+    return not any(_as_list(_nested(policy.values, "spec", "ingress")) for policy in ingress_policies)
+
+
+def _network_policy_controls_ingress(policy: KubernetesResource) -> bool:
+    policy_types = {str(item).lower() for item in _string_list(_nested(policy.values, "spec", "policyTypes"))}
+    if policy_types:
+        return "ingress" in policy_types
+    return True
 
 
 def _rbac_grants(resources: list[KubernetesResource]) -> dict[tuple[str, str], list[RoleGrant]]:
@@ -673,6 +709,7 @@ def _coverage_report(
             "workload_resources": sum(1 for resource in resources if resource.kind in WORKLOAD_KINDS),
             "service_resources": kind_counts.get("Service", 0),
             "ingress_resources": kind_counts.get("Ingress", 0),
+            "network_policy_resources": sum(kind_counts.get(kind, 0) for kind in NETWORK_POLICY_KINDS),
             "rbac_resources": sum(kind_counts.get(kind, 0) for kind in RBAC_KINDS),
             "artifacts_requested": requested,
             "artifacts_matched": matched,
@@ -696,6 +733,7 @@ def _coverage_report(
         "notes": [
             "Rendered Kubernetes manifest evidence is static and local. It does not query a live cluster.",
             "LoadBalancer, NodePort, and public Ingress objects create public exposure. ClusterIP services create internal exposure.",
+            "Selected NetworkPolicy resources with no ingress allow rules override Service/Ingress exposure to private.",
             "RBAC privilege is derived from rendered Role, ClusterRole, RoleBinding, and ClusterRoleBinding objects.",
         ],
     }

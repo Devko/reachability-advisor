@@ -431,9 +431,13 @@ class TerraformAnalysisTests(unittest.TestCase):
     def test_provider_network_adapter_exposes_azure_deny_and_gcp_priority(self) -> None:
         azure = network_adapter_signals("azurerm_network_security_rule", {"access": "Deny", "direction": "Inbound", "source_address_prefix": "*"})
         gcp = network_adapter_signals("google_compute_firewall", {"source_ranges": ["0.0.0.0/0"], "target_tags": ["web"], "priority": 1000})
+        azure_route = network_adapter_signals("azurerm_route", {"route_table_name": "rt-private", "next_hop_type": "VirtualNetworkGateway"})
+        gcp_route = network_adapter_signals("google_compute_route", {"network": "vpc-private", "next_hop_vpn_tunnel": "vpn-1"})
         self.assertEqual(azure[0].kind, "deny_inbound")
         self.assertEqual(gcp[0].exposure, "public")
         self.assertIn("priority=1000", gcp[0].reason)
+        self.assertEqual(azure_route[0].kind, "private_route_bridge")
+        self.assertEqual(gcp_route[0].kind, "private_route_bridge")
 
 
 if __name__ == "__main__":
@@ -725,6 +729,36 @@ class TerraformBranchCoverageTests(unittest.TestCase):
         self.assertEqual(analysis.contexts["app"].exposure, "internal")
         self.assertTrue(any("IAM impact network_control can alter provider network reachability" in item for item in analysis.contexts["app"].evidence))
 
+    def test_sts_assume_role_expands_target_role_blast_radius(self) -> None:
+        admin_role_arn = "arn:aws:iam::123:role/admin-role"
+        data = plan([
+            resource("aws_iam_role.admin", "aws_iam_role", {"name": "admin-role", "arn": admin_role_arn, "managed_policy_arns": ["arn:aws:iam::aws:policy/AdministratorAccess"]}),
+            resource("aws_iam_role.app", "aws_iam_role", {"name": "app-role"}),
+            resource(
+                "aws_iam_role_policy.assume_admin",
+                "aws_iam_role_policy",
+                {
+                    "role": "app-role",
+                    "policy": {
+                        "Statement": [
+                            {
+                                "Effect": "Allow",
+                                "Action": "sts:AssumeRole",
+                                "Resource": admin_role_arn,
+                            }
+                        ]
+                    },
+                },
+            ),
+            resource("aws_instance.app", "aws_instance", {"ami": "ami-1", "associate_public_ip_address": True, "iam_instance_profile": "app-role"}),
+        ])
+
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        context = analysis.contexts["app"]
+        self.assertEqual(context.privilege, "admin")
+        self.assertIn("admin_control", context.iam_impacts)
+        self.assertTrue(any("can assume" in item for item in context.evidence))
+
     def test_private_subnet_route_bridge_creates_internal_context(self) -> None:
         data = plan([
             resource("aws_route_table.private", "aws_route_table", {"id": "rtb-private"}),
@@ -735,6 +769,28 @@ class TerraformBranchCoverageTests(unittest.TestCase):
         analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
         self.assertEqual(analysis.contexts["app"].exposure, "internal")
         self.assertTrue(any("private route table bridge" in item for item in analysis.contexts["app"].evidence))
+
+    def test_azure_route_table_id_links_to_named_private_route_bridge(self) -> None:
+        subnet_id = "/subscriptions/123/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/vnet/subnets/app"
+        route_table_id = "/subscriptions/123/resourceGroups/rg/providers/Microsoft.Network/routeTables/rt-private"
+        data = plan([
+            resource("azurerm_route.private", "azurerm_route", {"route_table_name": "rt-private", "next_hop_type": "VirtualNetworkGateway"}),
+            resource("azurerm_subnet_route_table_association.private", "azurerm_subnet_route_table_association", {"route_table_id": route_table_id, "subnet_id": subnet_id}),
+            resource("azurerm_linux_virtual_machine.app", "azurerm_linux_virtual_machine", {"name": "app", "network_interface": [{"virtual_network_subnet_id": subnet_id}]}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "internal")
+        self.assertTrue(any("azurerm_route.private" in item and "private route bridge" in item for item in analysis.contexts["app"].evidence))
+
+    def test_gcp_vpn_route_network_links_to_instance_network(self) -> None:
+        network = "https://www.googleapis.com/compute/v1/projects/demo/global/networks/private"
+        data = plan([
+            resource("google_compute_route.private", "google_compute_route", {"network": network, "next_hop_vpn_tunnel": "vpn-1"}),
+            resource("google_compute_instance.app", "google_compute_instance", {"name": "app", "network_interface": [{"network": network}]}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "internal")
+        self.assertTrue(any("google_compute_route.private" in item and "private route bridge" in item for item in analysis.contexts["app"].evidence))
 
     def test_gcp_firewall_target_tag_links_to_tagged_workload(self) -> None:
         data = plan([

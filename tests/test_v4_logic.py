@@ -124,6 +124,12 @@ class ArtifactIdentityTests(unittest.TestCase):
 
         self.assertEqual(proof["strongest_strength"], "versioned_name")
         self.assertTrue(proof["warnings"])
+        sbom = SbomDocument(path=Path("checkout.cdx.json"), artifact=artifact, components=[])
+        report = build_mapping_report([sbom], {}, {"artifact_matches": [], "unmatched_artifacts": ["checkout"], "summary": {}})
+        self.assertEqual(report["summary"]["strong_artifact_identity_coverage"], 0.0)
+        self.assertEqual(report["summary"]["artifact_match_coverage"], 0.0)
+        self.assertEqual(report["summary"]["mapping_warnings_count"], 3)
+        self.assertIn("no strong image reference", " ".join(report["artifacts"][0]["mapping_warnings"]))
 
     def test_artifact_match_exact_reference_is_high(self) -> None:
         artifact = Artifact(name="payments-api", reference="ghcr.io/acme/payments-api:1.2.3")

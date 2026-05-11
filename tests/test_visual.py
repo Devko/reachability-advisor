@@ -258,6 +258,9 @@ class VisualPayloadTests(unittest.TestCase):
         self.assertIn("const vulnerabilityByFindingKey = new Map", html)
         self.assertIn("const vulnerabilitiesByAssetId = new Map", html)
         self.assertIn("const networkPathsByAssetId = new Map", html)
+        self.assertIn('id="topLimit"', html)
+        self.assertIn('id="highestPerAsset"', html)
+        self.assertIn("top per asset", html)
 
     def test_graph_model_connects_network_paths_assets_and_vulnerabilities(self) -> None:
         payload = _visual_payload([

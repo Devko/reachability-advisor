@@ -174,6 +174,58 @@ subjects:
         self.assertEqual(analysis.contexts["worker"].privilege, "limited")
         self.assertEqual(analysis.coverage["summary"]["artifacts_matched"], 3)
 
+    def test_network_policy_deny_all_ingress_overrides_service_exposure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "k8s.yaml"
+            manifest.write_text(
+                """
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  labels:
+    app: api
+spec:
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/acme/api:1.0.0
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+spec:
+  type: LoadBalancer
+  selector:
+    app: api
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-deny-all
+spec:
+  podSelector:
+    matchLabels:
+      app: api
+  policyTypes: ["Ingress"]
+  ingress: []
+""".strip(),
+                encoding="utf-8",
+            )
+            analysis = analyze_kubernetes_manifests([manifest], [Artifact(name="api", reference="ghcr.io/acme/api:1.0.0")])
+
+        self.assertEqual(analysis.contexts["api"].exposure, "private")
+        self.assertTrue(any("NetworkPolicy resources deny all ingress" in item for item in analysis.contexts["api"].evidence))
+        self.assertEqual(analysis.coverage["summary"]["network_policy_resources"], 1)
+
     def test_json_list_manifest_is_supported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             manifest = Path(tmp) / "manifest.json"

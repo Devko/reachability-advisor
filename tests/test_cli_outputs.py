@@ -98,6 +98,65 @@ class CliTests(unittest.TestCase):
             self.assertEqual(len(report_data["links"]), len(report_data["vulnerabilities"]))
             self.assertIn("::error", (out / "annotations.txt").read_text(encoding="utf-8"))
 
+    def test_scan_quality_gate_fails_on_low_artifact_mapping_coverage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            mapping = out / "mapping.json"
+            code = main([
+                "scan",
+                "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"),
+                "--vulns", str(ROOT / "samples/vulnerabilities.json"),
+                "--mapping-out", str(mapping),
+                "--min-artifact-match-coverage", "1.0",
+                "--no-table",
+            ])
+
+            self.assertEqual(code, 10)
+            report = json.loads(mapping.read_text(encoding="utf-8"))
+            self.assertEqual(report["summary"]["artifact_match_coverage"], 0.0)
+            self.assertGreater(report["summary"]["mapping_warnings_count"], 0)
+
+    def test_scan_quality_gate_rejects_non_finite_threshold(self) -> None:
+        code = main([
+            "scan",
+            "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"),
+            "--vulns", str(ROOT / "samples/vulnerabilities.json"),
+            "--min-artifact-match-coverage", "nan",
+            "--no-table",
+        ])
+
+        self.assertEqual(code, 10)
+
+    def test_scan_quality_gate_fails_on_unusable_external_source_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            sbom = out / "bom.json"
+            vulns = out / "vulns.json"
+            evidence = out / "source-evidence.json"
+            sbom.write_text(
+                json.dumps(
+                    {
+                        "bomFormat": "CycloneDX",
+                        "metadata": {"component": {"name": "app", "properties": [{"name": "oci:image:ref", "value": "repo/app:1"}]}},
+                        "components": [{"name": "left-pad", "version": "1.0.0", "purl": "pkg:npm/left-pad@1.0.0"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            vulns.write_text(json.dumps({"vulnerabilities": [{"id": "GHSA-leftpad", "package": {"name": "left-pad"}}]}), encoding="utf-8")
+            evidence.write_text(json.dumps({"evidence": [{"artifact": "app", "state": "attacker_controlled", "confidence": "high"}]}), encoding="utf-8")
+
+            code = main([
+                "scan",
+                "--sbom", str(sbom),
+                "--vulns", str(vulns),
+                "--source-evidence-in", str(evidence),
+                "--min-external-evidence-usable-ratio", "1.0",
+                "--no-table",
+            ])
+
+            self.assertEqual(code, 10)
+
     def test_scan_accepts_grype_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)

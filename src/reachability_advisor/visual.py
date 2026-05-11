@@ -429,7 +429,7 @@ h1 {
 }
 .toolbar {
   display: grid;
-  grid-template-columns: minmax(250px, 1fr) 140px 150px auto auto auto;
+  grid-template-columns: minmax(250px, 1fr) 140px 150px 130px auto auto auto auto;
   gap: 8px;
   padding: 12px;
   border-bottom: 1px solid var(--line);
@@ -759,6 +759,12 @@ li {
   <select id="exposure">
     <option value="">All exposures</option>
   </select>
+  <select id="topLimit">
+    <option value="50">Top 50</option>
+    <option value="100">Top 100</option>
+    <option value="">All findings</option>
+  </select>
+  <label class="check"><input id="highestPerAsset" type="checkbox" checked> top per asset</label>
   <label class="check"><input id="activeOnly" type="checkbox" checked> active only</label>
   <button id="fit" title="Fit graph to viewport">Fit</button>
   <button id="reset" class="secondary" title="Reset zoom and pan">Reset</button>
@@ -829,6 +835,8 @@ const details = document.getElementById("details");
 const search = document.getElementById("search");
 const tier = document.getElementById("tier");
 const exposure = document.getElementById("exposure");
+const topLimit = document.getElementById("topLimit");
+const highestPerAsset = document.getElementById("highestPerAsset");
 const activeOnly = document.getElementById("activeOnly");
 let selected = null;
 let transform = {x: 30, y: 30, scale: 1};
@@ -844,7 +852,7 @@ function init() {
     option.textContent = item;
     exposure.appendChild(option);
   }
-  for (const control of [search, tier, exposure, activeOnly]) {
+  for (const control of [search, tier, exposure, topLimit, highestPerAsset, activeOnly]) {
     control.addEventListener("input", render);
     control.addEventListener("change", render);
   }
@@ -891,12 +899,23 @@ function visibleFindings() {
   const query = search.value.trim().toLowerCase();
   const minTier = tierRank[tier.value] ?? 0;
   const exposureFilter = exposure.value;
-  return DATA.findings
+  const limit = topLimit.value ? Number(topLimit.value) : 0;
+  let rows = DATA.findings
     .filter(f => (tierRank[f.tier] ?? 0) >= minTier)
     .filter(f => !activeOnly.checked || f.policy_status !== "excepted")
     .filter(f => !exposureFilter || ((f.context || {}).exposure || "unknown") === exposureFilter)
     .filter(f => !query || findingText(f).includes(query) || assetText(assetForFinding(f)).includes(query))
     .sort((a, b) => (tierRank[b.tier] - tierRank[a.tier]) || (b.score - a.score));
+  if (highestPerAsset.checked) {
+    const seenAssets = new Set();
+    rows = rows.filter(finding => {
+      const assetName = (finding.artifact || {}).name || "unknown";
+      if (seenAssets.has(assetName)) return false;
+      seenAssets.add(assetName);
+      return true;
+    });
+  }
+  return limit ? rows.slice(0, limit) : rows;
 }
 
 function assetForFinding(finding) {

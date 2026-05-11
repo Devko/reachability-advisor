@@ -418,11 +418,12 @@ The `ide/vscode` directory contains a minimal VS Code extension skeleton. It inv
 | Vulnerability input | Grype JSON, local JSON, and small OSV-Scanner-style JSON |
 | Source reachability | JVM, Node, Python, and Go rules with same-function input/sink evidence, bounded handler-to-sink paths, CycloneDX dependency-graph evidence, and package-manager manifest evidence for Maven/Gradle, npm/pnpm/Yarn, Poetry/requirements, and Go modules |
 | Custom source rules | `--reachability-rules` JSON and `export-semgrep-rules` starter YAML |
-| External source evidence | `--source-evidence-in` for Reachability Advisor JSON, Semgrep JSON, SARIF, and govulncheck JSONL, with selector diagnostics for artifact-only or unscoped evidence |
-| Terraform context | Primary deployment context. AWS, Azure, GCP, and Kubernetes plan/source support with coverage reporting, artifact matching, network graphing, route/private-endpoint/firewall-tag hints, IAM capability records, and IAM impact classification |
-| Kubernetes manifests | Rendered YAML/JSON workload, Service, Ingress, and RBAC context with artifact matching and coverage reporting |
+| External source evidence | `--source-evidence-in` for Reachability Advisor JSON, Semgrep JSON, SARIF, and govulncheck JSONL, with selector diagnostics and quality gates for artifact-only or unscoped evidence |
+| Terraform context | Primary deployment context. AWS, Azure, GCP, and Kubernetes plan/source support with coverage reporting, artifact matching, network graphing, route/private-endpoint/firewall-tag hints, IAM capability records, AWS `sts:AssumeRole` propagation, and IAM impact classification |
+| Kubernetes manifests | Rendered YAML/JSON workload, Service, Ingress, RBAC, and NetworkPolicy context with artifact matching and coverage reporting |
 | Context JSON | Explicit override/enrichment keyed by artifact name |
 | Outputs | JSON with remediation groups and raw findings, evidence graph JSON, baseline JSON, PR delta JSON/Markdown, SARIF, diagnostics JSON, Markdown, interactive HTML, annotations, Terraform coverage JSON, Kubernetes coverage JSON, source coverage JSON, mapping JSON |
+| CI quality gates | Built-in scan gates for artifact match coverage, strong artifact identity coverage, mapping warnings, source rule coverage, external evidence presence, and external evidence selector usability |
 
 ## Import/export contract
 
@@ -455,7 +456,7 @@ make package
 Current validation snapshot:
 
 ```text
-Ran 413 tests: OK
+Ran 420 tests: OK
 Coverage: 93%
 Coverage gate: 93% passed
 Fixture packs: 9 passed, 0 failed

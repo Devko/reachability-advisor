@@ -147,6 +147,11 @@ When you want the scanner installed directly from this repository, use the compo
             k8s/rendered.yaml
           policy: configs/policy.example.json
           baseline: reachability-baseline.json
+          min-artifact-match-coverage: "0.9"
+          min-strong-artifact-identity-coverage: "0.9"
+          min-source-rule-coverage: "0.8"
+          min-external-evidence-usable-ratio: "0.8"
+          fail-on-mapping-warnings: "true"
           fail-on-new-tier: high
 
       - name: Upload SARIF
@@ -291,6 +296,8 @@ reachability-advisor scan \
   --vulns vulns/app.grype.json \
   --source-root app=. \
   --source-evidence-in reachability/semgrep.json \
+  --require-external-source-evidence \
+  --min-external-evidence-usable-ratio 1.0 \
   --source-coverage-out reachability/source-coverage.json \
   --out reachability/findings.json
 ```
@@ -298,6 +305,27 @@ reachability-advisor scan \
 For CodeQL, pass SARIF output as `--source-evidence-in`. CodeQL `codeFlows` are imported as high-confidence data-flow evidence when the result or rule metadata includes a package, package URL, or vulnerability selector. Generic CodeQL query ids are retained as symbols and are not treated as vulnerability ids unless they look like CVE/GHSA/OSV-style ids.
 
 For Go services, pass `govulncheck -json` output as `--source-evidence-in`. Imported evidence must match a component/package, package URL, or vulnerability before it can upgrade a finding. Artifact is a narrowing selector, not a match by itself.
+
+## Mapping Quality Gate
+
+Use these gates once the pipeline emits image/runtime SBOMs and Terraform or rendered Kubernetes context:
+
+```bash
+reachability-advisor scan \
+  --sbom sboms/app.cdx.json \
+  --vulns vulns/app.grype.json \
+  --source-root app=. \
+  --terraform-plan tfplan.json \
+  --mapping-out reachability/mapping.json \
+  --source-coverage-out reachability/source-coverage.json \
+  --min-artifact-match-coverage 1.0 \
+  --min-strong-artifact-identity-coverage 1.0 \
+  --min-source-rule-coverage 0.8 \
+  --fail-on-mapping-warnings \
+  --out reachability/findings.json
+```
+
+Start with advisory thresholds on existing repositories, then tighten them after SBOM metadata and artifact aliases are stable.
 
 ## PR Delta Gate
 

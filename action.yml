@@ -44,6 +44,30 @@ inputs:
     description: Newline-separated external source evidence files. Supports Reachability Advisor JSON, Semgrep JSON, SARIF, and govulncheck JSONL.
     required: false
     default: ""
+  min-artifact-match-coverage:
+    description: Optional 0..1 gate for SBOM artifact to deployment workload match coverage.
+    required: false
+    default: ""
+  min-strong-artifact-identity-coverage:
+    description: Optional 0..1 gate for strong image/digest artifact identity coverage.
+    required: false
+    default: ""
+  fail-on-mapping-warnings:
+    description: Set to true to fail when mapping warnings are present.
+    required: false
+    default: "false"
+  min-source-rule-coverage:
+    description: Optional 0..1 gate for source package-rule coverage.
+    required: false
+    default: ""
+  require-external-source-evidence:
+    description: Set to true to require imported Semgrep, CodeQL/SARIF, govulncheck, or native source evidence.
+    required: false
+    default: "false"
+  min-external-evidence-usable-ratio:
+    description: Optional 0..1 gate for imported external source evidence selector usability.
+    required: false
+    default: ""
   policy:
     description: Runtime policy JSON path.
     required: false
@@ -175,6 +199,12 @@ runs:
         if [[ -n "${{ inputs.terraform-source }}" ]]; then args+=(--terraform-source "${{ inputs.terraform-source }}" --terraform-coverage-out "$terraform_coverage"); fi
         if [[ -n "${{ inputs.kubernetes-manifest }}" ]]; then args+=(--kubernetes-coverage-out "$kubernetes_coverage"); fi
         if [[ "${{ inputs.kubernetes-infer-lateral }}" == "true" ]]; then args+=(--kubernetes-infer-lateral); fi
+        if [[ -n "${{ inputs.min-artifact-match-coverage }}" ]]; then args+=(--min-artifact-match-coverage "${{ inputs.min-artifact-match-coverage }}"); fi
+        if [[ -n "${{ inputs.min-strong-artifact-identity-coverage }}" ]]; then args+=(--min-strong-artifact-identity-coverage "${{ inputs.min-strong-artifact-identity-coverage }}"); fi
+        if [[ "${{ inputs.fail-on-mapping-warnings }}" == "true" ]]; then args+=(--fail-on-mapping-warnings); fi
+        if [[ -n "${{ inputs.min-source-rule-coverage }}" ]]; then args+=(--min-source-rule-coverage "${{ inputs.min-source-rule-coverage }}"); fi
+        if [[ "${{ inputs.require-external-source-evidence }}" == "true" ]]; then args+=(--require-external-source-evidence); fi
+        if [[ -n "${{ inputs.min-external-evidence-usable-ratio }}" ]]; then args+=(--min-external-evidence-usable-ratio "${{ inputs.min-external-evidence-usable-ratio }}"); fi
         if [[ -n "${{ inputs.fail-on-tier }}" ]]; then args+=(--fail-on-tier "${{ inputs.fail-on-tier }}"); fi
 
         set +e

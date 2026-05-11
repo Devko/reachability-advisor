@@ -11,8 +11,15 @@
       "properties": {
         "artifact_count": {"type": "integer", "minimum": 0},
         "artifacts_with_source_roots": {"type": "integer", "minimum": 0},
+        "source_root_coverage": {"type": "number", "minimum": 0, "maximum": 1},
         "artifacts_with_terraform_matches": {"type": "integer", "minimum": 0},
+        "artifact_match_coverage": {"type": "number", "minimum": 0, "maximum": 1},
+        "artifacts_with_strong_terraform_matches": {"type": "integer", "minimum": 0},
+        "strong_terraform_match_coverage": {"type": "number", "minimum": 0, "maximum": 1},
         "artifacts_with_strong_identity": {"type": "integer", "minimum": 0},
+        "strong_artifact_identity_coverage": {"type": "number", "minimum": 0, "maximum": 1},
+        "artifacts_with_mapping_warnings": {"type": "integer", "minimum": 0},
+        "mapping_warnings_count": {"type": "integer", "minimum": 0},
         "unmatched_terraform_artifacts": {"type": "array"}
       },
       "additionalProperties": true
@@ -37,9 +44,11 @@
             },
             "additionalProperties": true
           },
+          "strong_artifact_identity": {"type": "boolean"},
           "source_root": {"type": ["string", "null"]},
           "source_root_exists": {"type": "boolean"},
           "terraform_matched": {"type": "boolean"},
+          "strong_terraform_match": {"type": "boolean"},
           "terraform_matches": {"type": "array"},
           "mapping_warnings": {"type": "array", "items": {"type": "string"}}
         },

@@ -35,8 +35,12 @@ def network_adapter_signals(resource_type: str, values: dict[str, Any]) -> tuple
 
     if resource_type == "aws_route":
         return _aws_route_signals(values)
+    if resource_type in {"azurerm_route", "google_compute_route"}:
+        return _provider_route_signals(resource_type, values)
     if resource_type == "aws_route_table_association":
         return _aws_route_table_association_signals(values)
+    if resource_type == "azurerm_subnet_route_table_association":
+        return _route_table_association_signals(values)
     if resource_type in {"azurerm_private_endpoint", "google_vpc_access_connector"}:
         return _private_endpoint_signals(resource_type, values)
     if resource_type == "google_compute_firewall":
@@ -71,6 +75,35 @@ def _aws_route_signals(values: dict[str, Any]) -> tuple[NetworkAdapterSignal, ..
 
 def _aws_route_table_association_signals(values: dict[str, Any]) -> tuple[NetworkAdapterSignal, ...]:
     refs = _refs(values, "route_table_id", "route_table_ids", "route_table", "route_table_name")
+    refs += _refs(values, "subnet_id", "subnet_ids", "subnet")
+    return (NetworkAdapterSignal("route_table_association", "internal", refs, "route table associated to subnet"),) if refs else ()
+
+
+def _provider_route_signals(resource_type: str, values: dict[str, Any]) -> tuple[NetworkAdapterSignal, ...]:
+    route_refs = _refs(values, "route_table_id", "route_table_ids", "route_table_name", "network", "network_id")
+    target_text = " ".join(
+        str(values.get(key) or "")
+        for key in (
+            "next_hop_type",
+            "next_hop_in_ip_address",
+            "next_hop_gateway",
+            "next_hop_instance",
+            "next_hop_vpn_tunnel",
+            "next_hop_ilb",
+            "next_hop_network",
+        )
+    ).lower()
+    if not route_refs:
+        return ()
+    if any(token in target_text for token in ("virtualnetworkgateway", "virtual_network_gateway", "vpn", "interconnect", "peering", "ilb", "appliance", "instance")):
+        return (NetworkAdapterSignal("private_route_bridge", "internal", route_refs, f"{resource_type} private route bridge"),)
+    if "internet" in target_text or "defaultinternetgateway" in target_text:
+        return (NetworkAdapterSignal("internet_route", "public", route_refs, f"{resource_type} internet route; workload exposure still requires ingress evidence"),)
+    return ()
+
+
+def _route_table_association_signals(values: dict[str, Any]) -> tuple[NetworkAdapterSignal, ...]:
+    refs = _refs(values, "route_table_id", "route_table_ids", "route_table_name")
     refs += _refs(values, "subnet_id", "subnet_ids", "subnet")
     return (NetworkAdapterSignal("route_table_association", "internal", refs, "route table associated to subnet"),) if refs else ()
 

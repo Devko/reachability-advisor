@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -93,6 +94,12 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--artifact-alias", action="append", default=[], help="Add artifact mapping alias: artifact=reference. Repeatable; use when SBOM metadata lacks image refs.")
     scan.add_argument("--reachability-rules", help="Custom source reachability rules JSON.")
     scan.add_argument("--source-evidence-in", action="append", default=[], help="External source evidence JSON, Semgrep JSON, SARIF, or govulncheck JSONL. Repeatable.")
+    scan.add_argument("--min-artifact-match-coverage", type=float, help="Exit 10 when SBOM-to-deployment artifact match coverage is below this 0..1 ratio.")
+    scan.add_argument("--min-strong-artifact-identity-coverage", type=float, help="Exit 10 when strong image/digest identity coverage is below this 0..1 ratio.")
+    scan.add_argument("--fail-on-mapping-warnings", action="store_true", help="Exit 10 when the mapping report contains artifact identity, source-root, or Terraform match warnings.")
+    scan.add_argument("--min-source-rule-coverage", type=float, help="Exit 10 when source package-rule coverage is below this 0..1 ratio.")
+    scan.add_argument("--require-external-source-evidence", action="store_true", help="Exit 10 when no external source analyzer evidence was imported.")
+    scan.add_argument("--min-external-evidence-usable-ratio", type=float, help="Exit 10 when imported external source evidence selector usability is below this 0..1 ratio.")
     scan.add_argument("--policy", help="Policy JSON with exceptions and fail tier.")
     scan.add_argument("--out", help="Findings JSON output path.")
     scan.add_argument("--baseline-out", help="Write a stable baseline artifact for future PR delta gates.")
@@ -322,6 +329,7 @@ def run_scan(args: argparse.Namespace) -> int:
         external_source_evidence=external_source_evidence,
     )
     findings = apply_exceptions(findings, runtime_policy)
+    mapping_report = build_mapping_report(sboms, source_roots, terraform_coverage)
     metadata = {
         "sbom_count": len(sboms),
         "vulnerability_records": len(vulnerabilities),
@@ -365,9 +373,14 @@ def run_scan(args: argparse.Namespace) -> int:
     if args.mapping_out:
         out = Path(args.mapping_out)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(build_mapping_report(sboms, source_roots, terraform_coverage), indent=2), encoding="utf-8")
+        out.write_text(json.dumps(mapping_report, indent=2), encoding="utf-8")
     if not args.no_table:
         print(render_table(findings, args.limit))
+    quality_failures = _quality_gate_failures(args, mapping_report, source_coverage)
+    for failure in quality_failures:
+        print(f"Reachability Advisor quality gate failed: {failure}", file=sys.stderr)
+    if quality_failures:
+        return 10
     fail_tier = Tier(args.fail_on_tier) if args.fail_on_tier else runtime_policy.fail_on_tier if args.policy else None
     if fail_tier and _findings_fail(findings, fail_tier):
         print(f"Reachability Advisor threshold failed: finding reached tier {fail_tier.value}.", file=sys.stderr)
@@ -379,6 +392,35 @@ def _findings_fail(findings: list[Any], tier: Tier) -> bool:
     order = {Tier.INFORMATIONAL: 0, Tier.LOW: 1, Tier.MEDIUM: 2, Tier.HIGH: 3, Tier.URGENT: 4}
     threshold = order[tier]
     return any(finding.policy_status != "excepted" and order[finding.tier] >= threshold for finding in findings)
+
+
+def _quality_gate_failures(args: argparse.Namespace, mapping_report: dict[str, Any], source_coverage: dict[str, Any]) -> list[str]:
+    failures: list[str] = []
+    mapping_summary = mapping_report.get("summary", {}) if isinstance(mapping_report.get("summary"), dict) else {}
+    source_summary = source_coverage.get("summary", {}) if isinstance(source_coverage.get("summary"), dict) else {}
+
+    def ratio_gate(label: str, value: Any, minimum: float | None) -> None:
+        if minimum is None:
+            return
+        if not math.isfinite(minimum) or minimum < 0 or minimum > 1:
+            failures.append(f"{label} gate must be between 0 and 1, got {minimum}")
+            return
+        observed = float(value or 0.0)
+        if not math.isfinite(observed):
+            failures.append(f"{label} observed value is not finite: {observed}")
+            return
+        if observed < minimum:
+            failures.append(f"{label} {observed:.4f} is below required {minimum:.4f}")
+
+    ratio_gate("artifact match coverage", mapping_summary.get("artifact_match_coverage"), args.min_artifact_match_coverage)
+    ratio_gate("strong artifact identity coverage", mapping_summary.get("strong_artifact_identity_coverage"), args.min_strong_artifact_identity_coverage)
+    ratio_gate("source rule coverage", source_summary.get("source_rule_coverage"), args.min_source_rule_coverage)
+    ratio_gate("external source evidence usable ratio", source_summary.get("external_evidence_usable_ratio"), args.min_external_evidence_usable_ratio)
+    if args.fail_on_mapping_warnings and int(mapping_summary.get("mapping_warnings_count") or 0) > 0:
+        failures.append(f"mapping report contains {mapping_summary.get('mapping_warnings_count')} warning(s)")
+    if args.require_external_source_evidence and int(source_summary.get("external_evidence_records") or 0) == 0:
+        failures.append("no external source analyzer evidence was imported")
+    return failures
 
 
 def run_validate(args: argparse.Namespace) -> int:

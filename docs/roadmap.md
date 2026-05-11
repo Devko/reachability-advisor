@@ -36,6 +36,7 @@ Priority 2: Source reachability coverage
 - Done: source coverage reports rule coverage, rule gaps, weak-source findings, and usable external evidence ratio.
 - Done: native adapters import Semgrep `dataflow_trace` taint paths and CodeQL SARIF `codeFlows` when package, purl, or vulnerability selectors are available.
 - Done: external source evidence reports artifact-only and unscoped selector records instead of silently ignoring them.
+- Done: release pipelines can enforce external analyzer presence and selector usability with scan quality gates.
 - Add native adapters for more language-specific analyzer output when selectors are available.
 - Done: unknown source states are split into diagnostics for rule gaps, package-manager gaps, missing source roots, unsupported source roots, and unobserved imports.
 
@@ -47,6 +48,7 @@ Priority 3: Terraform and IaC coverage
 - Done: route-table associations, private endpoints, VPC access connectors, and firewall target tags can contribute explicit internal path evidence.
 - Done: provider network adapter signals are emitted in Terraform coverage for route, private endpoint, VPC connector, firewall target, firewall priority, and NSG allow/deny evidence.
 - Done: IAM capability records include effective risk and risk multipliers so scoped or conditional critical permissions are not scored the same as broad unconditioned permissions.
+- Done: explicit AWS `sts:AssumeRole` edges inherit visible target-role capabilities, and rendered Kubernetes NetworkPolicy deny-all ingress can override Service/Ingress exposure.
 - Expand lateral movement evidence for service endpoints, Kubernetes network policies, and deeper firewall priority semantics.
 - Keep unsupported IaC resources visible in coverage reports.
 

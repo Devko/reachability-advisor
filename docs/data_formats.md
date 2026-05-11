@@ -332,6 +332,7 @@ Generated with `--kubernetes-coverage-out` when `--kubernetes-manifest` is suppl
     "workload_resources": 2,
     "service_resources": 2,
     "ingress_resources": 0,
+    "network_policy_resources": 0,
     "rbac_resources": 3,
     "artifacts_requested": 2,
     "artifacts_matched": 2,
@@ -363,8 +364,15 @@ Generated with `--mapping-out`.
   "summary": {
     "artifact_count": 1,
     "artifacts_with_source_roots": 1,
+    "source_root_coverage": 1.0,
     "artifacts_with_terraform_matches": 1,
-    "artifacts_with_strong_identity": 1
+    "artifact_match_coverage": 1.0,
+    "artifacts_with_strong_terraform_matches": 1,
+    "strong_terraform_match_coverage": 1.0,
+    "artifacts_with_strong_identity": 1,
+    "strong_artifact_identity_coverage": 1.0,
+    "artifacts_with_mapping_warnings": 0,
+    "mapping_warnings_count": 0
   },
   "artifacts": [
     {
@@ -375,14 +383,16 @@ Generated with `--mapping-out`.
           {
             "value": "ghcr.io/example/payments-api:1.8.2",
             "source": "metadata.properties.container:image",
-            "strength": "tagged_image"
+            "strength": "image_reference"
           }
         ],
         "warnings": []
       },
+      "strong_artifact_identity": true,
       "source_root": "services/payments-api",
       "source_root_exists": true,
       "terraform_matched": true,
+      "strong_terraform_match": true,
       "terraform_matches": [],
       "mapping_warnings": []
     }
@@ -390,7 +400,7 @@ Generated with `--mapping-out`.
 }
 ```
 
-Schema draft: `schemas/mapping-report.schema.json`.
+Schema draft: `schemas/mapping-report.schema.json`. The coverage ratios are designed for CI gates: artifact deployment mapping, strong image/digest identity, source-root presence, and mapping warning count.
 
 ## SBOM plan JSON
 

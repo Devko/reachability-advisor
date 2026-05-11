@@ -2,7 +2,7 @@
 
 ## Current gates
 
-- Unit and workflow tests: 413.
+- Unit and workflow tests: 420.
 - Coverage threshold: 93%.
 - Current measured coverage: passes the 93% line/branch-aware coverage gate.
 - Test runner: `scripts/run_tests.py`.
@@ -69,6 +69,7 @@ python -m build --no-isolation
 - Multi-cloud Terraform coverage is manifest-driven and auditable.
 - SBOM/source/Terraform mapping is exposed through `--mapping-out`.
 - Source analysis coverage is exposed through `--source-coverage-out`.
+- Source and mapping quality can be enforced with built-in CLI gates for artifact match coverage, strong artifact identity coverage, mapping warnings, source rule coverage, external evidence presence, and external evidence selector usability.
 - The HTML graph is backed by `--evidence-graph-out`, a structured graph of assets, network paths, IAM capability edges, code evidence, components, vulnerabilities, and findings.
 - Unsupported Terraform resources are reported as visibility gaps instead of being silently ignored.
 
@@ -111,8 +112,8 @@ The Terraform layer has tests for:
 - Plan parsing from `planned_values` and `resource_changes`.
 - Container image extraction across ECS/Lambda/App Runner, Azure Container Apps/App Service, GCP Cloud Run, and Kubernetes resources.
 - Public, restricted external, internal lateral, private-only, and unknown exposure detection across AWS, Azure, GCP, and Kubernetes resources.
-- Bounded graph pathfinding for AWS ECS security groups/target groups, AWS target attachments, AWS Lambda URLs, Azure application gateway/load-balancer backend paths, GCP forwarding-rule/backend-service/NEG paths, GCP Cloud Run/Cloud Functions public invokers, Azure Container Apps ingress, Kubernetes Service/Ingress names or selectors, security-group hops, route table associations, firewall target tags, firewall priorities, private endpoints, NSG allow/deny rules, and lateral bridge resources such as peering, VPN, transit, ExpressRoute, and Interconnect.
-- IAM blast-radius classification, provider role catalogs, per-workload identity linkage, per-resource IAM capability records with resource scope, condition keys, effective risk, risk multiplier, targeted sensitive-resource evidence, and network-aware criticality across AWS IAM, Azure role assignments and Key Vault policies, GCP IAM, and Kubernetes role bindings.
+- Bounded graph pathfinding for AWS ECS security groups/target groups, AWS target attachments, AWS Lambda URLs, Azure application gateway/load-balancer backend paths, GCP forwarding-rule/backend-service/NEG paths, GCP Cloud Run/Cloud Functions public invokers, Azure Container Apps ingress, Kubernetes Service/Ingress names or selectors, security-group hops, route table associations, AWS/Azure/GCP route adapter signals, firewall target tags, firewall priorities, private endpoints, NSG allow/deny rules, rendered Kubernetes NetworkPolicy deny-all ingress, and lateral bridge resources such as peering, VPN, transit, ExpressRoute, and Interconnect.
+- IAM blast-radius classification, provider role catalogs, per-workload identity linkage, explicit AWS `sts:AssumeRole` capability propagation, per-resource IAM capability records with resource scope, condition keys, effective risk, risk multiplier, targeted sensitive-resource evidence, and network-aware criticality across AWS IAM, Azure role assignments and Key Vault policies, GCP IAM, and Kubernetes role bindings.
 - CLI generation of `--terraform-coverage-out`.
 
 ## Fixture-pack quality bar

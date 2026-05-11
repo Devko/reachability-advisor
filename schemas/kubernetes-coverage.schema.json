@@ -14,6 +14,7 @@
         "workload_resources": {"type": "integer", "minimum": 0},
         "service_resources": {"type": "integer", "minimum": 0},
         "ingress_resources": {"type": "integer", "minimum": 0},
+        "network_policy_resources": {"type": "integer", "minimum": 0},
         "rbac_resources": {"type": "integer", "minimum": 0},
         "artifacts_requested": {"type": "integer", "minimum": 0},
         "artifacts_matched": {"type": "integer", "minimum": 0},

@@ -32,13 +32,20 @@ def value_reference_candidates(values: Any) -> set[str]:
             "/targetgroup/",
             "/services/",
             "/locations/",
+            "/networks/",
             "/regions/",
+            "/routetables/",
+            "/routes/",
+            "/subnets/",
             "/zones/",
         )
         if len(path_parts) > 1 and any(marker in lower for marker in cloud_path_markers):
             candidates.add(path_parts[-1])
         for token in re.findall(r"[A-Za-z0-9_:\-/]+(?:\.[A-Za-z0-9_\-]+)+|sg-[A-Za-z0-9]+|arn:[^\s,\]\}]+", text):
-            candidates.add(token.strip().strip('"').strip("'").lower())
+            cleaned = token.strip().strip('"').strip("'").lower()
+            if "/" in cleaned and not cleaned.startswith("arn:"):
+                continue
+            candidates.add(cleaned)
 
     if isinstance(values, dict):
         for value in values.values():
