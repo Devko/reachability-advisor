@@ -190,8 +190,21 @@ Generated with `--source-coverage-out`.
     "findings_analyzed": 12,
     "findings_with_dependency_graph_path": 3,
     "findings_with_manifest_evidence": 2,
+    "findings_with_package_specific_rule": 8,
+    "findings_with_rule_gap": 1,
+    "findings_with_weak_source_evidence": 2,
+    "source_rule_coverage": 0.9167,
+    "external_evidence_usable_ratio": 0.6667,
+    "source_diagnostic_counts": {"missing_package_rule": 2},
     "source_evidence_coverage": 0.75,
     "external_evidence_records": 3,
+    "external_evidence_providers": {"CodeQL": 1, "semgrep": 2},
+    "external_evidence_selector_diagnostics": {
+      "records": 3,
+      "matchable_records": 2,
+      "artifact_only_records": 1,
+      "unscoped_records": 0
+    },
     "states": {
       "attacker_controlled": 2,
       "function_reachable": 4,
@@ -278,7 +291,22 @@ Generated with `--terraform-coverage-out`.
       "resource": "aws_ecs_task_definition.payments",
       "image": "ghcr.io/example/payments-api:1.8.2",
       "match_method": "repository-tag",
-      "match_score": 90
+      "match_score": 90,
+      "match_confidence": "high",
+      "match_proof": {
+        "candidate_source": "metadata.properties.container:image",
+        "candidate_strength": "tagged_image"
+      }
+    }
+  ],
+  "resources": [
+    {
+      "address": "aws_route.private",
+      "type": "aws_route",
+      "category": "supporting",
+      "network_adapter_signals": [
+        {"kind": "private_route_bridge", "label": "transit gateway route"}
+      ]
     }
   ],
   "visibility_gaps": []
@@ -286,6 +314,8 @@ Generated with `--terraform-coverage-out`.
 ```
 
 `visibility_gaps` is part of the format. A gap means the resource was parsed and counted, but no semantic rule currently maps it to workload, exposure, identity, data, or supporting context.
+
+`network_adapter_signals` are provider-specific hints used by the graph builder. They explain route-table, private-endpoint, VPC connector, firewall target, and security-rule evidence without making unrelated workloads public.
 
 Schema draft: `schemas/terraform-coverage.schema.json`.
 
@@ -333,12 +363,23 @@ Generated with `--mapping-out`.
   "summary": {
     "artifact_count": 1,
     "artifacts_with_source_roots": 1,
-    "artifacts_with_terraform_matches": 1
+    "artifacts_with_terraform_matches": 1,
+    "artifacts_with_strong_identity": 1
   },
   "artifacts": [
     {
       "name": "payments-api",
       "artifact_candidates": ["payments-api", "ghcr.io/example/payments-api:1.8.2"],
+      "artifact_identity": {
+        "candidates": [
+          {
+            "value": "ghcr.io/example/payments-api:1.8.2",
+            "source": "metadata.properties.container:image",
+            "strength": "tagged_image"
+          }
+        ],
+        "warnings": []
+      },
       "source_root": "services/payments-api",
       "source_root_exists": true,
       "terraform_matched": true,
@@ -397,11 +438,35 @@ The canonical output is:
 }
 ```
 
-`remediations[]` groups findings by artifact and dependency. Each finding still includes artifact, component, vulnerability, source reachability, context, score, tier, confidence, rationale, fix commands, and policy status.
+`remediations[]` groups findings by artifact and dependency. Each finding still includes artifact, component, vulnerability, source reachability, context, score, tier, confidence, rationale, fix commands, and policy status. `scoring` contains the scoring model version, per-dimension point contributions, gates/caps that applied, final score, and final tier.
 
 `source_reachability.state` is one of `absent`, `unknown_due_to_no_rule`, `package_present`, `dependency_reachable`, `imported`, `function_reachable`, or `attacker_controlled`. `source_reachability.label` is the human-facing version used by reports: `absent from scanned source`, `no source rule`, `SBOM only`, `dependency evidence`, `import observed`, `reachable vulnerable API`, or `request-controlled path`. The `unknown_due_to_no_rule` state is a coverage warning: the vulnerable package is present, but no package-specific source rule exists and generic import evidence was not observed.
 
+`source_reachability.diagnostics[]` explains evidence gaps such as missing source roots, missing package-specific rules, unobserved imports, dependency-graph-only evidence, and unlinked attacker-input hints.
+
+`context.iam_capabilities[]` is the per-resource IAM view behind `privilege` and `iam_impacts`. Each capability records an action, impact class, access class, resource references when known, resource scope (`scoped`, `wildcard`, or `unknown`), IAM condition keys when present, provider, source resource, and evidence string. This is useful when a role is not admin but still grants critical rights such as secret reads, network mutation, workload mutation, or role passing.
+
 Schema draft: `schemas/findings.schema.json`.
+
+## Evidence graph JSON
+
+Generated with `--evidence-graph-out`. The findings JSON also embeds the same structure under `evidence_graph`.
+
+The evidence graph is the stable machine contract used by the HTML report. It separates assets, components, vulnerabilities, findings, network paths, IAM capability edges, and code reachability edges so consumers do not have to parse rationale text.
+
+Top-level arrays:
+
+- `assets`: deployable artifacts with strongest exposure, privilege, criticality, IAM impacts, max score, and linked finding keys;
+- `components`: SBOM components scoped to an asset;
+- `vulnerabilities`: normalized vulnerability records;
+- `findings`: score/tier nodes that link asset, component, and vulnerability;
+- `network_paths`: attacker or internal entry paths with exposure, entry kind, steps, and raw evidence;
+- `network_nodes` and `network_edges`: typed network graph nodes and path edges derived from network-path evidence;
+- `iam_edges`: per-asset IAM capability edges or summary IAM edges when only aggregate context exists;
+- `code_edges`: source reachability state, provider, locations, symbols, and dependency path;
+- `edges`: generic asset-finding-component-vulnerability links.
+
+Schema draft: `schemas/evidence-graph.schema.json`.
 
 ## Baseline artifact JSON
 

@@ -1,0 +1,14 @@
+{
+  "$schema": "../schemas/runtime-policy.schema.json",
+  "schema_version": "1.0",
+  "fail_on_tier": "high",
+  "exceptions": [
+    {
+      "vulnerability": "CVE-EXAMPLE-0002",
+      "artifact": "legacy-service",
+      "component": "legacy-lib",
+      "expires": "2026-12-31",
+      "reason": "Temporary backlog migration exception. Owner must keep this tied to an upgrade ticket and renew explicitly."
+    }
+  ]
+}

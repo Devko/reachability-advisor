@@ -1,0 +1,18 @@
+{
+  "matches": [
+    {
+      "vulnerability": {
+        "id": "CVE-2018-18074",
+        "severity": "High",
+        "description": "Requests credential disclosure advisory used by the no-cloud E2E fixture.",
+        "cvss": [{"metrics": {"baseScore": 7.5}}],
+        "fix": {"versions": ["2.20.0"]}
+      },
+      "artifact": {
+        "name": "requests",
+        "version": "2.19.0",
+        "purl": "pkg:pypi/requests@2.19.0"
+      }
+    }
+  ]
+}

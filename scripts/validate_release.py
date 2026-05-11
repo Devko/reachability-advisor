@@ -25,6 +25,7 @@ if str(SRC) not in sys.path:
 
 from reachability_advisor import __version__  # noqa: E402
 from reachability_advisor.cli import main as cli_main  # noqa: E402
+from reachability_advisor.scoring_benchmark import run_scoring_benchmark  # noqa: E402
 
 
 class ReleaseCheckError(RuntimeError):
@@ -244,7 +245,9 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
 
     check("sample vulnerability intelligence", ROOT / "samples" / "vulnerabilities.json", "vulnerability-intelligence.schema.json")
     check("sample context", ROOT / "samples" / "context.json", "context.schema.json")
-    check("example runtime policy", ROOT / "configs" / "policy.example.json", "runtime-policy.schema.json")
+    for policy_config in sorted((ROOT / "configs").glob("policy*.json")):
+        check(f"runtime policy {policy_config.name}", policy_config, "runtime-policy.schema.json")
+    check("scoring benchmark corpus", ROOT / "configs" / "scoring-benchmark.json", "scoring-benchmark.schema.json")
     for fixture in sorted((ROOT / "fixtures" / "terraform" / "packs").glob("*/fixture.json")):
         check(f"fixture pack {fixture.parent.name}", fixture, "fixture-pack.schema.json")
 
@@ -274,6 +277,13 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
     run_cli(["init-policy", "--out", str(policy)])
     check("generated runtime policy", policy, "runtime-policy.schema.json")
 
+    scoring_benchmark = out_dir / "scoring-benchmark.json"
+    scoring_report = run_scoring_benchmark(ROOT / "configs" / "scoring-benchmark.json")
+    if scoring_report.get("status") != "passed":
+        raise ReleaseCheckError("scoring benchmark failed")
+    scoring_benchmark.write_text(json.dumps(scoring_report, indent=2), encoding="utf-8")
+    checks.append({"name": "generated scoring benchmark", "status": "passed", "document": str(scoring_benchmark)})
+
     hcl_audit = out_dir / "hcl-audit.json"
     hcl_audit_md = out_dir / "hcl-audit.md"
     run_cli(["hcl-audit", "--path", str(ROOT / "samples" / "terraform-source"), "--out", str(hcl_audit), "--markdown-out", str(hcl_audit_md)])
@@ -292,6 +302,7 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
     diagnostics = out_dir / "diagnostics.json"
     markdown = out_dir / "summary.md"
     annotations = out_dir / "annotations.txt"
+    evidence_graph = out_dir / "evidence-graph.json"
     terraform_coverage = out_dir / "terraform-coverage.json"
     kubernetes_coverage = out_dir / "kubernetes-coverage.json"
     source_coverage = out_dir / "source-coverage.json"
@@ -327,6 +338,8 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
             str(source_coverage),
             "--mapping-out",
             str(mapping),
+            "--evidence-graph-out",
+            str(evidence_graph),
             "--source-root",
             f"payments-api={ROOT / 'samples' / 'source' / 'payments-api'}",
             "--source-root",
@@ -359,6 +372,7 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
         ]
     )
     check("generated findings", findings, "findings.schema.json")
+    check("generated evidence graph", evidence_graph, "evidence-graph.schema.json")
     check("generated baseline", baseline, "baseline.schema.json")
     _check_sarif_output(sarif)
     checks.append({"name": "generated SARIF output", "status": "passed", "document": str(sarif)})
@@ -387,6 +401,8 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
     check("generated Kubernetes coverage", kubernetes_coverage, "kubernetes-coverage.schema.json")
     check("generated source coverage", source_coverage, "source-coverage.schema.json")
     check("generated mapping report", mapping, "mapping-report.schema.json")
+
+    _check_no_cloud_terraform_plan_e2e(out_dir, checks)
 
     semgrep_rules = out_dir / "semgrep" / "reachability.yml"
     run_cli(["export-semgrep-rules", "--out", str(semgrep_rules)])
@@ -451,6 +467,53 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
     summary = {"schema_version": "1.0", "status": "passed", "checks": checks}
     (out_dir / "release-validation.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     return summary
+
+
+def _check_no_cloud_terraform_plan_e2e(out_dir: Path, checks: list[dict[str, str]]) -> None:
+    fixture = ROOT / "samples" / "e2e-no-cloud"
+    e2e_dir = out_dir / "e2e-no-cloud"
+    findings = e2e_dir / "findings.json"
+    terraform_coverage = e2e_dir / "terraform-coverage.json"
+    source_coverage = e2e_dir / "source-coverage.json"
+    mapping = e2e_dir / "mapping.json"
+    evidence_graph = e2e_dir / "evidence-graph.json"
+    html = e2e_dir / "graph.html"
+    run_cli(
+        [
+            "scan",
+            "--sbom",
+            str(fixture / "app.cdx.json"),
+            "--vulns",
+            str(fixture / "vulnerabilities.json"),
+            "--source-root",
+            f"no-cloud-app={fixture / 'source'}",
+            "--terraform-plan",
+            str(fixture / "tfplan.json"),
+            "--terraform-coverage-out",
+            str(terraform_coverage),
+            "--source-coverage-out",
+            str(source_coverage),
+            "--mapping-out",
+            str(mapping),
+            "--evidence-graph-out",
+            str(evidence_graph),
+            "--html-out",
+            str(html),
+            "--out",
+            str(findings),
+            "--no-table",
+        ]
+    )
+    result = require_json(findings)
+    if not result.get("findings"):
+        raise ReleaseCheckError("no-cloud Terraform plan E2E produced no findings")
+    top = result["findings"][0]
+    if top.get("tier") != "urgent" or top.get("context", {}).get("exposure") != "public":
+        raise ReleaseCheckError("no-cloud Terraform plan E2E did not preserve public urgent context")
+    coverage = require_json(terraform_coverage)
+    if coverage.get("summary", {}).get("artifact_match_coverage") != 1.0:
+        raise ReleaseCheckError("no-cloud Terraform plan E2E did not match artifact identity")
+    checks.append({"name": "no-cloud Terraform plan E2E", "status": "passed", "document": str(findings)})
 
 
 def _check_sarif_output(path: Path) -> None:

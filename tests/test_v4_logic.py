@@ -7,6 +7,8 @@ from pathlib import Path
 
 from reachability_advisor.artifacts import (
     artifact_candidates,
+    artifact_identity_candidates,
+    artifact_identity_proof,
     artifact_match_evidence,
     best_artifact_match,
     clean_image_reference,
@@ -84,6 +86,44 @@ class ArtifactIdentityTests(unittest.TestCase):
         self.assertIn("repo/app:1", candidates)
         self.assertIn("repo/app:2", candidates)
         self.assertIn("app", candidates)
+
+    def test_artifact_candidates_include_ci_helm_kustomize_and_module_hints(self) -> None:
+        artifact = Artifact(
+            name="checkout",
+            properties={
+                "github:workflow:image": "ghcr.io/acme/checkout:${{ github.sha }}",
+                "helm:values:image": "registry.example.com/shop/checkout:1.2.3\nregistry.example.com/shop/checkout-canary:1.2.4",
+                "kustomize:image": "registry.example.com/shop/checkout:stable",
+                "terraform:module_output:image": "registry.example.com/shop/checkout:from-module",
+            },
+        )
+        candidates = artifact_candidates(artifact)
+        self.assertIn("ghcr.io/acme/checkout:${{ github.sha }}", candidates)
+        self.assertIn("registry.example.com/shop/checkout:1.2.3", candidates)
+        self.assertIn("registry.example.com/shop/checkout-canary:1.2.4", candidates)
+        self.assertIn("registry.example.com/shop/checkout:stable", candidates)
+        self.assertTrue(artifact_match_evidence(artifact, "registry.example.com/shop/checkout:from-module").matched)
+
+    def test_artifact_identity_proof_preserves_candidate_source_and_strength(self) -> None:
+        artifact = Artifact(
+            name="checkout",
+            reference="registry.example.com/shop/checkout:1.2.3",
+            properties={"oci:image:ref": "registry.example.com/shop/checkout@sha256:" + "a" * 64},
+        )
+        candidates = artifact_identity_candidates(artifact)
+        self.assertEqual(candidates[0].strength, "digest")
+        self.assertEqual(candidates[0].source, "artifact.properties.oci:image:ref")
+        proof = artifact_identity_proof(artifact)
+        self.assertEqual(proof["strongest_strength"], "digest")
+        self.assertEqual(proof["warnings"], [])
+
+    def test_artifact_version_candidate_is_not_strong_deployment_identity(self) -> None:
+        artifact = Artifact(name="checkout", version="1.2.3")
+
+        proof = artifact_identity_proof(artifact)
+
+        self.assertEqual(proof["strongest_strength"], "versioned_name")
+        self.assertTrue(proof["warnings"])
 
     def test_artifact_match_exact_reference_is_high(self) -> None:
         artifact = Artifact(name="payments-api", reference="ghcr.io/acme/payments-api:1.2.3")
@@ -626,6 +666,51 @@ class MappingAndSbomPlanTests(unittest.TestCase):
         self.assertIsNone(store.best_for("app", Component(name="left-pad"), vuln))
         self.assertIsNotNone(store.best_for("app", Component(name="left-pad", purl="pkg:npm/left-pad@1.0.0"), vuln))
 
+    def test_external_source_evidence_ranks_selector_and_provider_strength(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "source-evidence.json"
+            path.write_text(
+                json.dumps(
+                    [
+                        {"component": "axios", "state": "function_reachable", "confidence": "high", "source": "semgrep"},
+                        {"component": "axios", "state": "function_reachable", "confidence": "high", "source": "CodeQL"},
+                        {"purl": "pkg:npm/axios@1.0.0", "state": "function_reachable", "confidence": "high", "source": "semgrep"},
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            store = load_external_source_evidence([path])
+
+        evidence = store.best_for("web", Component(name="axios", purl="pkg:npm/axios@1.0.0"), VulnerabilityRecord(id="GHSA-axios", package_name="axios"))
+        self.assertIsNotNone(evidence)
+        assert evidence is not None
+        self.assertEqual(evidence.evidence_source, "semgrep")
+        component_only = store.best_for("web", Component(name="axios"), VulnerabilityRecord(id="GHSA-axios", package_name="axios"))
+        self.assertIsNotNone(component_only)
+        assert component_only is not None
+        self.assertEqual(component_only.evidence_source, "CodeQL")
+        self.assertEqual(store.provider_counts(), {"CodeQL": 1, "semgrep": 2})
+
+    def test_external_source_evidence_reports_unmatchable_selectors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "source-evidence.json"
+            path.write_text(
+                json.dumps(
+                    [
+                        {"artifact": "api", "state": "attacker_controlled", "confidence": "high", "source": "semgrep"},
+                        {"state": "function_reachable", "confidence": "medium", "source": "custom"},
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            store = load_external_source_evidence([path])
+
+        self.assertIsNone(store.best_for("api", Component(name="axios"), VulnerabilityRecord(id="GHSA-axios", package_name="axios")))
+        self.assertEqual(store.selector_diagnostics()["artifact_only_records"], 1)
+        self.assertEqual(store.selector_diagnostics()["unscoped_records"], 1)
+        self.assertEqual(store.records[0].evidence.diagnostics[0]["code"], "external_selector_artifact_only")
+        self.assertEqual(store.records[1].evidence.diagnostics[0]["code"], "external_selector_missing")
+
     def test_semgrep_source_evidence_preserves_purl_selector(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "semgrep.json"
@@ -711,6 +796,7 @@ class MappingAndSbomPlanTests(unittest.TestCase):
         self.assertIn("Semgrep dataflow trace", evidence.reason)
         self.assertEqual([location.line for location in evidence.locations], [3, 7])
         self.assertIn("$URL:req.query.url", evidence.matched_symbols)
+        self.assertEqual(evidence.diagnostics[0]["code"], "semgrep_dataflow_trace")
 
     def test_codeql_codeflow_uses_package_selector_without_rule_id_vulnerability_match(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -799,6 +885,7 @@ class MappingAndSbomPlanTests(unittest.TestCase):
         self.assertEqual(evidence.locations[-1].path, Path("src/client.js"))
         self.assertEqual([location.line for location in evidence.locations], [12, 4, 8])
         self.assertIn("js/request-forgery", evidence.matched_symbols)
+        self.assertEqual(evidence.diagnostics[0]["code"], "codeql_code_flow")
 
     def test_semgrep_adapter_handles_rule_package_and_direct_trace_locations(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -842,6 +929,7 @@ class MappingAndSbomPlanTests(unittest.TestCase):
         self.assertEqual(lodash.confidence, Confidence.MEDIUM)
         self.assertEqual(lodash.language, "javascript")
         self.assertNotIn("dataflow trace", lodash.reason)
+        self.assertEqual(lodash.diagnostics[0]["code"], "semgrep_result")
 
         requests = store.best_for(
             "api",
@@ -922,6 +1010,7 @@ class MappingAndSbomPlanTests(unittest.TestCase):
         self.assertEqual([location.path for location in evidence.locations], [Path("src/index.js"), Path("src/helper.js")])
         self.assertIn("queryName:custom-query", evidence.matched_symbols)
         self.assertIn("source_symbol:req.query", evidence.matched_symbols)
+        self.assertEqual(evidence.diagnostics[0]["code"], "sarif_result")
 
     def test_external_source_evidence_imports_supported_formats(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

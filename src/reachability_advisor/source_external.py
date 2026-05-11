@@ -29,6 +29,13 @@ REACHABILITY_STRENGTH = {
     Reachability.FUNCTION_REACHABLE: 5,
     Reachability.ATTACKER_CONTROLLED: 6,
 }
+PROVIDER_TRUST = {
+    "codeql": 5,
+    "semgrep": 4,
+    "govulncheck": 4,
+    "reachability-advisor": 3,
+    "builtin": 1,
+}
 
 
 class ExternalSourceEvidenceError(ValueError):
@@ -42,6 +49,11 @@ class ExternalSourceEvidenceRecord:
     component: str | None = None
     vulnerability: str | None = None
     package_purl: str | None = None
+    provider: str = ""
+
+    @property
+    def has_matching_selector(self) -> bool:
+        return bool(self.component or self.vulnerability or self.package_purl)
 
 
 @dataclass
@@ -49,7 +61,7 @@ class ExternalSourceEvidenceStore:
     records: list[ExternalSourceEvidenceRecord] = field(default_factory=list)
 
     def best_for(self, artifact: str, component: Component, vulnerability: VulnerabilityRecord) -> SourceEvidence | None:
-        candidates: list[SourceEvidence] = []
+        candidates: list[ExternalSourceEvidenceRecord] = []
         component_names = {component.name.lower(), component.display_name.lower()}
         if component.purl:
             component_names.add(component.purl.lower())
@@ -67,11 +79,31 @@ class ExternalSourceEvidenceStore:
             if record.component and record.component.lower() not in component_names:
                 continue
             if not record.component and not record.package_purl and not record.vulnerability:
+                # Artifact names only narrow the service. They do not prove
+                # which SBOM dependency the external analyzer result applies to.
                 continue
-            candidates.append(record.evidence)
+            candidates.append(record)
         if not candidates:
             return None
-        return max(candidates, key=lambda item: (REACHABILITY_STRENGTH[item.reachability], _confidence_strength(item.confidence)))
+        return max(candidates, key=_record_rank).evidence
+
+    def provider_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for record in self.records:
+            provider = _provider_name(record)
+            counts[provider] = counts.get(provider, 0) + 1
+        return dict(sorted(counts.items()))
+
+    def selector_diagnostics(self) -> dict[str, int]:
+        diagnostics = {"records": len(self.records), "matchable_records": 0, "artifact_only_records": 0, "unscoped_records": 0}
+        for record in self.records:
+            if record.has_matching_selector:
+                diagnostics["matchable_records"] += 1
+            elif record.artifact:
+                diagnostics["artifact_only_records"] += 1
+            else:
+                diagnostics["unscoped_records"] += 1
+        return diagnostics
 
 
 def merge_source_evidence(base: SourceEvidence, external: SourceEvidence | None) -> SourceEvidence:
@@ -85,6 +117,16 @@ def merge_source_evidence(base: SourceEvidence, external: SourceEvidence | None)
     symbols = list(dict.fromkeys([*external.matched_symbols, *base.matched_symbols]))
     dependency_path = external.dependency_path or base.dependency_path
     reason = external.reason
+    diagnostics = [
+        *external.diagnostics,
+        {
+            "code": "external_source_selected",
+            "severity": "info",
+            "message": "External source evidence was selected over or equal to the built-in source analyzer result.",
+            "detail": {"provider": external.evidence_source, "built_in_state": base.reachability.value, "external_state": external.reachability.value},
+        },
+        *base.diagnostics,
+    ]
     if base.reason and base.reachability != external.reachability:
         reason = f"{external.reason}; built-in analyzer reported {base.reachability.value}: {base.reason}"
     return SourceEvidence(
@@ -96,6 +138,7 @@ def merge_source_evidence(base: SourceEvidence, external: SourceEvidence | None)
         matched_symbols=symbols,
         dependency_path=dependency_path,
         evidence_source=external.evidence_source,
+        diagnostics=diagnostics,
     )
 
 
@@ -146,6 +189,38 @@ def _confidence_strength(confidence: Confidence) -> int:
     return {Confidence.LOW: 0, Confidence.MEDIUM: 1, Confidence.HIGH: 2}[confidence]
 
 
+def _record_rank(record: ExternalSourceEvidenceRecord) -> tuple[int, int, int, int]:
+    evidence = record.evidence
+    return (
+        REACHABILITY_STRENGTH[evidence.reachability],
+        _confidence_strength(evidence.confidence),
+        _selector_strength(record),
+        _provider_trust(record),
+    )
+
+
+def _selector_strength(record: ExternalSourceEvidenceRecord) -> int:
+    strength = 0
+    if record.component:
+        strength = max(strength, 2)
+    if record.package_purl:
+        strength = max(strength, 3)
+    if record.vulnerability:
+        strength = max(strength, 3)
+    if record.artifact:
+        strength += 1
+    return strength
+
+
+def _provider_trust(record: ExternalSourceEvidenceRecord) -> int:
+    provider = _provider_name(record)
+    return PROVIDER_TRUST.get(provider.lower(), 2)
+
+
+def _provider_name(record: ExternalSourceEvidenceRecord) -> str:
+    return str(record.provider or record.evidence.evidence_source or "unknown")
+
+
 def _state(value: Any, default: Reachability = Reachability.FUNCTION_REACHABLE) -> Reachability:
     try:
         return Reachability(str(value or default.value))
@@ -160,7 +235,7 @@ def _confidence(value: Any, default: Confidence = Confidence.MEDIUM) -> Confiden
         return default
 
 
-def _locations(items: Any, base_path: Path) -> list[SourceLocation]:
+def _locations(items: Any) -> list[SourceLocation]:
     locations: list[SourceLocation] = []
     for item in items or []:
         if not isinstance(item, dict):
@@ -234,23 +309,43 @@ def _dedupe_location_dicts(locations: list[dict[str, Any]]) -> list[dict[str, An
 
 def _record_from_plain(item: dict[str, Any], path: Path) -> ExternalSourceEvidenceRecord:
     source = str(item.get("tool") or item.get("source") or path.name)
+    artifact = str(item.get("artifact")) if item.get("artifact") else None
+    component = str(item.get("component") or item.get("package")) if item.get("component") or item.get("package") else None
+    vulnerability = str(item.get("vulnerability") or item.get("vulnerability_id")) if item.get("vulnerability") or item.get("vulnerability_id") else None
+    package_purl = str(item.get("purl") or item.get("package_purl")) if item.get("purl") or item.get("package_purl") else None
+    diagnostics = [dict(diagnostic) for diagnostic in item.get("diagnostics", []) if isinstance(diagnostic, dict)] if isinstance(item.get("diagnostics"), list) else []
+    diagnostics.extend(_selector_diagnostics(artifact=artifact, component=component, vulnerability=vulnerability, package_purl=package_purl, source=source))
     evidence = SourceEvidence(
         reachability=_state(item.get("state") or item.get("reachability")),
         confidence=_confidence(item.get("confidence")),
         language=str(item.get("language") or "unknown"),
         reason=str(item.get("reason") or f"external source evidence from {source}"),
-        locations=_locations(item.get("locations"), path),
+        locations=_locations(item.get("locations")),
         matched_symbols=[str(symbol) for symbol in item.get("matched_symbols", []) or []],
         dependency_path=[str(part) for part in item.get("dependency_path", []) or []],
         evidence_source=source,
+        diagnostics=diagnostics,
     )
     return ExternalSourceEvidenceRecord(
         evidence=evidence,
-        artifact=str(item.get("artifact")) if item.get("artifact") else None,
-        component=str(item.get("component") or item.get("package")) if item.get("component") or item.get("package") else None,
-        vulnerability=str(item.get("vulnerability") or item.get("vulnerability_id")) if item.get("vulnerability") or item.get("vulnerability_id") else None,
-        package_purl=str(item.get("purl") or item.get("package_purl")) if item.get("purl") or item.get("package_purl") else None,
+        artifact=artifact,
+        component=component,
+        vulnerability=vulnerability,
+        package_purl=package_purl,
+        provider=source,
     )
+
+
+def _selector_diagnostics(*, artifact: str | None, component: str | None, vulnerability: str | None, package_purl: str | None, source: str) -> list[dict[str, Any]]:
+    if component or vulnerability or package_purl:
+        return []
+    code = "external_selector_artifact_only" if artifact else "external_selector_missing"
+    message = (
+        "External source evidence only names an artifact; artifact narrows matches but cannot select a dependency vulnerability."
+        if artifact
+        else "External source evidence has no component, package URL, or vulnerability selector and cannot upgrade a finding."
+    )
+    return [{"code": code, "severity": "warning", "message": message, "detail": {"provider": source, "artifact": artifact}}]
 
 
 def _record_from_finding(item: dict[str, Any], path: Path) -> ExternalSourceEvidenceRecord:
@@ -270,6 +365,7 @@ def _record_from_finding(item: dict[str, Any], path: Path) -> ExternalSourceEvid
         "locations": source.get("locations"),
         "matched_symbols": source.get("matched_symbols"),
         "dependency_path": source.get("dependency_path"),
+        "diagnostics": source.get("diagnostics"),
         "tool": source.get("evidence_source") or "reachability-advisor",
     }
     return _record_from_plain(plain, path)
@@ -365,6 +461,14 @@ def _record_from_semgrep(item: dict[str, Any], path: Path) -> ExternalSourceEvid
         "locations": locations,
         "matched_symbols": _semgrep_matched_symbols(item, extra),
         "tool": "semgrep",
+        "diagnostics": [
+            {
+                "code": "semgrep_dataflow_trace" if has_taint_trace else "semgrep_result",
+                "severity": "info",
+                "message": "Semgrep native dataflow evidence was imported." if has_taint_trace else "Semgrep result evidence was imported.",
+                "detail": {"check_id": item.get("check_id"), "trace_locations": len(trace_locations)},
+            }
+        ],
     }
     return _record_from_plain(plain, path)
 
@@ -481,18 +585,28 @@ def _records_from_sarif(data: dict[str, Any], path: Path) -> list[ExternalSource
             state = _first_selector(metadata_sources, "state", "reachability", "source_state")
             confidence = _first_selector(metadata_sources, "confidence")
             vuln = _first_selector(metadata_sources, "vulnerability", "vulnerability_id", "cve", "cve_id", "osv", "osv_id", "ghsa")
+            has_flow = bool(flow_locations)
+            flow_code = "codeql_code_flow" if str(tool_name).lower() == "codeql" and has_flow else "sarif_code_flow" if has_flow else "sarif_result"
             plain = {
                 "artifact": _first_selector(metadata_sources, "artifact", "artifact_name", "service"),
                 "component": _first_selector(metadata_sources, "component", "package", "package_name", "dependency", "module", "library"),
                 "purl": _first_selector(metadata_sources, "purl", "package_purl", "package-url"),
                 "vulnerability": vuln or _vulnerability_selector(rule_id),
-                "state": state or (Reachability.ATTACKER_CONTROLLED.value if flow_locations else Reachability.FUNCTION_REACHABLE.value),
-                "confidence": confidence or (Confidence.HIGH.value if flow_locations else Confidence.MEDIUM.value),
+                "state": state or (Reachability.ATTACKER_CONTROLLED.value if has_flow else Reachability.FUNCTION_REACHABLE.value),
+                "confidence": confidence or (Confidence.HIGH.value if has_flow else Confidence.MEDIUM.value),
                 "language": _first_selector(metadata_sources, "language") or _language_from_locations(locations),
-                "reason": _sarif_reason(str(tool_name), message.get("text"), rule_id, bool(flow_locations)),
+                "reason": _sarif_reason(str(tool_name), message.get("text"), rule_id, has_flow),
                 "locations": locations,
                 "matched_symbols": _sarif_matched_symbols(rule_id, result, rule),
                 "tool": str(tool_name),
+                "diagnostics": [
+                    {
+                        "code": flow_code,
+                        "severity": "info",
+                        "message": "SARIF data-flow evidence was imported." if has_flow else "SARIF result evidence was imported.",
+                        "detail": {"tool": str(tool_name), "rule_id": rule_id, "flow_locations": len(flow_locations)},
+                    }
+                ],
             }
             records.append(_record_from_plain(plain, path))
     return records

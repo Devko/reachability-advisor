@@ -24,6 +24,7 @@ The command writes:
 - `outputs/diagnostics.json` - editor diagnostics output;
 - `outputs/pr-summary.md` - pull request summary;
 - `outputs/reachability-graph.html` - searchable graph of assets, vulnerabilities, network/IAM context, code exposure, and findings;
+- `outputs/evidence-graph.json` - structured asset/component/vulnerability/network/IAM/code graph used by the HTML report;
 - `outputs/annotations.txt` - GitHub Actions workflow-command annotations;
 - `outputs/terraform-coverage.json` - Terraform resource accounting, semantic coverage, artifact matches, and visibility gaps;
 - `outputs/kubernetes-coverage.json` - rendered Kubernetes workload, service, ingress, RBAC, and artifact-match coverage;
@@ -84,6 +85,7 @@ reachability-advisor scan \
   --kubernetes-coverage-out outputs/kubernetes-coverage.json \
   --source-coverage-out outputs/source-coverage.json \
   --mapping-out outputs/mapping.json \
+  --evidence-graph-out outputs/evidence-graph.json \
   --source-root payments-api=samples/source/payments-api \
   --sarif-out outputs/findings.sarif \
   --html-out outputs/reachability-graph.html \

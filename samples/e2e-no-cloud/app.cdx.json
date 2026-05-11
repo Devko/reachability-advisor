@@ -1,0 +1,27 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "name": "no-cloud-app",
+      "version": "1.0.0",
+      "properties": [
+        {"name": "container:image", "value": "registry.example.com/team/no-cloud-app:1.0.0"},
+        {"name": "oci:image:ref", "value": "registry.example.com/team/no-cloud-app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+        {"name": "environment", "value": "prod"},
+        {"name": "owner", "value": "platform-security"}
+      ]
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "name": "requests",
+      "version": "2.19.0",
+      "purl": "pkg:pypi/requests@2.19.0",
+      "scope": "runtime"
+    }
+  ]
+}

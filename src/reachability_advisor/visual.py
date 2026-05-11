@@ -3,37 +3,37 @@
 from __future__ import annotations
 
 import json
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .evidence_graph import build_evidence_graph
 from .models import Finding, reachability_label
 from .numeric import safe_float
 from .remediation import build_remediation_groups
 from .visual_graph import visual_graph_model
 from .visual_layout import EXPOSURE_RANK, TIER_RANK
 
-NETWORK_PATH_RE = re.compile(r"^(?:terraform|context|kubernetes) network path: (?P<exposure>[a-z_]+) via (?P<path>.+)$")
-EXPOSURE_INFERENCE_RE = re.compile(r"^(?:terraform|context|kubernetes) exposure inference: (?P<exposure>[a-z_]+) via (?P<target>.+)$")
 _visual_graph_model = visual_graph_model
 
 
-def write_html_report(findings: list[Finding], path: str | Path, metadata: dict[str, Any] | None = None) -> None:
+def write_html_report(findings: list[Finding], path: str | Path, metadata: dict[str, Any] | None = None, evidence_graph: dict[str, Any] | None = None) -> None:
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render_html_report(findings, metadata=metadata), encoding="utf-8")
+    out.write_text(render_html_report(findings, metadata=metadata, evidence_graph=evidence_graph), encoding="utf-8")
 
 
-def render_html_report(findings: list[Finding], metadata: dict[str, Any] | None = None) -> str:
-    payload = _visual_payload(findings, metadata=metadata)
+def render_html_report(findings: list[Finding], metadata: dict[str, Any] | None = None, evidence_graph: dict[str, Any] | None = None) -> str:
+    payload = _visual_payload(findings, metadata=metadata, evidence_graph=evidence_graph)
     data_json = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
     return HTML_TEMPLATE.replace("__REPORT_DATA__", data_json)
 
 
-def _visual_payload(findings: list[Finding], metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+def _visual_payload(findings: list[Finding], metadata: dict[str, Any] | None = None, evidence_graph: dict[str, Any] | None = None) -> dict[str, Any]:
     finding_rows = [finding.to_json() for finding in findings]
+    graph = evidence_graph or build_evidence_graph(findings, metadata=metadata)
+    graph_paths_by_asset = _graph_network_paths_by_asset(graph)
     assets: dict[str, dict[str, Any]] = {}
     vulnerabilities: list[dict[str, Any]] = []
     links: list[dict[str, Any]] = []
@@ -109,6 +109,10 @@ def _visual_payload(findings: list[Finding], metadata: dict[str, Any] | None = N
         )
 
     ordered_assets = sorted(assets.values(), key=lambda asset: (-TIER_RANK.get(asset["tier"], 0), -safe_float(asset["score"]), asset["name"]))
+    for asset in ordered_assets:
+        paths = graph_paths_by_asset.get(asset["id"])
+        if paths:
+            asset["networkPaths"] = paths
     network_paths = _finalize_network_paths(ordered_assets)
     vulnerabilities.sort(key=lambda item: (item["assetId"], -TIER_RANK.get(item["tier"], 0), -safe_float(item["score"]), item["label"]))
     return {
@@ -120,6 +124,7 @@ def _visual_payload(findings: list[Finding], metadata: dict[str, Any] | None = N
         },
         "stats": _stats(finding_rows),
         "remediations": build_remediation_groups(findings),
+        "evidenceGraph": graph,
         "findings": finding_rows,
         "assets": ordered_assets,
         "networkPaths": network_paths,
@@ -150,55 +155,33 @@ def _raise_asset(asset: dict[str, Any], finding: dict[str, Any]) -> None:
     for item in context.get("evidence") or []:
         if len(asset["evidence"]) < 8:
             _append_unique(asset["evidence"], item)
-        path = _network_path_from_evidence(asset["id"], finding, item)
-        if path:
-            _append_unique_by_key(asset["networkPaths"], path, "evidence")
 
 
-def _network_path_from_evidence(asset_id: str, finding: dict[str, Any], item: str) -> dict[str, Any] | None:
-    context = finding.get("context") or {}
-    match = NETWORK_PATH_RE.match(item)
-    if match:
-        exposure = match.group("exposure")
-        steps = [step.strip() for step in match.group("path").split(" -> ") if step.strip()]
-        entry_kind = _entry_kind_for_path(exposure, steps)
-        return {
-            "id": "",
+def _graph_network_paths_by_asset(graph: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    paths_by_asset: dict[str, list[dict[str, Any]]] = {}
+    for raw_path in graph.get("network_paths", []) if isinstance(graph.get("network_paths"), list) else []:
+        if not isinstance(raw_path, dict):
+            continue
+        asset_id = str(raw_path.get("asset_id") or "")
+        if not asset_id:
+            continue
+        path: dict[str, Any] = {
+            "id": str(raw_path.get("id") or ""),
             "assetId": asset_id,
-            "entryId": f"entry:{entry_kind}",
-            "entryLabel": _entry_label_for_kind(entry_kind),
-            "entrySubtitle": _entry_subtitle_for_kind(entry_kind),
-            "exposure": exposure,
-            "tier": finding.get("tier") or "informational",
-            "score": safe_float(finding.get("score")),
-            "label": _path_label(steps, exposure),
-            "summary": _path_summary(steps, exposure),
-            "steps": steps,
-            "evidence": item,
-            "owner": context.get("owner"),
+            "entryId": f"entry:{raw_path.get('entry_kind') or _entry_kind(str(raw_path.get('exposure') or 'unknown'))}",
+            "entryLabel": raw_path.get("entry_label") or _entry_label(str(raw_path.get("exposure") or "unknown")),
+            "entrySubtitle": raw_path.get("entry_subtitle") or _entry_subtitle(str(raw_path.get("exposure") or "unknown")),
+            "exposure": str(raw_path.get("exposure") or "unknown"),
+            "tier": "informational",
+            "score": 0.0,
+            "label": raw_path.get("label") or _fallback_path_label(str(raw_path.get("exposure") or "unknown")),
+            "summary": raw_path.get("summary") or _fallback_path_summary(str(raw_path.get("exposure") or "unknown")),
+            "steps": raw_path.get("steps") if isinstance(raw_path.get("steps"), list) else [],
+            "evidence": raw_path.get("evidence") or "",
+            "owner": raw_path.get("owner"),
         }
-
-    inference = EXPOSURE_INFERENCE_RE.match(item)
-    if inference:
-        exposure = inference.group("exposure")
-        target = inference.group("target").strip()
-        entry_kind = _entry_kind_for_path(exposure, [target])
-        return {
-            "id": "",
-            "assetId": asset_id,
-            "entryId": f"entry:{entry_kind}",
-            "entryLabel": _entry_label_for_kind(entry_kind),
-            "entrySubtitle": _entry_subtitle_for_kind(entry_kind),
-            "exposure": exposure,
-            "tier": finding.get("tier") or "informational",
-            "score": safe_float(finding.get("score")),
-            "label": f"{exposure} exposure",
-            "summary": f"Exposure inferred through {target}",
-            "steps": [target],
-            "evidence": item,
-            "owner": context.get("owner"),
-        }
-    return None
+        paths_by_asset.setdefault(asset_id, []).append(path)
+    return paths_by_asset
 
 
 def _finalize_network_paths(assets: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -258,18 +241,6 @@ def _entry_kind(exposure: str) -> str:
     return "unknown"
 
 
-def _entry_kind_for_path(exposure: str, steps: list[str]) -> str:
-    kind = _entry_kind(exposure)
-    if kind != "internal":
-        return kind
-    text = " ".join(steps).lower()
-    if "loadbalancer" in text or "nodeport" in text or "public ingress" in text:
-        return "public_pivot"
-    if "allows traffic from" in text or "security_group_rule" in text or "provider private network reaches" in text:
-        return "lateral"
-    return "internal"
-
-
 def _entry_label(exposure: str) -> str:
     return _entry_label_for_kind(_entry_kind(exposure))
 
@@ -308,20 +279,6 @@ def _entry_subtitle_for_kind(kind: str) -> str:
     if kind == "isolated":
         return "no linked network route observed"
     return "insufficient IaC evidence"
-
-
-def _path_label(steps: list[str], exposure: str) -> str:
-    if steps:
-        return steps[0]
-    return _fallback_path_label(exposure)
-
-
-def _path_summary(steps: list[str], exposure: str) -> str:
-    if not steps:
-        return _fallback_path_summary(exposure)
-    short_steps = steps[:4]
-    suffix = " -> ..." if len(steps) > len(short_steps) else ""
-    return " -> ".join(short_steps) + suffix
 
 
 def _fallback_path_label(exposure: str) -> str:
@@ -379,11 +336,6 @@ def _code_exposure_detail(state: str) -> str:
 
 def _append_unique(items: list[Any], value: Any) -> None:
     if value not in (None, "", [], {}) and value not in items:
-        items.append(value)
-
-
-def _append_unique_by_key(items: list[dict[str, Any]], value: dict[str, Any], key: str) -> None:
-    if value.get(key) and all(item.get(key) != value.get(key) for item in items):
         items.append(value)
 
 

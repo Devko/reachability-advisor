@@ -88,6 +88,7 @@ jobs:
             --source-coverage-out reachability/source-coverage.json \
             --mapping-out reachability/mapping.json \
             --out reachability/findings.json \
+            --evidence-graph-out reachability/evidence-graph.json \
             --sarif-out reachability/reachability.sarif \
             --markdown-out reachability/summary.md \
             --html-out reachability/reachability-graph.html \
@@ -207,6 +208,7 @@ For release branches and deployment gates, scan the built artifact instead of th
             --source-coverage-out reachability/source-coverage.json \
             --mapping-out reachability/mapping.json \
             --out reachability/findings.json \
+            --evidence-graph-out reachability/evidence-graph.json \
             --sarif-out reachability/reachability.sarif \
             --markdown-out reachability/summary.md \
             --html-out reachability/reachability-graph.html \
@@ -223,11 +225,33 @@ Use `--terraform-source infra` only when a plan cannot be generated in the job. 
 3. Pass the matching source checkout with `--source-root name=path`.
 4. Pass Terraform plan JSON for release gates.
 5. Pass rendered Kubernetes YAML/JSON when workloads are deployed through Kubernetes, Helm, or Kustomize.
-6. Write `--mapping-out`, `--source-coverage-out`, `--terraform-coverage-out`, and `--kubernetes-coverage-out` when the related inputs are present.
+6. Write `--mapping-out`, `--source-coverage-out`, `--terraform-coverage-out`, `--kubernetes-coverage-out`, and `--evidence-graph-out` when the related inputs are present.
 7. Upload SARIF to GitHub code scanning and upload JSON/Markdown/HTML artifacts for audit.
 8. Fail on `--fail-on-tier high` only when the team is ready to enforce the prioritized queue.
 
-Terraform plan JSON can include sensitive values. Prefer not to upload it. Upload `terraform-coverage.json`, `kubernetes-coverage.json`, `source-coverage.json`, and `mapping.json` instead.
+Terraform plan JSON can include sensitive values. Prefer not to upload it. Upload `terraform-coverage.json`, `kubernetes-coverage.json`, `source-coverage.json`, `mapping.json`, and `evidence-graph.json` instead.
+
+## Account-Free Terraform E2E Test
+
+Reachability Advisor analyzes `terraform show -json` output. It does not call Terraform providers or cloud APIs during `scan`, so an end-to-end test can use a reduced plan JSON shaped like Terraform output.
+
+The repository includes `samples/e2e-no-cloud/` for this path:
+
+```bash
+reachability-advisor scan \
+  --sbom samples/e2e-no-cloud/app.cdx.json \
+  --vulns samples/e2e-no-cloud/vulnerabilities.json \
+  --source-root no-cloud-app=samples/e2e-no-cloud/source \
+  --terraform-plan samples/e2e-no-cloud/tfplan.json \
+  --terraform-coverage-out outputs/no-cloud/terraform-coverage.json \
+  --source-coverage-out outputs/no-cloud/source-coverage.json \
+  --mapping-out outputs/no-cloud/mapping.json \
+  --evidence-graph-out outputs/no-cloud/evidence-graph.json \
+  --html-out outputs/no-cloud/reachability-graph.html \
+  --out outputs/no-cloud/findings.json
+```
+
+This proves the scanner path, artifact matching, public network context, IAM capability extraction, source reachability, evidence graph, and HTML output without a real cloud account. It does not prove that a real environment matches the fixture.
 
 ## Fallback Without a Plan
 
@@ -242,6 +266,7 @@ reachability-advisor scan \
   --terraform-coverage-out reachability/terraform-coverage.json \
   --source-coverage-out reachability/source-coverage.json \
   --mapping-out reachability/mapping.json \
+  --evidence-graph-out reachability/evidence-graph.json \
   --out reachability/findings.json
 ```
 
@@ -292,6 +317,8 @@ reachability-advisor compare \
   --markdown-out reachability-delta.md \
   --fail-on-new-tier high
 ```
+
+See `docs/policy_playbooks.md` for strict release, advisory pull request, and backlog migration policy files.
 
 ## Terraform Coverage Gate
 

@@ -24,10 +24,35 @@
     },
     "manifest": {"type": "object"},
     "resource_types_seen": {"type": "array", "items": {"type": "string"}},
-    "artifact_matches": {"type": "array", "items": {"type": "object"}},
+    "artifact_matches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "artifact": {"type": "string"},
+          "resource": {"type": "string"},
+          "image": {"type": "string"},
+          "match_method": {"type": "string"},
+          "match_score": {"type": "number"},
+          "match_confidence": {"type": "string"},
+          "artifact_identity": {"type": "object"},
+          "match_proof": {"type": "object"}
+        },
+        "additionalProperties": true
+      }
+    },
     "matched_artifacts": {"type": "array", "items": {"type": "string"}},
     "unmatched_artifacts": {"type": "array", "items": {"type": "string"}},
-    "resources": {"type": "array", "items": {"type": "object"}},
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "network_adapter_signals": {"type": "array", "items": {"type": "object"}}
+        },
+        "additionalProperties": true
+      }
+    },
     "visibility_gaps": {"type": "array", "items": {"type": "object"}},
     "notes": {"type": "array", "items": {"type": "string"}}
   }

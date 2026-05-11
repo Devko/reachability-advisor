@@ -10,10 +10,10 @@ from reachability_advisor.cli import main
 from reachability_advisor.compare import write_delta, write_delta_markdown
 from reachability_advisor.context import (
     ContextError,
-    _classify_policy,
     infer_context_from_terraform,
     load_context_file,
 )
+from reachability_advisor.iam_capabilities import dedupe_iam_capabilities, strongest_capability
 from reachability_advisor.models import (
     Artifact,
     Component,
@@ -31,6 +31,7 @@ from reachability_advisor.remediation import build_remediation_groups
 from reachability_advisor.sbom import SbomError, load_sbom
 from reachability_advisor.scoring import ScorePolicy, fix_commands, score_finding
 from reachability_advisor.source import analyze_component_source
+from reachability_advisor.terraform import classify_policy
 from reachability_advisor.validators import issues_report, validate_paths
 from reachability_advisor.vulnerability import (
     VulnerabilityError,
@@ -111,11 +112,11 @@ class ContextEdgeTests(unittest.TestCase):
                 load_context_file(path)
 
     def test_policy_classifier_admin_sensitive_limited_unknown(self) -> None:
-        self.assertEqual(_classify_policy(json.dumps({"Statement": {"Effect": "Allow", "Action": "*"}})), "admin")
-        self.assertEqual(_classify_policy({"Statement": [{"Effect": "Allow", "Action": ["secretsmanager:GetSecretValue"]}]}), "sensitive")
-        self.assertEqual(_classify_policy({"Statement": [{"Effect": "Allow", "Action": ["s3:GetObject"]}]}), "sensitive")
-        self.assertEqual(_classify_policy({"Statement": [{"Effect": "Deny", "Action": ["*"]}]}), "unknown")
-        self.assertEqual(_classify_policy("AdministratorAccess"), "admin")
+        self.assertEqual(classify_policy(json.dumps({"Statement": {"Effect": "Allow", "Action": "*"}})), "admin")
+        self.assertEqual(classify_policy({"Statement": [{"Effect": "Allow", "Action": ["secretsmanager:GetSecretValue"]}]}), "sensitive")
+        self.assertEqual(classify_policy({"Statement": [{"Effect": "Allow", "Action": ["s3:GetObject"]}]}), "sensitive")
+        self.assertEqual(classify_policy({"Statement": [{"Effect": "Deny", "Action": ["*"]}]}), "unknown")
+        self.assertEqual(classify_policy("AdministratorAccess"), "admin")
 
     def test_terraform_invalid_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -241,6 +242,47 @@ class SourceAndScoringEdgeTests(unittest.TestCase):
         component = Component(name="lib")
         evidence = analyze_component_source(component, Path("/definitely/missing"))
         self.assertEqual(evidence.reachability, Reachability.PACKAGE_PRESENT)
+        self.assertEqual(evidence.diagnostics[0]["code"], "no_supported_source_files")
+
+    def test_missing_source_root_and_missing_package_rule_are_diagnostic_states(self) -> None:
+        component = Component(name="private-lib", purl="pkg:npm/private-lib@1.0.0")
+        missing_root = analyze_component_source(component, None)
+        self.assertEqual(missing_root.reachability, Reachability.PACKAGE_PRESENT)
+        self.assertEqual(missing_root.diagnostics[0]["code"], "missing_source_root")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "index.js").write_text("console.log('unrelated');\n", encoding="utf-8")
+            no_rule = analyze_component_source(component, root)
+        self.assertEqual(no_rule.reachability, Reachability.UNKNOWN_DUE_TO_NO_RULE)
+        self.assertEqual(no_rule.diagnostics[0]["code"], "missing_package_rule")
+
+    def test_iam_capabilities_are_normalized_deduped_and_scored(self) -> None:
+        capabilities = dedupe_iam_capabilities(
+            [
+                {"action": "secretsmanager:GetSecretValue", "impact": "data_access", "resource_refs": ["secret:b", "secret:a"], "source": "role.api"},
+                {"action": "secretsmanager:GetSecretValue", "impact": "data_access", "resource_refs": ["secret:a", "secret:b"], "source": "role.api"},
+                {"action": "s3:GetObject", "source": "role.api"},
+            ]
+        )
+        self.assertEqual(len(capabilities), 2)
+        self.assertEqual(capabilities[0]["resource_refs"], ["secret:a", "secret:b"])
+        strongest = strongest_capability(capabilities)
+        self.assertIsNotNone(strongest)
+        assert strongest is not None
+        self.assertEqual(strongest["impact"], "data_access")
+
+        sbom_like = type("SbomLike", (), {"artifact": Artifact(name="api")})()
+        finding = score_finding(
+            sbom_like,
+            Component(name="lib", version="1"),
+            VulnerabilityRecord(id="CVE-X", package_name="lib", severity="high"),
+            SourceEvidence(reachability=Reachability.FUNCTION_REACHABLE, confidence=Confidence.MEDIUM),
+            ContextEvidence(exposure="internal", privilege="limited", iam_capabilities=capabilities, confidence=Confidence.MEDIUM),
+            ScorePolicy(),
+        )
+        rationale = " ".join(finding.rationale)
+        self.assertIn("IAM capability data_access:secretsmanager:GetSecretValue", rationale)
 
     def test_fix_commands_by_ecosystem(self) -> None:
         vuln = VulnerabilityRecord(id="CVE-X", package_name="lib", fixed_versions=["2"])
@@ -258,6 +300,9 @@ class SourceAndScoringEdgeTests(unittest.TestCase):
         context = ContextEvidence(exposure="internal", environment="staging", privilege="limited", confidence=Confidence.MEDIUM)
         finding = score_finding(sbom_like, component, vuln, source, context, ScorePolicy())
         self.assertGreater(finding.score, 0)
+        self.assertEqual(finding.score_details["final_score"], round(finding.score, 2))
+        self.assertTrue(finding.score_details["dimensions"])
+        self.assertTrue(any(dimension["name"] == "source_reachability" for dimension in finding.score_details["dimensions"]))
         self.assertIn("dependency scope", " ".join(finding.rationale))
 
     def test_network_iam_criticality_contributes_to_score(self) -> None:

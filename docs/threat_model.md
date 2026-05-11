@@ -20,7 +20,7 @@
 - The scanner does not make network calls.
 - Source scanning limits file extensions and ignores files larger than 1 MB.
 - External source evidence only upgrades findings when component/package, package URL, or vulnerability selectors match. Artifact selectors only narrow those matches.
-- Outputs are local JSON/SARIF/Markdown/HTML/annotation artifacts.
+- Outputs are local JSON/SARIF/Markdown/HTML/annotation artifacts. The evidence graph is local JSON and contains derived evidence, not raw Terraform plans.
 - Exceptions are explicit and visible.
 
 ## Main risks

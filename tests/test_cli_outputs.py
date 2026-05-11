@@ -58,14 +58,20 @@ class CliTests(unittest.TestCase):
                 "--diagnostics-out", str(out / "diagnostics.json"),
                 "--markdown-out", str(out / "summary.md"),
                 "--html-out", str(out / "graph.html"),
+                "--evidence-graph-out", str(out / "evidence-graph.json"),
                 "--annotations-out", str(out / "annotations.txt"),
                 "--no-table",
             ])
             self.assertEqual(code, 0)
-            for filename in ("findings.json", "findings.sarif", "diagnostics.json", "summary.md", "graph.html", "annotations.txt"):
+            for filename in ("findings.json", "findings.sarif", "diagnostics.json", "summary.md", "graph.html", "evidence-graph.json", "annotations.txt"):
                 self.assertTrue((out / filename).exists(), filename)
             findings = json.loads((out / "findings.json").read_text(encoding="utf-8"))
             self.assertGreaterEqual(len(findings["findings"]), 4)
+            self.assertIn("evidence_graph", findings)
+            self.assertTrue(findings["findings"][0]["scoring"]["dimensions"])
+            evidence_graph = json.loads((out / "evidence-graph.json").read_text(encoding="utf-8"))
+            self.assertTrue(evidence_graph["assets"])
+            self.assertTrue(evidence_graph["code_edges"])
             sarif = json.loads((out / "findings.sarif").read_text(encoding="utf-8"))
             self.assertEqual(sarif["version"], "2.1.0")
             diagnostics = json.loads((out / "diagnostics.json").read_text(encoding="utf-8"))
@@ -85,6 +91,7 @@ class CliTests(unittest.TestCase):
             embedded = re.search(r'<script id="report-data" type="application/json">(.*?)</script>', html, flags=re.DOTALL)
             self.assertIsNotNone(embedded)
             report_data = json.loads(embedded.group(1)) if embedded else {}
+            self.assertIn("evidenceGraph", report_data)
             self.assertGreaterEqual(len(report_data["assets"]), 2)
             self.assertGreaterEqual(len(report_data["networkPaths"]), 2)
             self.assertGreaterEqual(len(report_data["vulnerabilities"]), 2)

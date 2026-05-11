@@ -1,0 +1,150 @@
+{
+  "$schema": "../schemas/scoring-benchmark.schema.json",
+  "schema_version": "1.0",
+  "cases": [
+    {
+      "id": "public-request-controlled-sensitive",
+      "description": "Public request-controlled vulnerable path with sensitive IAM should be urgent.",
+      "artifact": "payments-api",
+      "component": {"name": "log4j-core", "version": "2.14.1", "scope": "runtime"},
+      "vulnerability": {"id": "CVE-2021-44228", "package_name": "log4j-core", "cvss": 10.0, "known_exploited": true},
+      "source": {"reachability": "attacker_controlled", "confidence": "high"},
+      "context": {"exposure": "public", "environment": "prod", "privilege": "sensitive", "iam_impacts": ["data_access"], "confidence": "medium"},
+      "expected_tier": "urgent",
+      "min_score": 85,
+      "max_score": 100
+    },
+    {
+      "id": "public-request-controlled-no-critical-context",
+      "description": "Public request-controlled vulnerable path without critical IAM should stay high unless exploit intelligence is stronger.",
+      "artifact": "frontend",
+      "component": {"name": "express", "version": "4.17.1", "scope": "runtime"},
+      "vulnerability": {"id": "GHSA-express", "package_name": "express", "cvss": 7.5},
+      "source": {"reachability": "attacker_controlled", "confidence": "high"},
+      "context": {"exposure": "public", "environment": "prod", "privilege": "none", "confidence": "medium"},
+      "expected_tier": "high",
+      "min_score": 65,
+      "max_score": 84
+    },
+    {
+      "id": "private-function-reachable-no-blast-radius",
+      "description": "Private function-reachable finding without exploit signal or critical context should stay below high.",
+      "artifact": "batch-worker",
+      "component": {"name": "lodash", "version": "4.17.20", "scope": "runtime"},
+      "vulnerability": {"id": "CVE-2021-23337", "package_name": "lodash", "cvss": 7.5, "epss": 0.22},
+      "source": {"reachability": "function_reachable", "confidence": "medium"},
+      "context": {"exposure": "private", "environment": "prod", "privilege": "none", "confidence": "medium"},
+      "expected_tier": "medium",
+      "min_score": 40,
+      "max_score": 64
+    },
+    {
+      "id": "internal-import-only-critical-iam",
+      "description": "Internal import-only finding with critical IAM remains capped below high until stronger code evidence exists.",
+      "artifact": "ops-api",
+      "component": {"name": "requests", "version": "2.19.0", "scope": "runtime"},
+      "vulnerability": {"id": "GHSA-requests", "package_name": "requests", "cvss": 9.1},
+      "source": {"reachability": "imported", "confidence": "medium"},
+      "context": {"exposure": "internal", "environment": "prod", "privilege": "sensitive", "iam_impacts": ["network_control"], "confidence": "medium"},
+      "expected_tier": "medium",
+      "min_score": 40,
+      "max_score": 64
+    },
+    {
+      "id": "weak-source-known-exploited",
+      "description": "Known exploited vulnerability with weak source evidence can be high but not urgent.",
+      "artifact": "legacy-api",
+      "component": {"name": "struts2-core", "version": "2.3.31", "scope": "runtime"},
+      "vulnerability": {"id": "CVE-2017-5638", "package_name": "struts2-core", "cvss": 10.0, "known_exploited": true},
+      "source": {"reachability": "package_present", "confidence": "low"},
+      "context": {"exposure": "public", "environment": "prod", "privilege": "none", "confidence": "medium"},
+      "expected_tier": "high",
+      "min_score": 65,
+      "max_score": 84
+    },
+    {
+      "id": "public-dependency-graph-critical-context",
+      "description": "Indirect dependency evidence can be high for public critical context but remains below urgent.",
+      "artifact": "edge-api",
+      "component": {"name": "transitive-http", "version": "1.0.0", "scope": "runtime"},
+      "vulnerability": {"id": "GHSA-transitive", "package_name": "transitive-http", "cvss": 9.8},
+      "source": {"reachability": "dependency_reachable", "confidence": "medium"},
+      "context": {"exposure": "public", "environment": "prod", "privilege": "sensitive", "iam_impacts": ["data_access"], "confidence": "medium"},
+      "expected_tier": "high",
+      "min_score": 65,
+      "max_score": 84
+    },
+    {
+      "id": "external-function-critical-context",
+      "description": "External function-reachable finding with critical context can become urgent.",
+      "artifact": "gateway",
+      "component": {"name": "template-engine", "version": "3.1.0", "scope": "runtime"},
+      "vulnerability": {"id": "GHSA-template", "package_name": "template-engine", "cvss": 9.8},
+      "source": {"reachability": "function_reachable", "confidence": "high"},
+      "context": {"exposure": "external", "environment": "prod", "privilege": "sensitive", "iam_impacts": ["iam_escalation"], "confidence": "high"},
+      "expected_tier": "urgent",
+      "min_score": 85,
+      "max_score": 100
+    },
+    {
+      "id": "unknown-context-attacker-controlled",
+      "description": "Strong source evidence without deployment context should not be treated like a public finding.",
+      "artifact": "unmapped-service",
+      "component": {"name": "http-client", "version": "2.0.0", "scope": "runtime"},
+      "vulnerability": {"id": "GHSA-http", "package_name": "http-client", "cvss": 7.5},
+      "source": {"reachability": "attacker_controlled", "confidence": "high"},
+      "context": {"exposure": "unknown", "environment": "unknown", "privilege": "unknown", "confidence": "low"},
+      "expected_tier": "medium",
+      "min_score": 40,
+      "max_score": 64
+    },
+    {
+      "id": "dev-scope-weak-known-exploited",
+      "description": "Known exploited dev dependency without source usage stays below medium.",
+      "artifact": "test-suite",
+      "component": {"name": "test-helper", "version": "1.0.0", "scope": "dev"},
+      "vulnerability": {"id": "CVE-DEV", "package_name": "test-helper", "cvss": 9.8, "known_exploited": true},
+      "source": {"reachability": "package_present", "confidence": "low"},
+      "context": {"exposure": "public", "environment": "prod", "privilege": "admin", "confidence": "medium"},
+      "expected_tier": "low",
+      "min_score": 20,
+      "max_score": 39
+    },
+    {
+      "id": "private-attacker-controlled-admin-context",
+      "description": "Private request-controlled code with admin context is high but not urgent without public/external entry.",
+      "artifact": "admin-worker",
+      "component": {"name": "archive-lib", "version": "1.0.0", "scope": "runtime"},
+      "vulnerability": {"id": "GHSA-archive", "package_name": "archive-lib", "cvss": 8.0},
+      "source": {"reachability": "attacker_controlled", "confidence": "high"},
+      "context": {"exposure": "private", "environment": "prod", "privilege": "admin", "confidence": "medium"},
+      "expected_tier": "high",
+      "min_score": 65,
+      "max_score": 84
+    },
+    {
+      "id": "public-read-only-role",
+      "description": "Read-only or limited IAM does not make a public request-controlled finding urgent by itself.",
+      "artifact": "read-api",
+      "component": {"name": "serializer", "version": "1.0.0", "scope": "runtime"},
+      "vulnerability": {"id": "GHSA-serializer", "package_name": "serializer", "cvss": 7.5},
+      "source": {"reachability": "attacker_controlled", "confidence": "high"},
+      "context": {"exposure": "public", "environment": "prod", "privilege": "limited", "iam_capabilities": [{"action": "ReadOnlyAccess", "impact": "limited_access"}], "confidence": "medium"},
+      "expected_tier": "high",
+      "min_score": 65,
+      "max_score": 84
+    },
+    {
+      "id": "no-role-function-reachable-private",
+      "description": "Private function-reachable code with no role and no exploit signal stays medium.",
+      "artifact": "isolated-job",
+      "component": {"name": "xml-lib", "version": "1.0.0", "scope": "runtime"},
+      "vulnerability": {"id": "GHSA-xml", "package_name": "xml-lib", "cvss": 8.8},
+      "source": {"reachability": "function_reachable", "confidence": "medium"},
+      "context": {"exposure": "private", "environment": "prod", "privilege": "none", "confidence": "medium"},
+      "expected_tier": "medium",
+      "min_score": 40,
+      "max_score": 64
+    }
+  ]
+}

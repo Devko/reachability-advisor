@@ -7,6 +7,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .iam_capabilities import (
+    CRITICAL_CAPABILITY_IMPACTS,
+    capability_risk_multiplier,
+    dedupe_iam_capabilities,
+)
 from .models import (
     Component,
     Confidence,
@@ -18,6 +23,7 @@ from .models import (
     Tier,
     VulnerabilityRecord,
     finding_key,
+    reachability_label,
 )
 from .source import (
     ExternalSourceEvidenceStore,
@@ -77,11 +83,13 @@ class ScorePolicy:
             "network_control": 18.0,
             "compute_control": 16.0,
             "data_access": 12.0,
+            "limited_access": 3.0,
         }
     )
 
 
 DEFAULT_POLICY = ScorePolicy()
+SCORING_MODEL_VERSION = "2026-05-11"
 
 
 def _severity_score(vulnerability: VulnerabilityRecord, policy: ScorePolicy) -> tuple[float, str]:
@@ -148,11 +156,29 @@ def _context_impact(context: ContextEvidence, policy: ScorePolicy) -> tuple[floa
     criticality_points = policy.criticality_points.get(criticality, 0.0)
     if criticality_points:
         candidates.append((criticality_points, f"criticality {criticality}"))
+    normalized_capabilities = dedupe_iam_capabilities(context.iam_capabilities)
+    capability_impacts = {_normalized(str(capability.get("impact") or ""), "") for capability in normalized_capabilities}
     for impact in context.iam_impacts:
         impact_name = _normalized(impact, "")
+        if impact_name in capability_impacts:
+            # Aggregate iam_impacts still drive concise report labels. When a
+            # concrete capability exists, score that capability once instead
+            # of double-counting the same blast-radius signal.
+            continue
         impact_points = policy.iam_impact_points.get(impact_name, 0.0)
         if impact_points:
             candidates.append((impact_points, f"IAM impact {impact_name}"))
+    for capability in normalized_capabilities:
+        impact_name = _normalized(str(capability.get("impact") or ""), "")
+        impact_points = policy.iam_impact_points.get(impact_name, 0.0)
+        if impact_points:
+            # A scoped secret read and an unbounded secret read share the same
+            # impact class, but they should not receive the same score. The
+            # capability multiplier carries that scope/condition distinction.
+            adjusted_points = impact_points * capability_risk_multiplier(capability)
+            action = str(capability.get("action") or "unknown")
+            effective_risk = str(capability.get("effective_risk") or "unknown")
+            candidates.append((adjusted_points, f"IAM capability {impact_name}:{action} ({effective_risk})"))
     if not candidates:
         return 0.0, ""
     return max(candidates, key=lambda item: item[0])
@@ -162,10 +188,12 @@ def _has_critical_context(context: ContextEvidence) -> bool:
     privilege = _normalized(context.privilege)
     criticality = _normalized(context.criticality)
     iam_impacts = {_normalized(impact, "") for impact in context.iam_impacts}
+    capability_impacts = {_normalized(str(capability.get("impact") or ""), "") for capability in dedupe_iam_capabilities(context.iam_capabilities)}
     return (
         privilege in {"admin", "sensitive"}
         or criticality == "high"
         or bool(iam_impacts & {"admin_control", "iam_escalation", "network_control", "compute_control", "data_access"})
+        or bool(capability_impacts & CRITICAL_CAPABILITY_IMPACTS)
     )
 
 
@@ -219,6 +247,38 @@ def _score_caps(vulnerability: VulnerabilityRecord, source: SourceEvidence, cont
     return caps
 
 
+def _score_dimension(name: str, value: Any, points: float, reason: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "value": str(value),
+        "points": round(points, 2),
+        "reason": reason,
+    }
+
+
+def _score_gate(name: str, status: str, reason: str, cap: float | None = None) -> dict[str, Any]:
+    gate: dict[str, Any] = {"name": name, "status": status, "reason": reason}
+    if cap is not None:
+        gate["cap"] = round(cap, 2)
+    return gate
+
+
+def _gate_name(reason: str) -> str:
+    if "dev/test dependency" in reason:
+        return "dev_test_without_usage"
+    if "weak source evidence" in reason:
+        return "weak_source_evidence"
+    if "dependency-graph source evidence" in reason:
+        return "dependency_graph_evidence"
+    if "import-only source evidence" in reason:
+        return "import_only_evidence"
+    if "private/no-ingress" in reason:
+        return "private_no_ingress"
+    if "urgent requires" in reason:
+        return "urgent_gate"
+    return "priority_cap"
+
+
 def fix_commands(component: Component, vulnerability: VulnerabilityRecord) -> list[str]:
     if not vulnerability.fixed_versions:
         return []
@@ -243,16 +303,21 @@ def score_finding(
     policy: ScorePolicy = DEFAULT_POLICY,
 ) -> Finding:
     score, severity_reason = _severity_score(vulnerability, policy)
+    dimensions = [_score_dimension("severity", vulnerability.cvss if vulnerability.cvss is not None else vulnerability.severity, score, severity_reason)]
+    gates: list[dict[str, Any]] = []
     rationale = [f"{severity_reason} contributes {score:.1f} points"]
     if vulnerability.known_exploited:
         score += 22.0
+        dimensions.append(_score_dimension("known_exploited", True, 22.0, "known exploited vulnerability"))
         rationale.append("known exploited vulnerability contributes 22.0 points")
     epss_points = _epss_points(vulnerability.epss)
     if epss_points:
         score += epss_points
+        dimensions.append(_score_dimension("epss", vulnerability.epss, epss_points, "exploit probability signal"))
         rationale.append(f"EPSS {vulnerability.epss} contributes {epss_points:.1f} points")
     reach_points = policy.reachability_points[source.reachability]
     score += reach_points
+    dimensions.append(_score_dimension("source_reachability", source.reachability.value, reach_points, reachability_label(source.reachability)))
     rationale.append(f"source reachability {source.reachability.value} contributes {reach_points:.1f} points")
     scope_adjust = policy.scope_adjustments.get(component.scope, 0.0)
     if scope_adjust:
@@ -260,6 +325,7 @@ def score_finding(
         if source.reachability == Reachability.ATTACKER_CONTROLLED:
             scope_adjust = min(0.0, scope_adjust / 3.0)
         score += scope_adjust
+        dimensions.append(_score_dimension("dependency_scope", component.scope, scope_adjust, "dependency scope adjustment"))
         rationale.append(f"dependency scope {component.scope} adjusts score by {scope_adjust:.1f} points")
     for label, table, value in (
         ("exposure", policy.exposure_points, context.exposure),
@@ -268,21 +334,30 @@ def score_finding(
         points = table.get((value or "unknown").lower(), 0.0)
         if points:
             score += points
+            dimensions.append(_score_dimension(label, value, points, f"{label} context"))
             rationale.append(f"{label} {value} contributes {points:.1f} points")
     context_points, context_reason = _context_impact(context, policy)
     if context_points:
         score += context_points
+        dimensions.append(_score_dimension("context_impact", context_reason, context_points, "strongest privilege/IAM/criticality signal"))
         rationale.append(f"highest context impact ({context_reason}) contributes {context_points:.1f} points")
     if source.reachability in {Reachability.PACKAGE_PRESENT, Reachability.UNKNOWN_DUE_TO_NO_RULE} and component.scope in {"test", "dev", "development"}:
+        uncapped_score = score
         score = min(score, 39.0)
+        gates.append(_score_gate("dev_test_without_usage", "capped" if uncapped_score > score else "passed", "dev/test dependency without source usage is capped below medium priority", 39.0))
         rationale.append("dev/test dependency without source usage is capped below medium priority")
     for cap, reason in _score_caps(vulnerability, source, context, policy):
         if score > cap:
             score = cap
+            gates.append(_score_gate(_gate_name(reason), "capped", reason, cap))
             rationale.append(f"{reason}; score capped at {cap:.1f}")
-        elif not reason.startswith("urgent requires"):
+        else:
+            gates.append(_score_gate(_gate_name(reason), "passed", reason, cap))
+            if reason.startswith("urgent requires"):
+                continue
             rationale.append(f"{reason}; score remains below cap")
     score = max(0.0, min(100.0, score))
+    tier = tier_for_score(score, policy)
     return Finding(
         key=finding_key(sbom.artifact, component, vulnerability),
         artifact=sbom.artifact,
@@ -291,10 +366,17 @@ def score_finding(
         source=source,
         context=context,
         score=score,
-        tier=tier_for_score(score, policy),
+        tier=tier,
         confidence=_confidence(source, context),
         rationale=rationale,
         fix_commands=fix_commands(component, vulnerability),
+        score_details={
+            "model_version": SCORING_MODEL_VERSION,
+            "dimensions": dimensions,
+            "gates": gates,
+            "final_score": round(score, 2),
+            "tier": tier.value,
+        },
     )
 
 

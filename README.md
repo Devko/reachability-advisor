@@ -20,6 +20,7 @@ Outputs:
 - GitHub Actions annotations;
 - PR summary Markdown;
 - self-contained interactive HTML graph report;
+- evidence graph JSON;
 - PR delta comparison;
 - single-finding explanations;
 - source-analysis coverage reports;
@@ -130,6 +131,7 @@ PYTHONPATH=src python -m reachability_advisor scan \
   --source-root batch-worker=samples/source/batch-worker \
   --source-root reports-api=samples/source/reports-api \
   --out outputs/findings.json \
+  --evidence-graph-out outputs/evidence-graph.json \
   --sarif-out outputs/findings.sarif \
   --diagnostics-out outputs/diagnostics.json \
   --markdown-out outputs/pr-summary.md \
@@ -200,7 +202,7 @@ The mapper uses three guardrails:
 | Area | Improvement |
 |---|---|
 | SBOM identity | Reads metadata component properties and external references; supports artifact aliases. |
-| Artifact matching | Uses explicit image/reference/digest/repository-tag scoring instead of permissive substring matching. |
+| Artifact matching | Uses explicit image/reference/digest/repository-tag scoring and records the selected candidate source and strength. |
 | Source reachability | Uses vulnerability-aware rules and requires same-function input/sink evidence or a bounded handler-to-sink call path for `attacker_controlled`. |
 
 Verify the logic with:
@@ -209,7 +211,7 @@ Verify the logic with:
 --mapping-out outputs/mapping.json
 ```
 
-The mapping report shows artifact candidates, source roots, Terraform match methods/scores, and warnings. See `docs/reachability_mapping.md`.
+The mapping report shows artifact candidates, candidate source/strength, source roots, Terraform match methods/scores, and warnings. See `docs/reachability_mapping.md`.
 
 ## Artifact aliases
 
@@ -356,6 +358,7 @@ Current local snapshots:
 ## GitHub Actions pipeline
 
 See [docs/pipeline.md](docs/pipeline.md) for a complete GitHub Actions example using GitHub-hosted runners. The workflow generates CycloneDX SBOMs and Grype vulnerability JSON, runs Reachability Advisor, uploads SARIF, stores mapping/source-coverage/Terraform/Kubernetes/HTML artifacts, and publishes a Markdown summary to the job page.
+See [docs/policy_playbooks.md](docs/policy_playbooks.md) for strict release, advisory PR, and backlog migration policy examples.
 
 For repositories that want to consume the published action directly:
 
@@ -415,11 +418,11 @@ The `ide/vscode` directory contains a minimal VS Code extension skeleton. It inv
 | Vulnerability input | Grype JSON, local JSON, and small OSV-Scanner-style JSON |
 | Source reachability | JVM, Node, Python, and Go rules with same-function input/sink evidence, bounded handler-to-sink paths, CycloneDX dependency-graph evidence, and package-manager manifest evidence for Maven/Gradle, npm/pnpm/Yarn, Poetry/requirements, and Go modules |
 | Custom source rules | `--reachability-rules` JSON and `export-semgrep-rules` starter YAML |
-| External source evidence | `--source-evidence-in` for Reachability Advisor JSON, Semgrep JSON, SARIF, and govulncheck JSONL |
-| Terraform context | Primary deployment context. AWS, Azure, GCP, and Kubernetes plan/source support with coverage reporting, artifact matching, network graphing, and IAM impact classification |
+| External source evidence | `--source-evidence-in` for Reachability Advisor JSON, Semgrep JSON, SARIF, and govulncheck JSONL, with selector diagnostics for artifact-only or unscoped evidence |
+| Terraform context | Primary deployment context. AWS, Azure, GCP, and Kubernetes plan/source support with coverage reporting, artifact matching, network graphing, route/private-endpoint/firewall-tag hints, IAM capability records, and IAM impact classification |
 | Kubernetes manifests | Rendered YAML/JSON workload, Service, Ingress, and RBAC context with artifact matching and coverage reporting |
 | Context JSON | Explicit override/enrichment keyed by artifact name |
-| Outputs | JSON with remediation groups and raw findings, baseline JSON, PR delta JSON/Markdown, SARIF, diagnostics JSON, Markdown, interactive HTML, annotations, Terraform coverage JSON, Kubernetes coverage JSON, source coverage JSON, mapping JSON |
+| Outputs | JSON with remediation groups and raw findings, evidence graph JSON, baseline JSON, PR delta JSON/Markdown, SARIF, diagnostics JSON, Markdown, interactive HTML, annotations, Terraform coverage JSON, Kubernetes coverage JSON, source coverage JSON, mapping JSON |
 
 ## Import/export contract
 
@@ -433,9 +436,9 @@ It verifies:
 
 - vulnerability imports: local JSON, Grype `matches[]`, and OSV-Scanner-style JSON;
 - source-evidence imports: native Reachability Advisor JSON, Reachability Advisor findings JSON, Semgrep JSON/dataflow traces, SARIF/CodeQL code flows, and govulncheck JSONL;
-- deployment/context inputs: Terraform plan JSON, Terraform source paths through `hcl-audit`, rendered Kubernetes YAML/JSON, context JSON, and artifact aliases;
+- deployment/context inputs: Terraform plan JSON, a synthetic no-cloud Terraform plan E2E fixture, Terraform source paths through `hcl-audit`, rendered Kubernetes YAML/JSON, context JSON, and artifact aliases;
 - configuration inputs: custom reachability rules and runtime policy JSON;
-- exports: findings JSON, remediation groups, baseline JSON, PR delta JSON/Markdown, SARIF, diagnostics JSON, PR summary Markdown, GitHub annotations, self-contained HTML graph, source coverage, Terraform coverage, Kubernetes coverage, mapping reports, HCL audit JSON/Markdown, SBOM plan JSON/Markdown, complex benchmark JSON/Markdown, Semgrep starter rules, fixture validation, fixture run reports, and single-finding explanations.
+- exports: findings JSON, remediation groups, evidence graph JSON, baseline JSON, PR delta JSON/Markdown, SARIF, diagnostics JSON, PR summary Markdown, GitHub annotations, self-contained HTML graph, source coverage, Terraform coverage, Kubernetes coverage, mapping reports, HCL audit JSON/Markdown, SBOM plan JSON/Markdown, scoring benchmark JSON, complex benchmark JSON/Markdown, Semgrep starter rules, fixture validation, fixture run reports, and single-finding explanations.
 
 ## Run quality gates
 
@@ -452,11 +455,11 @@ make package
 Current validation snapshot:
 
 ```text
-Ran 397 tests: OK
+Ran 413 tests: OK
 Coverage: 93%
 Coverage gate: 93% passed
 Fixture packs: 9 passed, 0 failed
-Release import/export contract: passed
+Release import/export contract: 49 checks passed
 Package build: sdist and wheel
 ```
 

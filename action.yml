@@ -1,6 +1,6 @@
 name: Reachability Advisor
 summary: Dependency vulnerability prioritization with source, Terraform, network, and IAM context
-description: Runs Reachability Advisor and emits findings, baseline, PR delta, SARIF, diagnostics, Markdown, HTML, annotations, mapping, source coverage, and deployment coverage.
+description: Runs Reachability Advisor and emits findings, evidence graph, baseline, PR delta, SARIF, diagnostics, Markdown, HTML, annotations, mapping, source coverage, and deployment coverage.
 inputs:
   sbom:
     description: One or more CycloneDX SBOM paths. Use newline-separated paths for multiple artifacts.
@@ -80,6 +80,9 @@ outputs:
   html:
     description: Interactive HTML graph report output path.
     value: ${{ steps.scan.outputs.html }}
+  evidence_graph:
+    description: Structured evidence graph JSON output path.
+    value: ${{ steps.scan.outputs.evidence_graph }}
   annotations:
     description: GitHub Actions annotations text output path.
     value: ${{ steps.scan.outputs.annotations }}
@@ -147,6 +150,7 @@ runs:
         diagnostics="$output_dir/reachability-diagnostics.json"
         markdown="$output_dir/reachability-summary.md"
         html="$output_dir/reachability-graph.html"
+        evidence_graph="$output_dir/reachability-evidence-graph.json"
         annotations="$output_dir/reachability-annotations.txt"
         mapping="$output_dir/reachability-mapping.json"
         terraform_coverage="$output_dir/terraform-coverage.json"
@@ -156,7 +160,7 @@ runs:
         delta="$output_dir/reachability-delta.json"
         delta_markdown="$output_dir/reachability-delta.md"
 
-        args=(scan --vulns "${{ inputs.vulns }}" --out "$findings" --baseline-out "$baseline_out" --sarif-out "$sarif" --diagnostics-out "$diagnostics" --markdown-out "$markdown" --html-out "$html" --annotations-out "$annotations" --mapping-out "$mapping" --source-coverage-out "$source_coverage" --no-table)
+        args=(scan --vulns "${{ inputs.vulns }}" --out "$findings" --baseline-out "$baseline_out" --sarif-out "$sarif" --diagnostics-out "$diagnostics" --markdown-out "$markdown" --html-out "$html" --evidence-graph-out "$evidence_graph" --annotations-out "$annotations" --mapping-out "$mapping" --source-coverage-out "$source_coverage" --no-table)
 
         add_repeated_args "--sbom" "${{ inputs.sbom }}"
         add_repeated_args "--source-root" "${{ inputs.source-root }}"
@@ -206,6 +210,7 @@ runs:
             echo "diagnostics=$diagnostics"
             echo "markdown=$markdown"
             echo "html=$html"
+            echo "evidence_graph=$evidence_graph"
             echo "annotations=$annotations"
             echo "mapping=$mapping"
             echo "terraform_coverage=$terraform_coverage"

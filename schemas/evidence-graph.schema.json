@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Reachability Advisor Evidence Graph",
+  "type": "object",
+  "required": ["schema_version", "metadata", "assets", "components", "vulnerabilities", "findings", "network_paths", "network_nodes", "network_edges", "iam_edges", "code_edges", "edges"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "metadata": {"type": "object"},
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "exposure", "privilege", "criticality", "max_score", "max_tier", "finding_keys"],
+        "properties": {
+          "id": {"type": "string"},
+          "name": {"type": "string"},
+          "reference": {"type": ["string", "null"]},
+          "version": {"type": ["string", "null"]},
+          "owner": {"type": ["string", "null"]},
+          "environment": {"type": "string"},
+          "exposure": {"type": "string"},
+          "privilege": {"type": "string"},
+          "criticality": {"type": "string"},
+          "iam_impacts": {"type": "array", "items": {"type": "string"}},
+          "confidence": {"enum": ["high", "medium", "low"]},
+          "max_score": {"type": "number", "minimum": 0, "maximum": 100},
+          "max_tier": {"enum": ["urgent", "high", "medium", "low", "informational"]},
+          "finding_keys": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "components": {"type": "array", "items": {"type": "object"}},
+    "vulnerabilities": {"type": "array", "items": {"type": "object"}},
+    "findings": {"type": "array", "items": {"type": "object"}},
+    "network_paths": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "asset_id", "exposure", "entry_kind", "label", "steps", "finding_keys"],
+        "properties": {
+          "id": {"type": "string"},
+          "asset_id": {"type": "string"},
+          "source": {"type": "string"},
+          "exposure": {"type": "string"},
+          "entry_kind": {"type": "string"},
+          "entry_label": {"type": "string"},
+          "entry_subtitle": {"type": "string"},
+          "label": {"type": "string"},
+          "summary": {"type": "string"},
+          "steps": {"type": "array", "items": {"type": "string"}},
+          "evidence": {"type": "string"},
+          "confidence": {"enum": ["high", "medium", "low"]},
+          "finding_keys": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "network_nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "label"],
+        "properties": {
+          "id": {"type": "string"},
+          "kind": {"type": "string"},
+          "label": {"type": "string"},
+          "source": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "network_edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "path_id", "source", "target", "kind", "sequence"],
+        "properties": {
+          "id": {"type": "string"},
+          "path_id": {"type": "string"},
+          "source": {"type": "string"},
+          "target": {"type": "string"},
+          "kind": {"type": "string"},
+          "sequence": {"type": "integer", "minimum": 0},
+          "exposure": {"type": "string"},
+          "finding_keys": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "iam_edges": {"type": "array", "items": {"type": "object"}},
+    "code_edges": {"type": "array", "items": {"type": "object"}},
+    "edges": {"type": "array", "items": {"type": "object"}}
+  }
+}

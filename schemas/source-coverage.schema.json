@@ -18,8 +18,16 @@
         "findings_with_external_evidence": {"type": "integer", "minimum": 0},
         "findings_with_dependency_graph_path": {"type": "integer", "minimum": 0},
         "findings_with_manifest_evidence": {"type": "integer", "minimum": 0},
+        "findings_with_package_specific_rule": {"type": "integer", "minimum": 0},
+        "findings_with_rule_gap": {"type": "integer", "minimum": 0},
+        "findings_with_weak_source_evidence": {"type": "integer", "minimum": 0},
+        "source_diagnostic_counts": {"type": "object"},
         "source_evidence_coverage": {"type": "number", "minimum": 0, "maximum": 1},
+        "source_rule_coverage": {"type": "number", "minimum": 0, "maximum": 1},
         "external_evidence_records": {"type": "integer", "minimum": 0},
+        "external_evidence_providers": {"type": "object"},
+        "external_evidence_usable_ratio": {"type": "number", "minimum": 0, "maximum": 1},
+        "external_evidence_selector_diagnostics": {"type": "object"},
         "states": {"type": "object"}
       }
     },
@@ -38,6 +46,7 @@
           "languages": {"type": "array", "items": {"type": "string"}},
           "findings_analyzed": {"type": "integer", "minimum": 0},
           "states": {"type": "object"},
+          "source_diagnostics": {"type": "object"},
           "skipped_files": {"type": "array"}
         }
       }

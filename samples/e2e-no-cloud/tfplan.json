@@ -1,0 +1,91 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.6.0",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "aws_security_group.public",
+          "type": "aws_security_group",
+          "name": "public",
+          "values": {
+            "id": "sg-public",
+            "name": "no-cloud-public",
+            "ingress": [
+              {"from_port": 8080, "to_port": 8080, "protocol": "tcp", "cidr_blocks": ["0.0.0.0/0"]}
+            ],
+            "tags": {"environment": "prod", "owner": "platform-security"}
+          }
+        },
+        {
+          "address": "aws_iam_role.app",
+          "type": "aws_iam_role",
+          "name": "app",
+          "values": {
+            "name": "no-cloud-app-task",
+            "arn": "arn:aws:iam::123456789012:role/no-cloud-app-task"
+          }
+        },
+        {
+          "address": "aws_iam_role_policy.app",
+          "type": "aws_iam_role_policy",
+          "name": "app",
+          "values": {
+            "role": "arn:aws:iam::123456789012:role/no-cloud-app-task",
+            "policy": {
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": "secretsmanager:GetSecretValue",
+                  "Resource": "arn:aws:secretsmanager:eu-central-1:123456789012:secret:no-cloud-db",
+                  "Condition": {"StringEquals": {"aws:ResourceTag/environment": "prod"}}
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": "ec2:AuthorizeSecurityGroupIngress",
+                  "Resource": "*"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "address": "aws_secretsmanager_secret.db",
+          "type": "aws_secretsmanager_secret",
+          "name": "db",
+          "values": {
+            "name": "no-cloud-db",
+            "arn": "arn:aws:secretsmanager:eu-central-1:123456789012:secret:no-cloud-db"
+          }
+        },
+        {
+          "address": "aws_ecs_task_definition.app",
+          "type": "aws_ecs_task_definition",
+          "name": "app",
+          "values": {
+            "family": "no-cloud-app",
+            "arn": "arn:aws:ecs:eu-central-1:123456789012:task-definition/no-cloud-app:1",
+            "task_role_arn": "arn:aws:iam::123456789012:role/no-cloud-app-task",
+            "container_definitions": "[{\"name\":\"app\",\"image\":\"registry.example.com/team/no-cloud-app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"portMappings\":[{\"containerPort\":8080}]}]"
+          }
+        },
+        {
+          "address": "aws_ecs_service.app",
+          "type": "aws_ecs_service",
+          "name": "app",
+          "values": {
+            "name": "no-cloud-app",
+            "task_definition": "arn:aws:ecs:eu-central-1:123456789012:task-definition/no-cloud-app:1",
+            "network_configuration": [
+              {
+                "security_groups": ["sg-public"],
+                "subnets": ["subnet-public"]
+              }
+            ],
+            "tags": {"environment": "prod", "owner": "platform-security"}
+          }
+        }
+      ]
+    }
+  }
+}

@@ -28,6 +28,17 @@ IMAGE_PROPERTY_KEYS = (
     "distribution",
     "external:distribution",
     "external:container-image",
+    "ci:image",
+    "ci:container:image",
+    "github:image",
+    "github:workflow:image",
+    "github:container:image",
+    "dockerfile:image",
+    "helm:image",
+    "helm:values:image",
+    "kustomize:image",
+    "terraform:module_output:image",
+    "module:image",
 )
 
 IMAGE_DIGEST_RE = re.compile(r"sha256:[a-f0-9]{32,64}", re.IGNORECASE)
@@ -80,6 +91,8 @@ class ArtifactMatch:
     confidence: str = "none"
     method: str = "none"
     artifact_candidate: str | None = None
+    candidate_source: str | None = None
+    candidate_strength: str | None = None
     target: str | None = None
     reasons: tuple[str, ...] = ()
 
@@ -90,9 +103,21 @@ class ArtifactMatch:
             "confidence": self.confidence,
             "method": self.method,
             "artifact_candidate": self.artifact_candidate,
+            "candidate_source": self.candidate_source,
+            "candidate_strength": self.candidate_strength,
             "target": self.target,
             "reasons": list(self.reasons),
         }
+
+
+@dataclass(frozen=True)
+class ArtifactIdentityCandidate:
+    value: str
+    source: str
+    strength: str
+
+    def to_json(self) -> dict[str, str]:
+        return {"value": self.value, "source": self.source, "strength": self.strength}
 
 
 def clean_image_reference(value: str | None) -> str | None:
@@ -140,24 +165,73 @@ def normalize_image_reference(value: str | None) -> NormalizedImage | None:
     return NormalizedImage(raw=raw, registry=registry, repository=repository or None, tag=tag, digest=digest)
 
 
-def artifact_candidates(artifact: Artifact) -> set[str]:
-    candidates: set[str] = {artifact.name}
+def artifact_identity_candidates(artifact: Artifact) -> tuple[ArtifactIdentityCandidate, ...]:
+    candidates: dict[str, ArtifactIdentityCandidate] = {}
+
+    def add(value: str | None, source: str, strength: str | None = None) -> None:
+        cleaned = str(value or "").strip()
+        if not cleaned:
+            return
+        candidate = ArtifactIdentityCandidate(cleaned, source, strength or _candidate_strength(cleaned))
+        current = candidates.get(cleaned)
+        if current is None or _candidate_strength_rank(candidate.strength) > _candidate_strength_rank(current.strength):
+            candidates[cleaned] = candidate
+
+    # Keep every deployable identity that could explain how the SBOM maps to
+    # infrastructure. Reports show this proof chain, so weak aliases remain
+    # visible instead of being hidden behind the final match score.
+    add(artifact.name, "artifact.name")
     if artifact.reference:
-        candidates.add(artifact.reference)
+        add(artifact.reference, "artifact.reference")
     if artifact.version:
-        candidates.add(f"{artifact.name}:{artifact.version}")
+        add(f"{artifact.name}:{artifact.version}", "artifact.version", strength="versioned_name")
     for key in IMAGE_PROPERTY_KEYS:
         value = artifact.properties.get(key)
         if value:
-            candidates.add(value)
+            for item in _split_candidate_values(value):
+                add(item, f"artifact.properties.{key}")
     for key, value in artifact.properties.items():
         key_l = key.lower()
-        if any(token in key_l for token in ("image", "artifact", "distribution", "container")) and value:
-            candidates.add(value)
+        if any(token in key_l for token in ("image", "artifact", "distribution", "container", "helm", "kustomize", "module_output")) and value:
+            for item in _split_candidate_values(value):
+                add(item, f"artifact.properties.{key}")
     aliases = artifact.properties.get("reachability:aliases") or artifact.properties.get("aliases")
     if aliases:
-        candidates.update(item.strip() for item in aliases.split(",") if item.strip())
-    return {candidate for candidate in candidates if candidate}
+        for item in aliases.split(","):
+            add(item.strip(), "artifact.alias")
+    return tuple(sorted(candidates.values(), key=lambda item: (-_candidate_strength_rank(item.strength), item.source, item.value)))
+
+
+def artifact_candidates(artifact: Artifact) -> set[str]:
+    return {candidate.value for candidate in artifact_identity_candidates(artifact)}
+
+
+def artifact_identity_proof(artifact: Artifact) -> dict[str, object]:
+    candidates = artifact_identity_candidates(artifact)
+    strongest = candidates[0].strength if candidates else "none"
+    warnings: list[str] = []
+    if not candidates:
+        warnings.append("artifact has no identity candidates")
+    elif _candidate_strength_rank(strongest) < _candidate_strength_rank("image_reference"):
+        warnings.append("artifact has no strong image reference or digest; deployment matching may rely on weak name evidence")
+    return {
+        "artifact": artifact.name,
+        "strongest_strength": strongest,
+        "candidate_count": len(candidates),
+        "candidates": [candidate.to_json() for candidate in candidates],
+        "warnings": warnings,
+    }
+
+
+def _split_candidate_values(value: str) -> set[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return set()
+    values = {raw}
+    for separator in (",", "\n", "\r"):
+        if separator in raw:
+            values.update(item.strip() for item in raw.split(separator) if item.strip())
+    return values
 
 
 def artifact_match_evidence(artifact: Artifact, target: str | None, *, allow_name_only: bool = True) -> ArtifactMatch:
@@ -168,7 +242,8 @@ def artifact_match_evidence(artifact: Artifact, target: str | None, *, allow_nam
     target_l = cleaned_target.lower()
     best = ArtifactMatch(matched=False, score=0, target=cleaned_target, reasons=("no candidate matched",))
 
-    for candidate in artifact_candidates(artifact):
+    for identity_candidate in artifact_identity_candidates(artifact):
+        candidate = identity_candidate.value
         candidate_l = candidate.lower()
         candidate_image = normalize_image_reference(candidate)
         score = 0
@@ -206,6 +281,9 @@ def artifact_match_evidence(artifact: Artifact, target: str | None, *, allow_nam
             method = "artifact-name"
             reasons.append("artifact name matched target token")
 
+        # Exact deployment references should win over weak name evidence, but
+        # the candidate source/strength is still carried into coverage reports
+        # so reviewers can judge whether the match is release-gate quality.
         if score > best.score:
             confidence = "high" if score >= 90 else "medium" if score >= 60 else "low"
             best = ArtifactMatch(
@@ -214,6 +292,8 @@ def artifact_match_evidence(artifact: Artifact, target: str | None, *, allow_nam
                 confidence=confidence,
                 method=method,
                 artifact_candidate=candidate,
+                candidate_source=identity_candidate.source,
+                candidate_strength=identity_candidate.strength,
                 target=cleaned_target,
                 reasons=tuple(reasons),
             )
@@ -258,10 +338,41 @@ def _tokenize(value: str) -> tuple[str, ...]:
     return tuple(token for token in TOKEN_RE.split(cleaned) if token)
 
 
+def _candidate_strength(value: str) -> str:
+    if "${" in value:
+        return "unresolved"
+    image = normalize_image_reference(value)
+    if image and image.digest:
+        return "digest"
+    if image and image.repository and (image.registry or image.tag):
+        return "image_reference"
+    if image and image.repository and "/" in image.repository:
+        return "repository"
+    if ":" in value or "/" in value:
+        return "reference"
+    return "name"
+
+
+def _candidate_strength_rank(value: str) -> int:
+    return {
+        "none": 0,
+        "name": 1,
+        "versioned_name": 2,
+        "unresolved": 2,
+        "reference": 3,
+        "repository": 4,
+        "image_reference": 5,
+        "digest": 6,
+    }.get(value, 0)
+
+
 __all__ = [
     "ArtifactMatch",
+    "ArtifactIdentityCandidate",
     "NormalizedImage",
     "artifact_candidates",
+    "artifact_identity_candidates",
+    "artifact_identity_proof",
     "artifact_match_evidence",
     "best_artifact_match",
     "clean_image_reference",

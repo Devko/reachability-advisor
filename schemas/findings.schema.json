@@ -5,6 +5,7 @@
   "required": ["metadata", "findings"],
   "properties": {
     "metadata": {"type": "object"},
+    "evidence_graph": {"type": "object"},
     "remediations": {
       "type": "array",
       "items": {
@@ -61,10 +62,21 @@
               "matched_symbols": {"type": "array", "items": {"type": "string"}},
               "dependency_path": {"type": "array", "items": {"type": "string"}},
               "evidence_source": {"type": "string"},
+              "diagnostics": {"type": "array", "items": {"type": "object"}},
               "locations": {"type": "array"}
             }
           },
           "context": {"type": "object"},
+          "scoring": {
+            "type": "object",
+            "properties": {
+              "model_version": {"type": "string"},
+              "dimensions": {"type": "array", "items": {"type": "object"}},
+              "gates": {"type": "array", "items": {"type": "object"}},
+              "final_score": {"type": "number", "minimum": 0, "maximum": 100},
+              "tier": {"enum": ["urgent", "high", "medium", "low", "informational"]}
+            }
+          },
           "rationale": {"type": "array", "items": {"type": "string"}}
         }
       }

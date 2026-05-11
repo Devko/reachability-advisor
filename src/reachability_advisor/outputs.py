@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .evidence_graph import build_evidence_graph
 from .models import Finding, SourceLocation, Tier, reachability_label
 from .remediation import build_remediation_groups
 
@@ -34,6 +35,7 @@ def write_json_findings(findings: list[Finding], path: str | Path, metadata: dic
             {
                 "metadata": _metadata(metadata_with_rollup),
                 "remediations": remediations,
+                "evidence_graph": build_evidence_graph(findings, metadata=metadata_with_rollup),
                 "findings": [finding.to_json() for finding in findings],
             },
             indent=2,

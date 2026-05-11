@@ -27,6 +27,8 @@ from reachability_advisor.terraform import (
     privilege_for_resource,
     provider_for_type,
 )
+from reachability_advisor.terraform_iam import iam_grant_for_resource
+from reachability_advisor.terraform_network_adapters import network_adapter_signals
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -268,6 +270,35 @@ class TerraformPrivilegeTests(unittest.TestCase):
         self.assertEqual(classify_role_text("Owner"), "admin")
         self.assertEqual(classify_role_text("roles/secretmanager.secretAccessor"), "sensitive")
         self.assertEqual(classify_role_text("roles/viewer"), "limited")
+        self.assertEqual(classify_role_text("arn:aws:iam::aws:policy/IAMFullAccess"), "sensitive")
+        self.assertEqual(classify_role_text("Network Contributor"), "sensitive")
+
+    def test_policy_capabilities_preserve_resource_scope_and_conditions(self) -> None:
+        r = self._tf_resource(
+            "aws_iam_role_policy",
+            {
+                "policy": {
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": "secretsmanager:GetSecretValue",
+                            "Resource": "arn:aws:secretsmanager:eu:123:secret:db",
+                            "Condition": {"StringEquals": {"aws:ResourceTag/env": "prod"}},
+                        },
+                        {"Effect": "Allow", "Action": "ec2:AuthorizeSecurityGroupIngress", "Resource": "*"},
+                    ]
+                }
+            },
+        )
+        grant = iam_grant_for_resource(r)
+        secret = next(capability for capability in grant.capabilities if capability.impact == "data_access")
+        network = next(capability for capability in grant.capabilities if capability.impact == "network_control")
+        self.assertEqual(secret.resource_scope, "scoped")
+        self.assertIn("aws:ResourceTag/env", secret.condition_keys)
+        self.assertEqual(network.resource_scope, "wildcard")
+        self.assertEqual(network.provider, "aws")
+        self.assertEqual(secret.to_json()["effective_risk"], "constrained_critical")
+        self.assertLess(secret.to_json()["risk_multiplier"], 1.0)
 
     def test_aws_role_policy_privilege(self) -> None:
         r = self._tf_resource("aws_iam_role_policy", {"policy": json.dumps({"Statement": {"Effect": "Allow", "Action": "*"}})})
@@ -382,6 +413,27 @@ class TerraformAnalysisTests(unittest.TestCase):
         self.assertEqual(report["summary"]["unsupported_or_unclassified_resources"], 0)
         self.assertEqual({row["category"] for row in report["resources"]}, {"supporting"})
         self.assertEqual({gap["gap_type"] for gap in report["visibility_gaps"]}, {"opaque_manifest_wrapper"})
+
+    def test_coverage_reports_provider_network_adapter_signals(self) -> None:
+        resources = extract_resources(
+            plan(
+                [
+                    resource("aws_route.private", "aws_route", {"route_table_id": "rtb-private", "transit_gateway_id": "tgw-1"}),
+                    resource("google_compute_firewall.web", "google_compute_firewall", {"source_ranges": ["0.0.0.0/0"], "target_tags": ["web"]}),
+                ]
+            )
+        )
+        report = coverage_report(resources, [], [])
+        rows = {row["address"]: row for row in report["resources"]}
+        self.assertEqual(rows["aws_route.private"]["network_adapter_signals"][0]["kind"], "private_route_bridge")
+        self.assertEqual(rows["google_compute_firewall.web"]["network_adapter_signals"][0]["kind"], "firewall_target")
+
+    def test_provider_network_adapter_exposes_azure_deny_and_gcp_priority(self) -> None:
+        azure = network_adapter_signals("azurerm_network_security_rule", {"access": "Deny", "direction": "Inbound", "source_address_prefix": "*"})
+        gcp = network_adapter_signals("google_compute_firewall", {"source_ranges": ["0.0.0.0/0"], "target_tags": ["web"], "priority": 1000})
+        self.assertEqual(azure[0].kind, "deny_inbound")
+        self.assertEqual(gcp[0].exposure, "public")
+        self.assertIn("priority=1000", gcp[0].reason)
 
 
 if __name__ == "__main__":
@@ -610,6 +662,7 @@ class TerraformBranchCoverageTests(unittest.TestCase):
         self.assertEqual(context.privilege, "sensitive")
         self.assertEqual(context.criticality, "high")
         self.assertIn("data_access", context.iam_impacts)
+        self.assertTrue(any(capability["impact"] == "data_access" and capability["access"] == "sensitive_data" for capability in context.iam_capabilities))
         self.assertTrue(any("targets aws_secretsmanager_secret.db" in item for item in context.evidence))
 
     def test_attached_customer_policy_inherits_per_resource_secret_access(self) -> None:
@@ -668,8 +721,29 @@ class TerraformBranchCoverageTests(unittest.TestCase):
         self.assertEqual(analysis.contexts["bastion"].privilege, "sensitive")
         self.assertEqual(analysis.contexts["bastion"].criticality, "high")
         self.assertIn("network_control", analysis.contexts["bastion"].iam_impacts)
+        self.assertTrue(any(capability["impact"] == "network_control" for capability in analysis.contexts["bastion"].iam_capabilities))
         self.assertEqual(analysis.contexts["app"].exposure, "internal")
         self.assertTrue(any("IAM impact network_control can alter provider network reachability" in item for item in analysis.contexts["app"].evidence))
+
+    def test_private_subnet_route_bridge_creates_internal_context(self) -> None:
+        data = plan([
+            resource("aws_route_table.private", "aws_route_table", {"id": "rtb-private"}),
+            resource("aws_route.private_to_tgw", "aws_route", {"route_table_id": "rtb-private", "destination_cidr_block": "10.20.0.0/16", "transit_gateway_id": "tgw-123"}),
+            resource("aws_route_table_association.private", "aws_route_table_association", {"route_table_id": "rtb-private", "subnet_id": "subnet-private"}),
+            resource("aws_instance.app", "aws_instance", {"ami": "ami-2", "subnet_id": "subnet-private", "private_ip": "10.0.1.20"}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "internal")
+        self.assertTrue(any("private route table bridge" in item for item in analysis.contexts["app"].evidence))
+
+    def test_gcp_firewall_target_tag_links_to_tagged_workload(self) -> None:
+        data = plan([
+            resource("google_compute_firewall.internal", "google_compute_firewall", {"source_ranges": ["10.0.0.0/8"], "target_tags": ["api"]}),
+            resource("google_compute_instance.app", "google_compute_instance", {"name": "app", "tags": ["api"]}),
+        ])
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        self.assertEqual(analysis.contexts["app"].exposure, "internal")
+        self.assertTrue(any("firewall target api" in item for item in analysis.contexts["app"].evidence))
 
     def test_azure_application_gateway_reaches_vm_through_backend_pool_and_nic(self) -> None:
         data = plan([

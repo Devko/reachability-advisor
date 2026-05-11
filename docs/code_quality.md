@@ -2,7 +2,7 @@
 
 ## Current gates
 
-- Unit and workflow tests: 397.
+- Unit and workflow tests: 413.
 - Coverage threshold: 93%.
 - Current measured coverage: passes the 93% line/branch-aware coverage gate.
 - Test runner: `scripts/run_tests.py`.
@@ -11,7 +11,7 @@
 - Static type configuration: strict `mypy` across `src`.
 - Sample workflow: `make sample`.
 - Terraform fixture workflow: `make fixtures`.
-- Release validation: `make release-check`.
+- Release validation: `make release-check` currently covers 49 import/export and release-contract checks.
 - Complex real-world app validation: `make external-complex` (AWS Retail Store and Google Online Boutique).
 - Package build: `make package` (`python -m build --no-isolation`).
 - CI matrix: Python 3.10, 3.11, 3.12.
@@ -69,6 +69,7 @@ python -m build --no-isolation
 - Multi-cloud Terraform coverage is manifest-driven and auditable.
 - SBOM/source/Terraform mapping is exposed through `--mapping-out`.
 - Source analysis coverage is exposed through `--source-coverage-out`.
+- The HTML graph is backed by `--evidence-graph-out`, a structured graph of assets, network paths, IAM capability edges, code evidence, components, vulnerabilities, and findings.
 - Unsupported Terraform resources are reported as visibility gaps instead of being silently ignored.
 
 ## Logic quality bar
@@ -77,7 +78,7 @@ The logic layer has tests for:
 
 - CycloneDX metadata component properties and external references.
 - Explicit artifact aliases from `--artifact-alias`.
-- OCI-ish image reference normalization, digest matching, repository/tag matching, and conservative rejection of substring false positives.
+- Artifact identity proof chains, OCI-ish image reference normalization, digest matching, repository/tag matching, and conservative rejection of substring false positives.
 - SBOM-to-source-root mapping reports.
 - Vulnerability-specific source reachability rules.
 - Custom reachability rule loading.
@@ -85,10 +86,13 @@ The logic layer has tests for:
 - CycloneDX dependency-graph evidence for imported parent dependencies.
 - Package-manager manifest evidence for Gradle, Maven POMs, pnpm, Yarn, npm locks, Poetry, Python requirements, and Go modules.
 - External source evidence import from native JSON, Semgrep JSON including `dataflow_trace`, CodeQL/SARIF `codeFlows`, plain SARIF, and govulncheck-style JSONL.
+- External evidence selector diagnostics for artifact-only or unscoped records.
+- Source coverage metrics for package-specific rule coverage, rule gaps, weak-source evidence, and usable external evidence ratio.
 - Semgrep starter rule export from built-in and custom reachability rules.
 - Weaker rationale when input/entrypoint evidence appears in a different file.
 - Java/Spring, Node/Express/NestJS, Python/FastAPI/Chainlit/aiohttp, common SSRF/template/JWT/XML/deserialization/archive package families, and Go source evidence.
 - CLI generation of mapping, source coverage, Terraform coverage, SARIF, diagnostics, Markdown, HTML, and annotations.
+- Account-free Terraform plan E2E coverage with source reachability, artifact identity proof, network context, IAM capability extraction, evidence graph, and HTML output.
 - Stable baseline artifact generation and PR delta comparison for only new or worsened findings.
 - Visual graph generation for public, internal, lateral, private, and Kubernetes public-ingress-to-internal-hop paths.
 - Visual graph regression coverage for connected entry/path/asset/vulnerability edges and dense multi-asset layouts.
@@ -107,8 +111,8 @@ The Terraform layer has tests for:
 - Plan parsing from `planned_values` and `resource_changes`.
 - Container image extraction across ECS/Lambda/App Runner, Azure Container Apps/App Service, GCP Cloud Run, and Kubernetes resources.
 - Public, restricted external, internal lateral, private-only, and unknown exposure detection across AWS, Azure, GCP, and Kubernetes resources.
-- Bounded graph pathfinding for AWS ECS security groups/target groups, AWS target attachments, AWS Lambda URLs, Azure application gateway/load-balancer backend paths, GCP forwarding-rule/backend-service/NEG paths, GCP Cloud Run/Cloud Functions public invokers, Azure Container Apps ingress, Kubernetes Service/Ingress names or selectors, security-group hops, and lateral bridge resources such as peering, VPN, transit, ExpressRoute, and Interconnect.
-- IAM blast-radius classification, per-workload identity linkage, IAM impact classes, targeted sensitive-resource evidence, and network-aware criticality across AWS IAM, Azure role assignments and Key Vault policies, GCP IAM, and Kubernetes role bindings.
+- Bounded graph pathfinding for AWS ECS security groups/target groups, AWS target attachments, AWS Lambda URLs, Azure application gateway/load-balancer backend paths, GCP forwarding-rule/backend-service/NEG paths, GCP Cloud Run/Cloud Functions public invokers, Azure Container Apps ingress, Kubernetes Service/Ingress names or selectors, security-group hops, route table associations, firewall target tags, firewall priorities, private endpoints, NSG allow/deny rules, and lateral bridge resources such as peering, VPN, transit, ExpressRoute, and Interconnect.
+- IAM blast-radius classification, provider role catalogs, per-workload identity linkage, per-resource IAM capability records with resource scope, condition keys, effective risk, risk multiplier, targeted sensitive-resource evidence, and network-aware criticality across AWS IAM, Azure role assignments and Key Vault policies, GCP IAM, and Kubernetes role bindings.
 - CLI generation of `--terraform-coverage-out`.
 
 ## Fixture-pack quality bar

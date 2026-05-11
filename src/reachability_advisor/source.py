@@ -121,6 +121,13 @@ class CallPath:
     functions: tuple[str, ...] = ()
 
 
+def source_diagnostic(code: str, severity: str, message: str, **detail: Any) -> dict[str, Any]:
+    diagnostic: dict[str, Any] = {"code": code, "severity": severity, "message": message}
+    if detail:
+        diagnostic["detail"] = {key: value for key, value in detail.items() if value not in (None, [], {})}
+    return diagnostic
+
+
 BUILTIN_RULES: tuple[ReachabilityRule, ...] = (
     ReachabilityRule(
         ecosystem="maven",
@@ -953,6 +960,13 @@ def _dependency_reachable_evidence(
                 language=language,
                 reason=f"component is reached through SBOM dependency graph path {' -> '.join(path)}; parent dependency {parent.display_name} is imported in source",
                 dependency_path=path,
+                diagnostics=[
+                    source_diagnostic(
+                        "dependency_graph_indirect",
+                        "info",
+                        "Dependency graph evidence links this component through an imported parent dependency; it does not prove vulnerable API execution.",
+                    )
+                ],
             )
     return SourceEvidence(
         reachability=Reachability.PACKAGE_PRESENT,
@@ -960,6 +974,13 @@ def _dependency_reachable_evidence(
         language=language,
         reason=f"component appears in SBOM dependency graph path {' -> '.join(path)}, but no imported parent dependency was observed",
         dependency_path=path,
+        diagnostics=[
+            source_diagnostic(
+                "dependency_graph_unconfirmed",
+                "info",
+                "The SBOM dependency graph contains this component, but no imported parent dependency was observed in source.",
+            )
+        ],
     )
 
 
@@ -1006,6 +1027,13 @@ def analyze_component_source(
             confidence=Confidence.LOW,
             language="unknown",
             reason="component appears in SBOM; no source root supplied",
+            diagnostics=[
+                source_diagnostic(
+                    "missing_source_root",
+                    "warning",
+                    "No source root was supplied for this artifact; built-in source reachability falls back to SBOM presence.",
+                )
+            ],
         )
     if not index.files:
         manifest_evidence = manifest_dependency_evidence(component, index.manifest_files)
@@ -1016,6 +1044,15 @@ def analyze_component_source(
             confidence=Confidence.LOW,
             language="unknown",
             reason="component appears in SBOM; no supported source files or matching package-manager manifest entries found",
+            diagnostics=[
+                source_diagnostic(
+                    "no_supported_source_files",
+                    "warning",
+                    "No supported source files or matching package-manager manifest entries were found in the supplied source root.",
+                    skipped_files=len(index.skipped_files),
+                    manifest_files=len(index.manifest_files),
+                )
+            ],
         )
 
     rules = _rules_for(component, vulnerability, custom_rules)
@@ -1046,6 +1083,15 @@ def analyze_component_source(
             confidence=Confidence.LOW,
             language=language,
             reason="component appears in SBOM; no package-specific source rule exists and generic import usage was not observed",
+            diagnostics=[
+                source_diagnostic(
+                    "missing_package_rule",
+                    "warning",
+                    "No package-specific source rule matched this component and generic import evidence was not observed.",
+                    package=component.display_name,
+                    ecosystem=ecosystem_from_component(component.purl, component.name),
+                )
+            ],
         )
 
     if not signals:
@@ -1061,6 +1107,15 @@ def analyze_component_source(
             confidence=Confidence.LOW,
             language=language,
             reason="component appears in SBOM, but source usage was not observed",
+            diagnostics=[
+                source_diagnostic(
+                    "source_usage_not_observed",
+                    "info",
+                    "A source rule exists, but no import, vulnerable-function, or input evidence matched the scanned source root.",
+                    package=component.display_name,
+                    rule=_rule_text(rules, vulnerability),
+                )
+            ],
         )
 
     has_import_any = any(signal.has_import for signal in signals)
@@ -1105,6 +1160,15 @@ def analyze_component_source(
         reason = f"{rule_text}; same source file contains import and vulnerable-function usage hints"
         if has_attacker_any:
             reason += "; attacker entrypoint was observed elsewhere but no same-function or bounded call-path link was inferred"
+        diagnostics = []
+        if has_attacker_any:
+            diagnostics.append(
+                source_diagnostic(
+                    "unlinked_attacker_input",
+                    "info",
+                    "Attacker/input evidence was observed, but it was not linked to the vulnerable function by same-function or bounded call-path analysis.",
+                )
+            )
         return SourceEvidence(
             reachability=Reachability.FUNCTION_REACHABLE,
             confidence=Confidence.MEDIUM,
@@ -1112,6 +1176,7 @@ def analyze_component_source(
             reason=reason,
             locations=locations,
             matched_symbols=symbols,
+            diagnostics=diagnostics,
         )
     if has_import_any and has_function_any:
         return SourceEvidence(
@@ -1121,6 +1186,13 @@ def analyze_component_source(
             reason=f"{rule_text}; import and vulnerable-function hints were observed in the source root but not the same file",
             locations=locations,
             matched_symbols=symbols,
+            diagnostics=[
+                source_diagnostic(
+                    "cross_file_unlinked_function",
+                    "info",
+                    "Import and vulnerable-function hints were observed, but not in the same file and no bounded call path was inferred.",
+                )
+            ],
         )
     if imported_only:
         return SourceEvidence(
@@ -1142,6 +1214,14 @@ def analyze_component_source(
         confidence=Confidence.LOW,
         language=language,
         reason="component appears in SBOM, but package import was not observed",
+        diagnostics=[
+            source_diagnostic(
+                "import_not_observed",
+                "info",
+                "The component appears in the SBOM, but package import evidence was not observed in the scanned source root.",
+                package=component.display_name,
+            )
+        ],
     )
 
 
@@ -1184,7 +1264,12 @@ def source_coverage_report(
         "findings_with_external_evidence": 0,
         "findings_with_dependency_graph_path": 0,
         "findings_with_manifest_evidence": 0,
+        "findings_with_package_specific_rule": 0,
+        "findings_with_rule_gap": 0,
+        "findings_with_weak_source_evidence": 0,
+        "source_diagnostic_counts": {},
     }
+    external_selector_diagnostics = external_evidence.selector_diagnostics() if external_evidence else {"records": 0, "matchable_records": 0, "artifact_only_records": 0, "unscoped_records": 0}
     state_counts: dict[str, int] = {}
     for sbom in sboms:
         index = indexes.get(sbom.artifact.name, SourceIndex(root=source_roots.get(sbom.artifact.name)))
@@ -1195,16 +1280,27 @@ def source_coverage_report(
         totals["manifest_files_scanned"] += len(index.manifest_files)
         totals["files_skipped"] += len(index.skipped_files)
         artifact_states: dict[str, int] = {}
+        artifact_diagnostics: dict[str, int] = {}
         for finding in artifact_findings:
             state = finding.source.reachability.value
             artifact_states[state] = artifact_states.get(state, 0) + 1
             state_counts[state] = state_counts.get(state, 0) + 1
+            for diagnostic in finding.source.diagnostics:
+                code = str(diagnostic.get("code") or "unknown")
+                artifact_diagnostics[code] = artifact_diagnostics.get(code, 0) + 1
+                totals["source_diagnostic_counts"][code] = totals["source_diagnostic_counts"].get(code, 0) + 1
             if finding.source.evidence_source != "builtin":
                 totals["findings_with_external_evidence"] += 1
             if finding.source.dependency_path:
                 totals["findings_with_dependency_graph_path"] += 1
             if any(str(symbol).startswith("manifest:") for symbol in finding.source.matched_symbols):
                 totals["findings_with_manifest_evidence"] += 1
+            if state == Reachability.UNKNOWN_DUE_TO_NO_RULE.value:
+                totals["findings_with_rule_gap"] += 1
+            elif "package-specific" in str(finding.source.reason).lower() or "vulnerability-specific" in str(finding.source.reason).lower():
+                totals["findings_with_package_specific_rule"] += 1
+            if state in {Reachability.UNKNOWN_DUE_TO_NO_RULE.value, Reachability.PACKAGE_PRESENT.value, Reachability.DEPENDENCY_REACHABLE.value}:
+                totals["findings_with_weak_source_evidence"] += 1
         artifacts.append(
             {
                 "artifact": sbom.artifact.name,
@@ -1216,6 +1312,7 @@ def source_coverage_report(
                 "languages": index.languages,
                 "findings_analyzed": len(artifact_findings),
                 "states": artifact_states,
+                "source_diagnostics": artifact_diagnostics,
                 "skipped_files": index.skipped_files[:20],
             }
         )
@@ -1228,7 +1325,13 @@ def source_coverage_report(
     }
     strong = sum(count for state, count in state_counts.items() if state in strong_states)
     totals["source_evidence_coverage"] = round(strong / len(findings), 4) if findings else 1.0
+    totals["source_rule_coverage"] = round((len(findings) - totals["findings_with_rule_gap"]) / len(findings), 4) if findings else 1.0
+    matchable_external = external_selector_diagnostics.get("matchable_records", 0)
+    external_records = external_selector_diagnostics.get("records", 0)
+    totals["external_evidence_usable_ratio"] = round(matchable_external / external_records, 4) if external_records else 1.0
     totals["external_evidence_records"] = len(external_evidence.records) if external_evidence else 0
+    totals["external_evidence_providers"] = external_evidence.provider_counts() if external_evidence else {}
+    totals["external_evidence_selector_diagnostics"] = external_selector_diagnostics
     return {
         "schema_version": "1.0",
         "summary": totals,

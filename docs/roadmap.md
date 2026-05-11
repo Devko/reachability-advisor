@@ -6,9 +6,10 @@
 - CycloneDX JSON ingestion.
 - Grype, local vulnerability intelligence, and OSV-style parsers.
 - Java, Node, Python, and Go source heuristics with same-function and bounded handler-to-sink evidence.
-- CycloneDX dependency-graph source evidence and external evidence import for Semgrep, SARIF, and govulncheck-style output.
+- CycloneDX dependency-graph source evidence and external evidence import for Semgrep traces, CodeQL/SARIF data-flow paths, and govulncheck-style output.
 - Terraform plan context, context JSON enrichment, and conservative HCL static fallback.
-- JSON, SARIF, diagnostics, Markdown, HTML graph, and annotation outputs.
+- Artifact identity proof chains with candidate source and strength.
+- JSON, evidence graph JSON, SARIF, diagnostics, Markdown, HTML graph, and annotation outputs.
 - Mapping reports, source coverage reports, Terraform coverage reports, HCL audit reports, SBOM planning, and remediation groups.
 - PR delta workflow.
 - Release validation against repository JSON schemas.
@@ -32,16 +33,21 @@ Priority 2: Source reachability coverage
 
 - Keep package-manager manifest coverage current for Gradle, Maven POMs, pnpm, Yarn, npm locks, Poetry, Python requirements, and Go modules.
 - Add richer source diagnostics for package-manager roots, imported vulnerable packages, vulnerable call sites, and handler-to-sink paths.
+- Done: source coverage reports rule coverage, rule gaps, weak-source findings, and usable external evidence ratio.
 - Done: native adapters import Semgrep `dataflow_trace` taint paths and CodeQL SARIF `codeFlows` when package, purl, or vulnerability selectors are available.
+- Done: external source evidence reports artifact-only and unscoped selector records instead of silently ignoring them.
 - Add native adapters for more language-specific analyzer output when selectors are available.
-- Track unknown source states as rule gaps, package-manager gaps, or missing source roots instead of one generic unknown bucket.
+- Done: unknown source states are split into diagnostics for rule gaps, package-manager gaps, missing source roots, unsupported source roots, and unobserved imports.
 
 Priority 3: Terraform and IaC coverage
 
 - Done: rendered Kubernetes YAML/JSON manifests are first-class `scan` inputs with workload, service, ingress, RBAC, context, and coverage output.
 - Done: fixture packs now cover AWS Lambda function URLs, Azure App Service, GKE plus Kubernetes workloads, Helm-heavy Kubernetes deployments, and private service meshes.
 - Expand rendered Helm/Kustomize validation cases beyond the current Kubernetes manifest parser.
-- Expand lateral movement evidence for route tables, peering, VPN, transit gateways, private endpoints, service endpoints, and Kubernetes network policies.
+- Done: route-table associations, private endpoints, VPC access connectors, and firewall target tags can contribute explicit internal path evidence.
+- Done: provider network adapter signals are emitted in Terraform coverage for route, private endpoint, VPC connector, firewall target, firewall priority, and NSG allow/deny evidence.
+- Done: IAM capability records include effective risk and risk multipliers so scoped or conditional critical permissions are not scored the same as broad unconditioned permissions.
+- Expand lateral movement evidence for service endpoints, Kubernetes network policies, and deeper firewall priority semantics.
 - Keep unsupported IaC resources visible in coverage reports.
 
 Priority 4: Policy and baseline workflow
@@ -50,14 +56,15 @@ Priority 4: Policy and baseline workflow
 - Validate the example policy during release checks.
 - Done: stable default-branch baseline artifacts are generated with `scan --baseline-out`.
 - Done: `compare --baseline` emits PR deltas with only new and worsened findings.
-- Add policy examples for strict release gates, advisory PR mode, exception expiration, and backlog migration.
+- Done: policy examples cover strict release gates, advisory PR mode, exception expiration, and backlog migration.
 
 Priority 5: Validation corpus
 
 - Keep AWS Retail Store and Google Online Boutique as scale tests.
-- Add compact fixtures for each important exposure class: public, restricted external, lateral, internal-only, IAM admin, critical limited role, read-only role, no role, code reachable, and code not observed.
+- Done: the scoring benchmark now covers public, external, internal, private, unknown context, admin, critical limited role, read-only role, no role, code reachable, dependency evidence, weak source evidence, and code not observed.
 - Done: add golden sample-output regressions for finding counts, tier spread, top remediation order, coverage summaries, and graph connectivity.
 - Done: complex validation now emits schema-validated `benchmark.json` and `benchmark.md` for release-to-release metric drift tracking.
+- Done: release validation includes a synthetic no-cloud Terraform plan E2E fixture for scanner path, artifact proof, source reachability, network context, IAM capability extraction, evidence graph, and HTML output.
 - Publish expected outputs for fixtures so downstream contributors can verify behavior without reading implementation details.
 - Done: visual graph regression tests cover connected network-path rendering and dense multi-asset layouts.
 

@@ -17,6 +17,7 @@ from .baseline import (
 )
 from .compare import compare_findings, delta_fails, pr_delta, write_delta, write_delta_markdown
 from .context import ContextError, load_context_file
+from .evidence_graph import build_evidence_graph
 from .fixtures import (
     FixtureError,
     discover_fixture_packs,
@@ -88,6 +89,7 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--kubernetes-coverage-out", help="Write Kubernetes manifest coverage/context report JSON.")
     scan.add_argument("--mapping-out", help="Write SBOM/source/Terraform mapping verification report JSON.")
     scan.add_argument("--source-coverage-out", help="Write source-analysis coverage and evidence report JSON.")
+    scan.add_argument("--evidence-graph-out", help="Write structured asset/source/network/IAM/finding graph JSON.")
     scan.add_argument("--artifact-alias", action="append", default=[], help="Add artifact mapping alias: artifact=reference. Repeatable; use when SBOM metadata lacks image refs.")
     scan.add_argument("--reachability-rules", help="Custom source reachability rules JSON.")
     scan.add_argument("--source-evidence-in", action="append", default=[], help="External source evidence JSON, Semgrep JSON, SARIF, or govulncheck JSONL. Repeatable.")
@@ -339,8 +341,9 @@ def run_scan(args: argparse.Namespace) -> int:
         write_diagnostics(findings, args.diagnostics_out)
     if args.markdown_out:
         write_markdown_report(findings, args.markdown_out)
+    evidence_graph = build_evidence_graph(findings, metadata=metadata) if args.html_out or args.evidence_graph_out else None
     if args.html_out:
-        write_html_report(findings, args.html_out, metadata=metadata)
+        write_html_report(findings, args.html_out, metadata=metadata, evidence_graph=evidence_graph)
     if args.annotations_out:
         write_annotations(findings, args.annotations_out)
     if args.terraform_coverage_out:
@@ -355,6 +358,10 @@ def run_scan(args: argparse.Namespace) -> int:
         out = Path(args.source_coverage_out)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(source_coverage, indent=2), encoding="utf-8")
+    if args.evidence_graph_out:
+        out = Path(args.evidence_graph_out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(evidence_graph, indent=2), encoding="utf-8")
     if args.mapping_out:
         out = Path(args.mapping_out)
         out.parent.mkdir(parents=True, exist_ok=True)

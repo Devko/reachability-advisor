@@ -22,9 +22,10 @@ The SBOM loader extracts artifact identity from:
 1. `metadata.component.name` and `metadata.component.version`;
 2. `metadata.component.purl` or BOM reference when available;
 3. `metadata.component.properties` such as `container:image`, `oci:image:ref`, `artifact:reference`, and `reachability:artifact_ref`;
-4. `metadata.component.externalReferences`, especially `distribution`, `container-image`, `vcs`, and source references.
+4. CI, Dockerfile, Helm, Kustomize, or Terraform module hints preserved as properties such as `github:workflow:image`, `dockerfile:image`, `helm:values:image`, `kustomize:image`, or `terraform:module_output:image`;
+5. `metadata.component.externalReferences`, especially `distribution`, `container-image`, `vcs`, and source references.
 
-The mapping report exposes every candidate used by the scanner.
+The mapping report exposes every candidate used by the scanner, including its source and strength. This is the proof chain for artifact-to-workload matching.
 
 ## Step 2: vulnerability-to-component matching
 
@@ -119,9 +120,11 @@ Artifact-to-workload matching uses conservative evidence scores:
 | `repository-leaf` | 58 | Last path segment matches. |
 | `name` / `artifact-name` | 45-52 | Weak name-only match. |
 
-Low-confidence matches remain visible and do not become high-confidence evidence.
+Low-confidence matches remain visible and do not become high-confidence evidence. Terraform coverage rows include `match_proof`, `candidate_source`, and `candidate_strength` so reviewers can see whether the match came from a digest, image reference, repository/tag, alias, or weak name fallback.
 
-Terraform context also combines network reachability and IAM. The analyzer links workload identities to IAM policies where the plan exposes task roles, instance profiles, service accounts, managed identities, or role assignments. It records impact classes such as `data_access`, `network_control`, `iam_escalation`, and `compute_control`. Those impacts raise context criticality only after considering whether the workload is public, external, internal, or private.
+Terraform context also combines network reachability and IAM. Provider network adapters record route, private endpoint, VPC connector, firewall target, firewall priority, and NSG allow/deny signals. These signals are only useful when the graph can link them to a workload path.
+
+The analyzer links workload identities to IAM policies where the plan exposes task roles, instance profiles, service accounts, managed identities, or role assignments. It records impact classes such as `data_access`, `network_control`, `iam_escalation`, and `compute_control`. Capability records include action, scope, condition keys, effective risk, and risk multiplier. Scoped or conditional critical permissions remain important, but they score lower than broad unconditioned critical permissions. Impacts raise context criticality only after considering whether the workload is public, external, internal, or private.
 
 Rendered Kubernetes manifests supplied through `--kubernetes-manifest` add direct workload, Service, Ingress, and RBAC evidence. They are useful when Terraform contains only a Helm release or kubectl wrapper and cannot expose the rendered child resources. The Kubernetes analyzer emits a separate `--kubernetes-coverage-out` report.
 
@@ -141,8 +144,9 @@ reachability-advisor scan \
 The report includes:
 
 - artifact candidates from SBOM metadata and aliases;
+- artifact identity candidate source and strength;
 - whether a source root exists;
-- Terraform matches with method and score;
+- Terraform matches with method, score, confidence, and proof;
 - warnings for missing source roots, weak artifact identity, or no Terraform match;
 - Terraform coverage summary.
 

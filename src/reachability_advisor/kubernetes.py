@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .artifacts import ArtifactMatch, artifact_match_evidence
+from .iam_capabilities import dedupe_iam_capabilities
 from .models import Artifact, Confidence, ContextEvidence
 from .terraform import max_confidence, max_criticality, max_exposure, max_privilege
 
@@ -41,6 +42,7 @@ class KubernetesResource:
 class RoleGrant:
     privilege: str = "unknown"
     impacts: frozenset[str] = field(default_factory=frozenset)
+    capabilities: tuple[dict[str, Any], ...] = ()
     evidence: str = ""
 
 
@@ -364,7 +366,7 @@ def _contexts_from_resources(
 
         service_account = _workload_service_account(workload)
         grants = grants_by_service_account.get((workload.namespace, service_account), [])
-        privilege, impacts = _aggregate_grants(grants)
+        privilege, impacts, capabilities = _aggregate_grants(grants)
         if grants:
             evidence.extend(grant.evidence for grant in grants if grant.evidence)
         criticality = _network_iam_criticality(exposure, privilege, impacts)
@@ -375,6 +377,7 @@ def _contexts_from_resources(
             privilege=privilege,
             criticality=criticality,
             iam_impacts=sorted(impacts),
+            iam_capabilities=capabilities,
             source="kubernetes-manifest",
             confidence=confidence,
             evidence=evidence,
@@ -517,6 +520,7 @@ def _rbac_grants(resources: list[KubernetesResource]) -> dict[tuple[str, str], l
         grant = RoleGrant(
             privilege=role_grant.privilege,
             impacts=role_grant.impacts,
+            capabilities=role_grant.capabilities,
             evidence=f"kubernetes RBAC: {role_grant.privilege} via {binding.address} -> {role_kind}.{role_name} impact={','.join(sorted(role_grant.impacts)) or 'none'}",
         )
         for namespace, name in _binding_service_accounts(binding):
@@ -528,6 +532,7 @@ def _classify_role(resource: KubernetesResource) -> RoleGrant:
     name_grant = _classify_role_name(resource.kind, resource.name)
     best = name_grant.privilege
     impacts = set(name_grant.impacts)
+    capabilities = list(name_grant.capabilities)
     for rule in _as_list(resource.values.get("rules")):
         if not isinstance(rule, dict):
             continue
@@ -536,33 +541,39 @@ def _classify_role(resource: KubernetesResource) -> RoleGrant:
         if "*" in verbs or "*" in k8s_resources:
             best = max_privilege(best, "admin")
             impacts.add("admin_control")
+            capabilities.append(_rbac_capability(rule, "admin_control"))
         elif k8s_resources & {"secrets"} and verbs & READ_VERBS:
             best = max_privilege(best, "sensitive")
             impacts.add("data_access")
+            capabilities.append(_rbac_capability(rule, "data_access"))
         elif k8s_resources & IAM_RESOURCES and verbs & MUTATING_VERBS:
             best = max_privilege(best, "sensitive")
             impacts.add("iam_escalation")
+            capabilities.append(_rbac_capability(rule, "iam_escalation"))
         elif k8s_resources & NETWORK_RESOURCES and verbs & MUTATING_VERBS:
             best = max_privilege(best, "sensitive")
             impacts.add("network_control")
+            capabilities.append(_rbac_capability(rule, "network_control"))
         elif k8s_resources & COMPUTE_RESOURCES and verbs & MUTATING_VERBS:
             best = max_privilege(best, "sensitive")
             impacts.add("compute_control")
+            capabilities.append(_rbac_capability(rule, "compute_control"))
         elif verbs:
             best = max_privilege(best, "limited")
-    return RoleGrant(privilege=best, impacts=frozenset(impacts))
+            capabilities.append(_rbac_capability(rule, "limited_access"))
+    return RoleGrant(privilege=best, impacts=frozenset(impacts), capabilities=tuple(dedupe_iam_capabilities(capabilities)))
 
 
 def _classify_role_name(kind: str, name: str) -> RoleGrant:
     text = f"{kind}:{name}".lower()
     if "cluster-admin" in text:
-        return RoleGrant(privilege="admin", impacts=frozenset({"admin_control"}))
+        return RoleGrant(privilege="admin", impacts=frozenset({"admin_control"}), capabilities=(_named_role_capability(text, "admin_control"),))
     if text.endswith(":admin") or "admin" in text:
-        return RoleGrant(privilege="sensitive", impacts=frozenset({"iam_escalation", "compute_control"}))
+        return RoleGrant(privilege="sensitive", impacts=frozenset({"iam_escalation", "compute_control"}), capabilities=(_named_role_capability(text, "iam_escalation"), _named_role_capability(text, "compute_control")))
     if "edit" in text:
-        return RoleGrant(privilege="sensitive", impacts=frozenset({"compute_control"}))
+        return RoleGrant(privilege="sensitive", impacts=frozenset({"compute_control"}), capabilities=(_named_role_capability(text, "compute_control"),))
     if "view" in text or "read" in text:
-        return RoleGrant(privilege="limited", impacts=frozenset())
+        return RoleGrant(privilege="limited", impacts=frozenset(), capabilities=(_named_role_capability(text, "limited_access"),))
     return RoleGrant(privilege="unknown", impacts=frozenset())
 
 
@@ -578,13 +589,51 @@ def _binding_service_accounts(binding: KubernetesResource) -> set[tuple[str, str
     return service_accounts
 
 
-def _aggregate_grants(grants: list[RoleGrant]) -> tuple[str, set[str]]:
+def _aggregate_grants(grants: list[RoleGrant]) -> tuple[str, set[str], list[dict[str, Any]]]:
     privilege = "unknown"
     impacts: set[str] = set()
+    capabilities: list[dict[str, Any]] = []
     for grant in grants:
         privilege = max_privilege(privilege, grant.privilege)
         impacts.update(grant.impacts)
-    return privilege, impacts
+        capabilities.extend(grant.capabilities)
+    return privilege, impacts, dedupe_iam_capabilities(capabilities)
+
+
+def _rbac_capability(rule: Mapping[str, Any], impact: str) -> dict[str, Any]:
+    verbs = _string_list(rule.get("verbs"))
+    resources = _string_list(rule.get("resources"))
+    return {
+        "action": ",".join(verbs) or "unknown",
+        "impact": impact,
+        "access": _access_for_impact(impact),
+        "effect": "allow",
+        "resource_refs": resources,
+        "evidence": f"kubernetes RBAC rule verbs={','.join(verbs) or 'unknown'} resources={','.join(resources) or 'unknown'}",
+        "source": "kubernetes-rbac",
+    }
+
+
+def _named_role_capability(name: str, impact: str) -> dict[str, Any]:
+    return {
+        "action": name,
+        "impact": impact,
+        "access": _access_for_impact(impact),
+        "effect": "allow",
+        "resource_refs": [],
+        "evidence": f"kubernetes RBAC role name {name}",
+        "source": "kubernetes-rbac",
+    }
+
+
+def _access_for_impact(impact: str) -> str:
+    return {
+        "admin_control": "admin",
+        "iam_escalation": "privilege_escalation",
+        "network_control": "network_mutation",
+        "compute_control": "compute_mutation",
+        "data_access": "sensitive_data",
+    }.get(impact, "limited")
 
 
 def _network_iam_criticality(exposure: str, privilege: str, impacts: set[str]) -> str:
@@ -677,6 +726,7 @@ def merge_context_evidence(left: ContextEvidence, right: ContextEvidence) -> Con
         privilege=max_privilege(left.privilege, right.privilege),
         criticality=max_criticality(left.criticality, right.criticality),
         iam_impacts=sorted({*left.iam_impacts, *right.iam_impacts}),
+        iam_capabilities=dedupe_iam_capabilities([*left.iam_capabilities, *right.iam_capabilities]),
         owner=left.owner or right.owner,
         source="+".join(dict.fromkeys(part for part in [*left.source.split("+"), *right.source.split("+")] if part and part != "none")),
         confidence=max_confidence(left.confidence, right.confidence),

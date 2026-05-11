@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .artifacts import artifact_candidates
+from .artifacts import artifact_candidates, artifact_identity_proof
 from .models import SbomDocument
 
 
@@ -24,6 +24,7 @@ def build_mapping_report(sboms: list[SbomDocument], source_roots: dict[str, Path
     for sbom in sboms:
         root = source_roots.get(sbom.artifact.name)
         candidates = sorted(artifact_candidates(sbom.artifact))
+        identity_proof = artifact_identity_proof(sbom.artifact)
         tf_matches = matches_by_artifact.get(sbom.artifact.name, [])
         artifacts.append(
             {
@@ -33,6 +34,7 @@ def build_mapping_report(sboms: list[SbomDocument], source_roots: dict[str, Path
                 "sbom_path": str(sbom.path),
                 "component_count": len(sbom.components),
                 "artifact_candidates": candidates,
+                "artifact_identity": identity_proof,
                 "source_root": str(root) if root else None,
                 "source_root_exists": bool(root and root.exists()),
                 "terraform_matched": bool(tf_matches),
@@ -46,6 +48,7 @@ def build_mapping_report(sboms: list[SbomDocument], source_roots: dict[str, Path
             "artifact_count": len(sboms),
             "artifacts_with_source_roots": sum(1 for sbom in sboms if sbom.artifact.name in source_roots),
             "artifacts_with_terraform_matches": sum(1 for sbom in sboms if sbom.artifact.name in matches_by_artifact),
+            "artifacts_with_strong_identity": sum(1 for sbom in sboms if not artifact_identity_proof(sbom.artifact).get("warnings")),
             "unmatched_terraform_artifacts": terraform_coverage.get("unmatched_artifacts", []),
         },
         "artifacts": artifacts,

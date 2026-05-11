@@ -9,6 +9,7 @@ NETWORK_BRIDGE_RESOURCE_TYPES = {
     "aws_customer_gateway",
     "aws_vpn_gateway",
     "aws_vpn_connection",
+    "aws_vpc_endpoint",
     "aws_ec2_transit_gateway",
     "aws_ec2_transit_gateway_vpc_attachment",
     "aws_ec2_transit_gateway_peering_attachment",
@@ -24,6 +25,7 @@ NETWORK_BRIDGE_RESOURCE_TYPES = {
     "google_compute_vpn_tunnel",
     "google_compute_interconnect_attachment",
     "google_compute_router_peer",
+    "google_vpc_access_connector",
 }
 PRIVATE_NETWORK_RESOURCE_TYPES = {
     "aws_vpc",
@@ -54,6 +56,7 @@ class NetworkPathAnalysis:
     privilege_by_address: dict[str, str] = field(default_factory=dict)
     privilege_evidence_by_address: dict[str, list[str]] = field(default_factory=dict)
     iam_impacts_by_address: dict[str, set[str]] = field(default_factory=dict)
+    iam_capabilities_by_address: dict[str, list[dict[str, object]]] = field(default_factory=dict)
     iam_target_evidence_by_address: dict[str, list[str]] = field(default_factory=dict)
 
 

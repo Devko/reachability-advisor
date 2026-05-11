@@ -62,6 +62,12 @@ class VisualPayloadTests(unittest.TestCase):
         ])
 
         path = payload["networkPaths"][0]
+        self.assertTrue(payload["evidenceGraph"]["network_paths"])
+        typed_nodes = {node["label"]: node["kind"] for node in payload["evidenceGraph"]["network_nodes"]}
+        typed_edges = payload["evidenceGraph"]["network_edges"]
+        self.assertEqual(typed_nodes["Internet / attacker"], "internet")
+        self.assertEqual(typed_nodes["aws_lb.edge public load balancer"], "load_balancer")
+        self.assertTrue(any(edge["target"] == "asset:api" and edge["kind"] == "network_path_asset" for edge in typed_edges))
         self.assertEqual(path["entryLabel"], "Internet / attacker")
         self.assertEqual(path["entrySubtitle"], "direct public route")
         self.assertEqual(path["label"], "aws_lb.edge public load balancer")
@@ -162,12 +168,58 @@ class VisualPayloadTests(unittest.TestCase):
         self.assertEqual(path["label"], "Unresolved network path")
         self.assertEqual(path["summary"], "The supplied context does not prove a network entry path.")
 
+    def test_fallback_paths_are_used_when_graph_has_no_network_paths(self) -> None:
+        payload = _visual_payload(
+            [
+                finding_for_visual("public-api", "public", [], tier=Tier.HIGH, score=80.0),
+                finding_for_visual("partner-api", "external", [], tier=Tier.MEDIUM, score=60.0),
+                finding_for_visual("internal-api", "internal", [], tier=Tier.MEDIUM, score=55.0),
+                finding_for_visual("batch", "private", [], tier=Tier.LOW, score=30.0),
+                finding_for_visual("unknown", "unknown", [], tier=Tier.LOW, score=20.0),
+            ],
+            evidence_graph={"network_paths": []},
+        )
+
+        paths = {path["assetId"]: path for path in payload["networkPaths"]}
+        self.assertEqual(paths["asset:public-api"]["entryLabel"], "Internet / attacker")
+        self.assertEqual(paths["asset:public-api"]["label"], "Public ingress")
+        self.assertEqual(paths["asset:public-api"]["summary"], "Public exposure is reported, but no linked Terraform path evidence was emitted.")
+        self.assertEqual(paths["asset:partner-api"]["entryLabel"], "External source")
+        self.assertEqual(paths["asset:partner-api"]["label"], "External ingress")
+        self.assertEqual(paths["asset:partner-api"]["summary"], "External exposure is reported, but the exact ingress path is not linked.")
+        self.assertEqual(paths["asset:internal-api"]["entryLabel"], "Internal network")
+        self.assertEqual(paths["asset:internal-api"]["summary"], "Reachable only through an internal network path inferred from the supplied context.")
+        self.assertEqual(paths["asset:batch"]["entrySubtitle"], "no linked network route observed")
+        self.assertEqual(paths["asset:unknown"]["entrySubtitle"], "insufficient IaC evidence")
+
+    def test_sparse_graph_network_paths_are_normalized(self) -> None:
+        payload = _visual_payload(
+            [finding_for_visual("api", "external", [])],
+            evidence_graph={
+                "network_paths": [
+                    "not an object",
+                    {},
+                    {"asset_id": "asset:api", "exposure": "external", "steps": "not a list"},
+                ]
+            },
+        )
+
+        path = payload["networkPaths"][0]
+        self.assertEqual(path["entryLabel"], "External source")
+        self.assertEqual(path["entrySubtitle"], "restricted public CIDR or external source")
+        self.assertEqual(path["label"], "External ingress")
+        self.assertEqual(path["summary"], "External exposure is reported, but the exact ingress path is not linked.")
+        self.assertEqual(path["steps"], [])
+
     def test_code_exposure_labels_are_visible_on_assets_and_vulnerabilities(self) -> None:
         payload = _visual_payload([
             finding_for_visual("api", "public", [], reachability=Reachability.ATTACKER_CONTROLLED, tier=Tier.URGENT, score=95.0),
             finding_for_visual("job", "private", [], reachability=Reachability.FUNCTION_REACHABLE, tier=Tier.MEDIUM, score=55.0),
             finding_for_visual("unused", "private", [], reachability=Reachability.PACKAGE_PRESENT, tier=Tier.LOW, score=25.0),
             finding_for_visual("worker", "private", [], reachability=Reachability.UNKNOWN_DUE_TO_NO_RULE, tier=Tier.MEDIUM, score=45.0),
+            finding_for_visual("importer", "private", [], reachability=Reachability.IMPORTED, tier=Tier.LOW, score=35.0),
+            finding_for_visual("dependency", "private", [], reachability=Reachability.DEPENDENCY_REACHABLE, tier=Tier.LOW, score=34.0),
+            finding_for_visual("absent", "private", [], reachability=Reachability.ABSENT, tier=Tier.LOW, score=5.0),
         ])
 
         assets = {asset["name"]: asset for asset in payload["assets"]}
@@ -181,6 +233,9 @@ class VisualPayloadTests(unittest.TestCase):
         self.assertEqual(vulns["asset:unused"]["codeExposure"], "SBOM only")
         self.assertEqual(vulns["asset:worker"]["codeExposure"], "no source rule")
         self.assertIn("No package-specific source rule", vulns["asset:worker"]["codeExposureDetail"])
+        self.assertIn("package is imported", vulns["asset:importer"]["codeExposureDetail"])
+        self.assertIn("dependency graph", vulns["asset:dependency"]["codeExposureDetail"])
+        self.assertIn("absent", vulns["asset:absent"]["codeExposureDetail"])
 
     def test_html_uses_explicit_priority_score_labels_and_fan_edges(self) -> None:
         html = render_html_report([

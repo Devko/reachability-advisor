@@ -20,7 +20,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .artifacts import artifact_match_evidence
+from .artifacts import artifact_identity_proof, artifact_match_evidence
+from .iam_capabilities import dedupe_iam_capabilities
 from .models import Artifact, Confidence, ContextEvidence
 from .terraform_exposure import (
     INTERNAL_TOKEN_VALUES,
@@ -57,6 +58,7 @@ from .terraform_manifest import (
     provider_for_type,
     resource_type_supported,
 )
+from .terraform_network_adapters import network_adapter_signals
 from .terraform_network_model import (
     NETWORK_BRIDGE_RESOURCE_TYPES,
     PRIVATE_NETWORK_RESOURCE_TYPES,
@@ -108,6 +110,7 @@ class ArtifactContextAccumulator:
     matched_resources: list[str] = field(default_factory=list)
     providers: set[str] = field(default_factory=set)
     iam_impacts: set[str] = field(default_factory=set)
+    iam_capabilities: list[dict[str, Any]] = field(default_factory=list)
 
     def add_resource(self, resource: TerraformResource, image: str | None = None, match_method: str = "unknown", match_score: int = 0) -> None:
         self.providers.add(resource.provider)
@@ -136,6 +139,7 @@ class ArtifactContextAccumulator:
             privilege=self.privilege,
             criticality=self.criticality,
             iam_impacts=sorted(self.iam_impacts),
+            iam_capabilities=dedupe_iam_capabilities(self.iam_capabilities),
             owner=self.owner,
             source=source,
             confidence=self.confidence,
@@ -163,6 +167,7 @@ class TerraformNetworkGraph:
         self.privilege_by_address: dict[str, str] = {}
         self.privilege_evidence_by_address: dict[str, list[str]] = {}
         self.iam_impacts_by_address: dict[str, set[str]] = {}
+        self.iam_capabilities_by_address: dict[str, list[dict[str, Any]]] = {}
         self.iam_target_evidence_by_address: dict[str, list[str]] = {}
 
     def analyze(self) -> NetworkPathAnalysis:
@@ -185,6 +190,7 @@ class TerraformNetworkGraph:
             privilege_by_address=self.privilege_by_address,
             privilege_evidence_by_address=self.privilege_evidence_by_address,
             iam_impacts_by_address=self.iam_impacts_by_address,
+            iam_capabilities_by_address=self.iam_capabilities_by_address,
             iam_target_evidence_by_address=self.iam_target_evidence_by_address,
         )
 
@@ -214,6 +220,7 @@ class TerraformNetworkGraph:
             privilege = "unknown"
             evidence: list[str] = []
             impacts: set[str] = set()
+            capabilities: list[dict[str, Any]] = []
             target_evidence: list[str] = []
             for ref in self._workload_identity_refs(resource):
                 ref_privilege = self.identity_privilege_by_ref.get(ref, "unknown")
@@ -223,12 +230,15 @@ class TerraformNetworkGraph:
                 evidence.extend(self.identity_evidence_by_ref.get(ref, []))
                 for grant in self.identity_grants_by_ref.get(ref, []):
                     impacts.update(grant.impacts)
+                    capabilities.extend(capability.to_json() for capability in grant.capabilities)
                     target_evidence.extend(self._target_evidence_for_grant(grant))
             if privilege != "unknown":
                 self.privilege_by_address[resource.address] = privilege
                 self.privilege_evidence_by_address[resource.address] = list(dict.fromkeys(evidence))
             if impacts:
                 self.iam_impacts_by_address[resource.address] = impacts
+            if capabilities:
+                self.iam_capabilities_by_address[resource.address] = dedupe_iam_capabilities(capabilities)
             if target_evidence:
                 self.iam_target_evidence_by_address[resource.address] = list(dict.fromkeys(target_evidence))
 
@@ -255,6 +265,7 @@ class TerraformNetworkGraph:
             else:
                 self._add_generic_exposure(resource)
             self._add_cloud_backend_edges(resource)
+            self._add_provider_network_adapter_edges(resource)
 
         for resource in self.resources:
             if resource.category == "workload":
@@ -275,6 +286,10 @@ class TerraformNetworkGraph:
             source = queue.pop(0)
             source_exposure = exposure_by_node[source]
             for edge in self.edges.get(source, []):
+                # Exposure only moves along explicit graph edges. Edge caps
+                # prevent a private route or same-SG hop from upgrading a
+                # workload to public just because a public resource exists
+                # elsewhere in the same plan.
                 candidate = _cap_exposure(source_exposure, edge.exposure_cap)
                 if exposure_rank(candidate) <= exposure_rank(exposure_by_node.get(edge.target, "unknown")):
                     continue
@@ -388,6 +403,26 @@ class TerraformNetworkGraph:
         for ref in _exposure_backend_refs(resource.values):
             self._add_edge(node, self._ref_node(ref), f"{resource.address} forwards to {ref}")
 
+    def _add_provider_network_adapter_edges(self, resource: TerraformResource) -> None:
+        for signal in network_adapter_signals(resource.type, resource.values):
+            if signal.kind == "private_route_bridge":
+                for route_table_ref in signal.refs:
+                    self._seed(self._route_table_node(route_table_ref), "internal", f"{resource.address} {signal.reason}")
+            elif signal.kind == "route_table_association":
+                route_table_refs = _route_table_refs(resource.values)
+                subnet_refs = _subnet_refs(resource.values)
+                for route_table_ref in route_table_refs:
+                    for subnet_ref in subnet_refs:
+                        self._add_edge(self._route_table_node(route_table_ref), self._subnet_node(subnet_ref), f"{resource.address} associates route table {route_table_ref} to subnet {subnet_ref}", exposure_cap="internal")
+            elif signal.kind == "private_endpoint":
+                node = self._resource_node(resource)
+                self._seed(node, "internal", f"{resource.address} private service endpoint")
+                for subnet_ref in _subnet_refs(resource.values):
+                    self._add_edge(node, self._subnet_node(subnet_ref), f"{resource.address} attaches private endpoint to subnet {subnet_ref}", exposure_cap="internal")
+            elif signal.kind == "firewall_target" and signal.exposure in {"public", "external", "internal"}:
+                for tag_ref in signal.refs:
+                    self._seed(self._network_tag_node(tag_ref), signal.exposure, f"{resource.address} {signal.exposure} firewall target {tag_ref}")
+
     def _add_workload_edges(self, resource: TerraformResource) -> None:
         resource_node = self._resource_node(resource)
         for sg_ref in _security_group_refs(resource.values):
@@ -397,6 +432,10 @@ class TerraformNetworkGraph:
             self._add_edge(self._ref_node(nic_ref), resource_node, f"{nic_ref} attaches to {resource.address}")
         for target_group_ref in _target_group_refs(resource.values):
             self._add_edge(self._target_group_node(target_group_ref), resource_node, f"{target_group_ref} targets {resource.address}")
+        for subnet_ref in _subnet_refs(resource.values):
+            self._add_edge(self._subnet_node(subnet_ref), resource_node, f"{subnet_ref} contains {resource.address}", exposure_cap="internal")
+        for tag_ref in _network_tag_refs(resource.values):
+            self._add_edge(self._network_tag_node(tag_ref), resource_node, f"{tag_ref} targets {resource.address}")
         for task_def_ref in _value_reference_candidates(resource.values.get("task_definition")):
             self._add_edge(resource_node, self._ref_node(task_def_ref), f"{resource.address} runs task definition {task_def_ref}")
         if resource.type.startswith("kubernetes_"):
@@ -509,6 +548,18 @@ class TerraformNetworkGraph:
     def _kubernetes_name_node(name: str) -> str:
         return f"kubernetes:name:{str(name).lower()}"
 
+    @staticmethod
+    def _route_table_node(ref: str) -> str:
+        return f"route-table:{str(ref).lower()}"
+
+    @staticmethod
+    def _subnet_node(ref: str) -> str:
+        return f"subnet:{str(ref).lower()}"
+
+    @staticmethod
+    def _network_tag_node(ref: str) -> str:
+        return f"network-tag:{str(ref).lower()}"
+
 
 class TerraformAnalyzer:
     """Analyze Terraform plan JSON and infer conservative artifact context."""
@@ -546,16 +597,29 @@ class TerraformAnalyzer:
                 matched_image = None
                 match_method = "none"
                 match_score = 0
+                match_proof: dict[str, Any] = {}
                 for image in find_image_references(resource.values):
                     match = artifact_match_evidence(artifact, image)
                     if match.matched and match.score > match_score:
                         matched_image = image
                         match_method = match.method
                         match_score = match.score
+                        match_proof = match.to_json()
                 if not matched_image and workload_name_matches(artifact, resource):
                     matched_image = artifact.reference or artifact.name
                     match_method = "workload-name"
                     match_score = 45
+                    match_proof = {
+                        "matched": True,
+                        "score": match_score,
+                        "confidence": "low",
+                        "method": match_method,
+                        "artifact_candidate": artifact.name,
+                        "candidate_source": "artifact.name",
+                        "candidate_strength": "name",
+                        "target": resource.address,
+                        "reasons": ["workload resource name matched artifact name"],
+                    }
                 if not matched_image:
                     continue
                 accumulator.add_resource(resource, matched_image, match_method=match_method, match_score=match_score)
@@ -588,11 +652,25 @@ class TerraformAnalyzer:
                     accumulator.evidence.append(f"terraform identity target: {item}")
                 iam_impacts = self._network_paths.iam_impacts_by_address.get(resource.address, set())
                 accumulator.iam_impacts.update(iam_impacts)
+                accumulator.iam_capabilities.extend(self._network_paths.iam_capabilities_by_address.get(resource.address, []))
                 iam_criticality = _network_iam_criticality(exposure, path_privilege, iam_impacts)
                 accumulator.criticality = max_criticality(accumulator.criticality, iam_criticality)
                 if iam_criticality != "unknown":
                     accumulator.evidence.append(f"terraform IAM impact criticality: {iam_criticality} via {resource.address} impacts={','.join(sorted(iam_impacts)) or path_privilege}")
-                match_rows.append({"artifact": artifact.name, "resource": resource.address, "type": resource.type, "provider": resource.provider, "image": matched_image, "match_method": match_method, "match_score": match_score})
+                match_rows.append(
+                    {
+                        "artifact": artifact.name,
+                        "resource": resource.address,
+                        "type": resource.type,
+                        "provider": resource.provider,
+                        "image": matched_image,
+                        "match_method": match_method,
+                        "match_score": match_score,
+                        "match_confidence": match_proof.get("confidence", "none"),
+                        "artifact_identity": artifact_identity_proof(artifact),
+                        "match_proof": match_proof,
+                    }
+                )
             if accumulator.matched_resources:
                 contexts[artifact.name] = accumulator.as_context(source=f"terraform:{self.source_name}")
         return TerraformAnalysis(contexts=contexts, coverage=coverage_report(self.resources, self.artifacts, match_rows))
@@ -1460,6 +1538,62 @@ def _network_interface_refs(values: dict[str, Any]) -> set[str]:
     return refs
 
 
+def _subnet_refs(values: Any) -> set[str]:
+    refs: set[str] = set()
+    if isinstance(values, dict):
+        for key in ("subnet", "subnets", "subnet_id", "subnet_ids", "virtual_network_subnet_id", "network_id", "subnetwork", "subnetwork_id"):
+            if key in values:
+                refs.update(_value_reference_candidates(values.get(key)))
+        for key in ("network_interface", "network_interfaces", "network_configuration", "vpc_config", "vpc_access", "ip_configuration", "ip_configurations"):
+            item = values.get(key)
+            if isinstance(item, (dict, list)):
+                refs.update(_subnet_refs(item))
+    elif isinstance(values, list):
+        for item in values:
+            refs.update(_subnet_refs(item))
+    return refs
+
+
+def _route_table_refs(values: dict[str, Any]) -> set[str]:
+    refs: set[str] = set()
+    for key in ("route_table_id", "route_table_ids", "route_table", "route_table_name"):
+        if key in values:
+            refs.update(_value_reference_candidates(values.get(key)))
+    return refs
+
+
+def _route_exposure(values: dict[str, Any]) -> str:
+    targets = (
+        _value_reference_candidates(values.get("transit_gateway_id"))
+        | _value_reference_candidates(values.get("vpc_peering_connection_id"))
+        | _value_reference_candidates(values.get("vpn_gateway_id"))
+        | _value_reference_candidates(values.get("carrier_gateway_id"))
+        | _value_reference_candidates(values.get("network_interface_id"))
+        | _value_reference_candidates(values.get("gateway_id"))
+        | _value_reference_candidates(values.get("nat_gateway_id"))
+    )
+    target_text = " ".join(sorted(targets)).lower()
+    if any(token in target_text for token in ("tgw", "transit", "peering", "vpn", "nat", "vgw", "private")):
+        return "internal"
+    return "unknown"
+
+
+def _network_tag_refs(values: Any) -> set[str]:
+    refs: set[str] = set()
+    if isinstance(values, dict):
+        for key in ("target_tags", "tags", "network_tags", "source_tags"):
+            if key in values:
+                refs.update(str(item).lower() for item in _listify(values.get(key)) if str(item).strip())
+        for key in ("metadata", "labels", "template"):
+            item = values.get(key)
+            if isinstance(item, (dict, list)):
+                refs.update(_network_tag_refs(item))
+    elif isinstance(values, list):
+        for item in values:
+            refs.update(_network_tag_refs(item))
+    return refs
+
+
 def _security_group_source_refs(values: dict[str, Any]) -> set[str]:
     refs: set[str] = set()
     rules: list[Any] = []
@@ -1594,6 +1728,9 @@ def coverage_report(resources: list[TerraformResource], artifacts: list[Artifact
             "category": resource.category,
             "supported": resource.supported,
         }
+        adapter_signals = network_adapter_signals(resource.type, resource.values)
+        if adapter_signals:
+            row["network_adapter_signals"] = [signal.to_json() for signal in adapter_signals]
         resource_rows.append(row)
         if not resource.supported:
             gap = {

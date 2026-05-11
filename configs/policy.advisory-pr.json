@@ -1,0 +1,6 @@
+{
+  "$schema": "../schemas/runtime-policy.schema.json",
+  "schema_version": "1.0",
+  "fail_on_tier": "urgent",
+  "exceptions": []
+}

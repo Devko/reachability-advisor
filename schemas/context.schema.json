@@ -13,6 +13,7 @@
           "privilege": {"type": "string"},
           "criticality": {"type": "string"},
           "iam_impacts": {"type": "array", "items": {"type": "string"}},
+          "iam_capabilities": {"type": "array", "items": {"type": "object"}},
           "owner": {"type": "string"},
           "confidence": {"enum": ["high", "medium", "low"]},
           "evidence": {"type": "array", "items": {"type": "string"}}

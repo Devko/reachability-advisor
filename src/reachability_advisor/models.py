@@ -158,6 +158,7 @@ class SourceEvidence:
     matched_symbols: list[str] = field(default_factory=list)
     dependency_path: list[str] = field(default_factory=list)
     evidence_source: str = "builtin"
+    diagnostics: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -167,6 +168,7 @@ class ContextEvidence:
     privilege: str = "unknown"
     criticality: str = "unknown"
     iam_impacts: list[str] = field(default_factory=list)
+    iam_capabilities: list[dict[str, Any]] = field(default_factory=list)
     owner: str | None = None
     source: str = "none"
     confidence: Confidence = Confidence.LOW
@@ -187,6 +189,7 @@ class Finding:
     rationale: list[str]
     fix_commands: list[str] = field(default_factory=list)
     policy_status: str = "active"
+    score_details: dict[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -227,6 +230,7 @@ class Finding:
                 "matched_symbols": self.source.matched_symbols,
                 "dependency_path": self.source.dependency_path,
                 "evidence_source": self.source.evidence_source,
+                "diagnostics": self.source.diagnostics,
                 "locations": [location.to_json() for location in self.source.locations],
             },
             "context": {
@@ -235,11 +239,13 @@ class Finding:
                 "privilege": self.context.privilege,
                 "criticality": self.context.criticality,
                 "iam_impacts": self.context.iam_impacts,
+                "iam_capabilities": self.context.iam_capabilities,
                 "owner": self.context.owner,
                 "source": self.context.source,
                 "confidence": self.context.confidence.value,
                 "evidence": self.context.evidence,
             },
+            "scoring": self.score_details,
             "score": round(self.score, 2),
             "tier": self.tier.value,
             "confidence": self.confidence.value,

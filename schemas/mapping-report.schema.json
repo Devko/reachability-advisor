@@ -12,6 +12,7 @@
         "artifact_count": {"type": "integer", "minimum": 0},
         "artifacts_with_source_roots": {"type": "integer", "minimum": 0},
         "artifacts_with_terraform_matches": {"type": "integer", "minimum": 0},
+        "artifacts_with_strong_identity": {"type": "integer", "minimum": 0},
         "unmatched_terraform_artifacts": {"type": "array"}
       },
       "additionalProperties": true
@@ -28,6 +29,14 @@
           "sbom_path": {"type": "string"},
           "component_count": {"type": "integer", "minimum": 0},
           "artifact_candidates": {"type": "array", "items": {"type": "string"}},
+          "artifact_identity": {
+            "type": "object",
+            "properties": {
+              "candidates": {"type": "array"},
+              "warnings": {"type": "array", "items": {"type": "string"}}
+            },
+            "additionalProperties": true
+          },
           "source_root": {"type": ["string", "null"]},
           "source_root_exists": {"type": "boolean"},
           "terraform_matched": {"type": "boolean"},

@@ -105,6 +105,7 @@ TERRAFORM_COVERAGE_MANIFEST: tuple[ResourceSupport, ...] = (
             "aws_alb_target_group",
             "aws_alb_target_group_attachment",
             "aws_vpc",
+            "aws_vpc_endpoint",
             "aws_vpc_peering_connection",
             "aws_subnet",
             "aws_internet_gateway",

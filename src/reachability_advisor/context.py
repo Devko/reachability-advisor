@@ -11,14 +11,11 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .iam_capabilities import dedupe_iam_capabilities
 from .models import Artifact, Confidence, ContextEvidence
 from .terraform import (
     TerraformContextError,
     analyze_terraform_plan,
-    classify_policy,
-    classify_role_text,
-    extract_resources,
-    max_privilege,
 )
 
 
@@ -29,6 +26,8 @@ class ContextError(ValueError):
 def _context_from_mapping(raw: dict[str, Any], source: str) -> ContextEvidence:
     raw_evidence = raw.get("evidence")
     evidence = raw_evidence if isinstance(raw_evidence, list) else []
+    raw_capabilities = raw.get("iam_capabilities")
+    iam_capabilities = dedupe_iam_capabilities([dict(item) for item in raw_capabilities if isinstance(item, dict)]) if isinstance(raw_capabilities, list) else []
     confidence = str(raw.get("confidence") or "medium").lower()
     if confidence not in {"high", "medium", "low"}:
         confidence = "medium"
@@ -38,6 +37,7 @@ def _context_from_mapping(raw: dict[str, Any], source: str) -> ContextEvidence:
         privilege=str(raw.get("privilege") or "unknown").lower(),
         criticality=str(raw.get("criticality") or "unknown").lower(),
         iam_impacts=[str(item).lower() for item in raw.get("iam_impacts", [])] if isinstance(raw.get("iam_impacts"), list) else [],
+        iam_capabilities=iam_capabilities,
         owner=str(raw.get("owner")) if raw.get("owner") else None,
         source=source,
         confidence=Confidence(confidence),
@@ -66,34 +66,13 @@ def load_context_file(path: str | Path | None) -> dict[str, ContextEvidence]:
 
 
 def infer_context_from_terraform(path: str | Path | None, artifacts: list[Artifact]) -> dict[str, ContextEvidence]:
-    """Infer conservative context from a Terraform plan JSON.
+    """Return artifact contexts from Terraform plan JSON.
 
-    This compatibility wrapper returns only contexts.  Use
-    ``terraform.analyze_terraform_plan`` when a coverage report is also needed.
+    The full analyzer also returns coverage and mapping detail. This helper is
+    intentionally small for callers that only need context enrichment.
     """
 
     try:
         return analyze_terraform_plan(path, artifacts).contexts
     except TerraformContextError as exc:
         raise ContextError(str(exc)) from exc
-
-
-# Backward-compatible helpers used by older tests and contributors.
-def _planned_resources(plan: dict[str, Any]) -> list[dict[str, Any]]:
-    return [{"address": resource.address, "type": resource.type, "name": resource.name, "values": resource.values} for resource in extract_resources(plan)]
-
-
-def _classify_policy(policy: Any) -> str:
-    return classify_policy(policy)
-
-
-def _max_privilege(left: str, right: str) -> str:
-    return max_privilege(left, right)
-
-
-def _privilege_rank(value: str) -> int:
-    return {"unknown": 0, "none": 1, "limited": 2, "sensitive": 3, "admin": 4}.get(value, 0)
-
-
-def _classify_role_text(value: Any) -> str:
-    return classify_role_text(value)
