@@ -460,25 +460,6 @@ def parse_source_roots(values: list[str]) -> dict[str, Path]:
     return roots
 
 
-def _iter_source_files(root: Path) -> list[Path]:
-    if not root.exists() or not root.is_dir():
-        return []
-    files: list[Path] = []
-    ignored_dirs = {".git", ".hg", ".svn", "node_modules", "target", "build", "dist", ".venv", "venv", "__pycache__"}
-    for path in root.rglob("*"):
-        if any(part in ignored_dirs for part in path.parts):
-            continue
-        if not path.is_file() or path.suffix.lower() not in SUPPORTED_EXTENSIONS:
-            continue
-        try:
-            if path.stat().st_size > MAX_FILE_BYTES:
-                continue
-        except OSError:
-            continue
-        files.append(path)
-    return files
-
-
 def build_source_index(root: Path | None) -> SourceIndex:
     if root is None:
         return SourceIndex(root=None)

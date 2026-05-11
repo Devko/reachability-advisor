@@ -570,6 +570,139 @@ class MappingAndSbomPlanTests(unittest.TestCase):
         assert evidence is not None
         self.assertEqual(evidence.evidence_source, "semgrep")
 
+    def test_external_source_evidence_imports_supported_formats(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plain = root / "plain.json"
+            findings = root / "findings.json"
+            sarif = root / "results.sarif"
+            govuln = root / "govuln.jsonl"
+            plain.write_text(
+                json.dumps(
+                    [
+                        {
+                            "package": "left-pad",
+                            "vulnerability_id": "GHSA-leftpad",
+                            "state": "invalid-state",
+                            "confidence": "invalid-confidence",
+                            "source": "plain-tool",
+                            "locations": [
+                                "bad",
+                                {},
+                                {"uri": "src/index.js", "startLine": 3, "startColumn": 4, "snippet": "leftPad(value)"},
+                            ],
+                            "matched_symbols": ["leftPad"],
+                            "dependency_path": ["app", "left-pad"],
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            findings.write_text(
+                json.dumps(
+                    {
+                        "findings": [
+                            {
+                                "artifact": {"name": "api"},
+                                "component": {"name": "requests", "purl": "pkg:pypi/requests@2.19.0"},
+                                "vulnerability": {"id": "GHSA-requests"},
+                                "source_reachability": {
+                                    "state": "imported",
+                                    "confidence": "high",
+                                    "language": "python",
+                                    "reason": "imported evidence",
+                                    "matched_symbols": ["requests"],
+                                    "dependency_path": ["api", "requests"],
+                                    "evidence_source": "reachability-advisor",
+                                },
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            sarif.write_text(
+                json.dumps(
+                    {
+                        "runs": [
+                            {
+                                "tool": {"driver": {"name": "CodeQL"}},
+                                "results": [
+                                    {
+                                        "ruleId": "GHSA-axios",
+                                        "message": {"text": "axios sink"},
+                                        "properties": {
+                                            "component": "axios",
+                                            "purl": "pkg:npm/axios@1.6.0",
+                                            "reachability": "attacker_controlled",
+                                            "confidence": "high",
+                                        },
+                                        "locations": [
+                                            {
+                                                "physicalLocation": {
+                                                    "artifactLocation": {"uri": "src/app.js"},
+                                                    "region": {"startLine": 9, "startColumn": 2},
+                                                }
+                                            }
+                                        ],
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            govuln.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "finding": {
+                                    "osv": "GO-2024-0001",
+                                    "trace": [
+                                        "bad",
+                                        {
+                                            "module": "example.com/mod",
+                                            "position": {"filename": "main.go", "line": 7, "column": 3},
+                                        },
+                                    ],
+                                }
+                            }
+                        ),
+                        json.dumps({"finding": {"trace": []}}),
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            store = load_external_source_evidence([plain, findings, sarif, govuln])
+
+        self.assertEqual(len(store.records), 4)
+        leftpad = store.best_for("app", Component(name="left-pad"), VulnerabilityRecord(id="GHSA-leftpad", package_name="left-pad"))
+        self.assertIsNotNone(leftpad)
+        assert leftpad is not None
+        self.assertEqual(leftpad.reachability, Reachability.FUNCTION_REACHABLE)
+        self.assertEqual(leftpad.confidence.value, "medium")
+        self.assertEqual(leftpad.locations[0].path, Path("src/index.js"))
+        self.assertEqual(leftpad.dependency_path, ["app", "left-pad"])
+
+        requests = store.best_for("api", Component(name="requests", purl="pkg:pypi/requests@2.19.0"), VulnerabilityRecord(id="GHSA-requests", package_name="requests"))
+        self.assertIsNotNone(requests)
+        assert requests is not None
+        self.assertEqual(requests.reachability, Reachability.IMPORTED)
+
+        axios = store.best_for("web", Component(name="axios", purl="pkg:npm/axios@1.6.0"), VulnerabilityRecord(id="GHSA-axios", package_name="axios"))
+        self.assertIsNotNone(axios)
+        assert axios is not None
+        self.assertEqual(axios.evidence_source, "CodeQL")
+        self.assertEqual(axios.locations[0].path, Path("src/app.js"))
+
+        govuln = store.best_for("go-api", Component(name="example.com/mod"), VulnerabilityRecord(id="GO-2024-0001", package_name="example.com/mod"))
+        self.assertIsNotNone(govuln)
+        assert govuln is not None
+        self.assertEqual(govuln.evidence_source, "govulncheck")
+        self.assertEqual(govuln.locations[0].line, 7)
+
     def test_export_semgrep_rules_command_writes_yaml(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "rules.yml"
