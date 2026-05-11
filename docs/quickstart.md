@@ -18,8 +18,8 @@ python -m pip install -e .
 
 The command writes:
 
-- `outputs/findings.json` - canonical machine-readable finding set;
-- `outputs/reachability-baseline.json` - stable baseline artifact for default-branch PR comparisons;
+- `outputs/findings.json` - machine-readable finding set;
+- `outputs/reachability-baseline.json` - baseline artifact for default-branch PR comparisons;
 - `outputs/findings.sarif` - CI/code-scanning output;
 - `outputs/diagnostics.json` - editor diagnostics output;
 - `outputs/pr-summary.md` - pull request summary;
@@ -61,7 +61,7 @@ print(json.dumps(k8s['summary'], indent=2))
 PY
 ```
 
-The sample plan has full resource accounting, full semantic classification coverage, and full artifact matching across AWS, Azure, GCP, and Kubernetes resources. The rendered manifest sample shows direct public service exposure and Kubernetes RBAC impact for matched workloads.
+The sample plan reports `1.0` resource accounting, semantic classification, and artifact matching across AWS, Azure, GCP, and Kubernetes resources. The rendered manifest sample shows direct public service exposure and Kubernetes RBAC impact for matched workloads.
 
 ## 5. Explain one finding
 

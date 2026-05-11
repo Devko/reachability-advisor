@@ -26,9 +26,9 @@ Use this checklist when reviewing a new repository, fixture pack, or release can
 - [ ] `--source-coverage-out` is reviewed for source files, package-manager manifests, skipped files, evidence states, dependency-graph evidence, manifest evidence, and external evidence counts.
 - [ ] `source_rule_coverage`, `findings_with_rule_gap`, `findings_with_weak_source_evidence`, and `external_evidence_usable_ratio` are reviewed before treating the source result as strong.
 - [ ] Release gates use `--analysis-profile production` and import Semgrep, CodeQL/SARIF, govulncheck, or native evidence through `--source-evidence-in`.
-- [ ] `source_reachability.diagnostics[]` and `source_diagnostic_counts` are reviewed before trusting weak or unknown source states.
+- [ ] `source_reachability.diagnostics[]` and `source_diagnostic_counts` are reviewed before treating weak or unknown source states as sufficient.
 - [ ] Semgrep, CodeQL/SARIF, or govulncheck evidence imported through `--source-evidence-in` has component, package URL, or vulnerability selectors. Artifact can narrow a match, but is not enough by itself.
-- [ ] When several external source records match, the selected record is explainable by reachability state, confidence, selector specificity, then provider trust.
+- [ ] When several external source records match, the selected record is explainable by reachability state, confidence, selector specificity, then provider precedence.
 - [ ] `external_evidence_selector_diagnostics` has no unexpected artifact-only or unscoped records.
 - [ ] Semgrep `dataflow_trace` and CodeQL `codeFlows` evidence is reviewed as external analyzer evidence, not as a claim made by the built-in source heuristic.
 - [ ] `unknown_due_to_no_rule` findings are reviewed as rule coverage gaps.
@@ -41,7 +41,7 @@ Use this checklist when reviewing a new repository, fixture pack, or release can
 - [ ] `visibility_gaps` are reviewed.
 - [ ] Artifact match methods and scores are inspected for important findings.
 - [ ] Artifact match proof includes candidate source and strength for important findings, especially when no image digest is present.
-- [ ] CI uses `--min-artifact-match-coverage`, `--min-strong-artifact-identity-coverage`, and `--fail-on-mapping-warnings` after artifact identity metadata is stable.
+- [ ] CI uses `--min-artifact-match-coverage`, `--min-strong-artifact-identity-coverage`, and `--fail-on-mapping-warnings` after artifact identity metadata is consistent.
 - [ ] Fixture/sample coverage includes public, internal/lateral, private, and unknown exposure states when those states are in scope.
 - [ ] Fixture/sample coverage includes admin, sensitive/critical, limited/read-only, and no linked IAM role states when those states are in scope.
 - [ ] `context.iam_capabilities` shows the concrete action and impact behind important IAM labels, especially secret reads, role passing, network mutation, and workload mutation.

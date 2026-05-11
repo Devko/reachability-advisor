@@ -1,6 +1,6 @@
 # Terraform Context and Coverage
 
-Terraform is the primary deployment-context input for Reachability Advisor. It links SBOM artifacts to workloads, builds network paths, classifies exposure, and evaluates workload IAM impact.
+Terraform plan JSON is the release-gate deployment-context input for Reachability Advisor. It links SBOM artifacts to workloads, builds network paths, classifies exposure, and evaluates workload IAM impact.
 
 The scanner reads a local `terraform show -json` plan and extracts:
 

@@ -1,6 +1,6 @@
 # Algorithms
 
-Reachability Advisor ranks dependency vulnerabilities from four evidence streams: SBOM, vulnerability data, source reachability, and Terraform deployment context.
+Reachability Advisor scores dependency vulnerabilities from SBOM, vulnerability, source-reachability, and deployment-context evidence.
 
 ## Pipeline
 
@@ -30,7 +30,7 @@ Every finding is normalized into one path:
 asset -> network path -> identity -> reachable code/package -> vulnerability -> score
 ```
 
-This path is the main evidence model. The separate network, IAM, code, and vulnerability views are compatibility views for reporting and debugging.
+This path is the per-finding evidence model. The separate network, IAM, code, and vulnerability arrays remain for reporting and debugging.
 
 Each effective edge records:
 
@@ -42,7 +42,7 @@ Each effective edge records:
 - `blockers`: concrete constraints such as IAM conditions, private endpoints, network policy denies, or auth gates;
 - `unknowns`: missing evidence that prevents stronger conclusions.
 
-The graph is intentionally evidence-first. A high score should be traceable from the score node back through the vulnerable package, source evidence, identity, and network path to the asset. Missing network, identity, or source evidence stays visible as `unknowns`; it is not treated as proof of safety.
+The graph is evidence-first. A high score must be traceable from the score node back through the vulnerable package, source evidence, identity, and network path to the asset. Missing network, identity, or source evidence is recorded as `unknowns`; it is not proof of safety.
 
 ## SBOM acquisition model
 
@@ -111,11 +111,11 @@ The default analyzer builds one source index per artifact for Python, JavaScript
 
 Rules are visible in `src/reachability_advisor/source.py`. Additional project-specific rules can be supplied with `--reachability-rules`. Use `export-semgrep-rules` to generate starter Semgrep YAML from built-in and custom rules. Use `--source-evidence-in` to import evidence from Reachability Advisor JSON, Semgrep JSON including native `dataflow_trace`, CodeQL/SARIF data-flow paths, plain SARIF, or govulncheck JSONL.
 
-When multiple source evidence providers match the same finding, the scanner picks the strongest record by reachability state, confidence, selector specificity, then provider trust. Exact package URL or vulnerability selectors beat package-name-only selectors. CodeQL, Semgrep, govulncheck, and native Reachability Advisor evidence are preserved as provider names in `source_reachability.evidence_source`, `source-coverage.json`, and the evidence graph.
+When multiple source evidence providers match the same finding, the scanner picks the strongest record by reachability state, confidence, selector specificity, then provider precedence. Exact package URL or vulnerability selectors beat package-name-only selectors. CodeQL, Semgrep, govulncheck, and native Reachability Advisor evidence are preserved as provider names in `source_reachability.evidence_source`, `source-coverage.json`, and the evidence graph.
 
 External source evidence must include a component/package, package URL, or vulnerability selector. Artifact-only records are retained for diagnostics but do not upgrade findings, because artifact names can only narrow a dependency match. `source-coverage.json` reports unmatchable external records under `external_evidence_selector_diagnostics`.
 
-Use `--analysis-profile production` for release gates. It requires external source evidence, enforces selector usability, and requires rendered deployment evidence from `--terraform-plan` or `--kubernetes-manifest`. The default `advisory` profile keeps built-in source rules useful for local development and early pull requests.
+Use `--analysis-profile production` for release gates. It requires external source evidence, usable selectors, and rendered deployment evidence from `--terraform-plan` or `--kubernetes-manifest`. The default `advisory` profile keeps built-in source rules available for local development and early pull requests.
 
 Built-in high-risk source rules currently cover common Java, Node, Python, and Go evidence:
 
@@ -134,7 +134,7 @@ Individual scanner findings are preserved. JSON and Markdown outputs also includ
 
 ## Artifact-to-Terraform matching
 
-Terraform evidence is derived from a local `terraform show -json` plan. Plan mode is the expected mode for release gates. The analyzer is manifest-driven:
+Terraform evidence is derived from a local `terraform show -json` plan. Use plan mode for release gates. The analyzer is manifest-driven:
 
 1. Parse every planned resource from `planned_values` and `resource_changes`.
 2. Classify the resource provider: AWS, Azure, GCP, Kubernetes, or unknown.
@@ -202,7 +202,7 @@ This is deployment context, not exploit confirmation. Unsupported resources and 
 
 ## Context evidence
 
-Terraform is the primary source for deployment context. Context JSON can override or enrich Terraform-derived fields such as owner, environment, or criticality.
+Terraform plan JSON is the deployment-context source for release gates. Context JSON can override or enrich Terraform-derived fields such as owner, environment, or criticality.
 
 ```json
 {
@@ -273,7 +273,7 @@ Default tiers:
 
 ## Mapping report
 
-`--mapping-out` is the primary logic-verification artifact. It shows:
+`--mapping-out` is the logic-verification artifact for artifact matching. It shows:
 
 - every SBOM artifact;
 - artifact candidates used for matching;

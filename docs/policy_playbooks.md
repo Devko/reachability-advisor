@@ -38,7 +38,7 @@ Expected behavior:
 
 ## Backlog Migration
 
-Use when existing high findings should not block every pull request, but new or worsened findings should.
+Use when existing high findings should not block every pull request, but new or worsened findings should fail.
 
 ```bash
 reachability-advisor scan \
@@ -55,7 +55,7 @@ reachability-advisor compare \
 
 Expected behavior:
 
-- the default branch publishes a stable baseline artifact;
+- the default branch publishes a baseline artifact;
 - pull requests fail only for new or worsened findings at or above the configured delta tier;
 - backlog exceptions must name artifact, component, vulnerability, reason, and expiry.
 

@@ -107,7 +107,7 @@ reachability-advisor scan \
 
 ## Step 5: Terraform Deployment Matching
 
-Terraform plan JSON is the primary deployment-context input. The analyzer reads the plan, accounts for every resource, and semantically classifies resources whose provider/type appears in the support manifest.
+Terraform plan JSON is the release-gate deployment-context input. The analyzer reads the plan, accounts for every resource, and semantically classifies resources whose provider/type appears in the support manifest.
 
 Artifact-to-workload matching uses conservative evidence scores:
 

@@ -4,7 +4,7 @@ The `ide/vscode` directory contains a VS Code extension wrapper that invokes the
 
 ## Why a thin extension?
 
-Security logic stays in the Python CLI so it can be tested, audited, and reused across CI and IDEs. The extension only handles editor integration.
+Scan logic stays in the Python CLI so CI and IDE runs use the same code path. The extension only handles editor integration.
 
 ## Extension behavior
 

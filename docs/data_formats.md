@@ -2,12 +2,12 @@
 
 Reachability Advisor reads local files and writes local artifacts. The scanner does not fetch vulnerability databases, cloud inventory, SBOMs, or source code.
 
-Primary scan inputs:
+Release-gate inputs:
 
 - CycloneDX SBOM JSON;
 - Grype JSON or normalized vulnerability JSON;
 - source-root mappings;
-- Terraform plan JSON.
+- Terraform plan JSON and/or rendered Kubernetes manifests.
 
 Context JSON, Terraform source mode, and custom source rules are enrichment or fallback inputs.
 
@@ -20,7 +20,7 @@ The scanner reads CycloneDX JSON and uses:
 - component package URLs (`purl`) when present;
 - `properties[]` and `externalReferences[]` for artifact/image/source metadata.
 
-Recommended artifact metadata:
+Useful artifact metadata:
 
 ```json
 {
@@ -52,8 +52,7 @@ grype dir:path/to/app -o cyclonedx-json --name app --file app.cdx.json
 
 ## Vulnerability intelligence
 
-Preferred production input is Grype JSON generated from the same SBOM that
-Reachability Advisor scans:
+For release gates, use Grype JSON generated from the same SBOM that Reachability Advisor scans:
 
 ```bash
 grype sbom:sboms/payments-api.cdx.json -o json > vulns/payments-api.grype.json
@@ -85,9 +84,9 @@ artifact that produced them:
 }
 ```
 
-The complex validation runner does this automatically.
+The complex validation runner writes this field when it merges per-service Grype reports.
 
-Recommended local format:
+Local vulnerability format:
 
 ```json
 {
@@ -253,7 +252,7 @@ Runtime policy files control CI fail thresholds and temporary exceptions. The sc
 }
 ```
 
-Recommended practice:
+Policy file rules:
 
 - set `fail_on_tier` to `high` for release gates and `urgent` while onboarding an existing backlog;
 - require a human-readable `reason`;
@@ -469,7 +468,7 @@ Schema draft: `schemas/sbom-plan.schema.json`.
 
 ## Findings JSON
 
-The canonical output is:
+The main scan output is:
 
 ```json
 {
@@ -505,13 +504,13 @@ Schema draft: `schemas/findings.schema.json`.
 
 Generated with `--evidence-graph-out`. The findings JSON also embeds the same structure under `evidence_graph`.
 
-The evidence graph is the stable machine contract used by the HTML report. Its canonical model is `effective_exposure_graph`, where each finding is represented as:
+The evidence graph is the machine-readable graph used by the HTML report. Its per-finding model is `effective_exposure_graph`:
 
 ```text
 asset -> network path -> identity -> reachable code/package -> vulnerability -> score
 ```
 
-Every effective edge carries `evidence_layer`, `origin_layer`, `evidence_source`, `confidence`, `provider`, `language`, `blockers`, `unknowns`, and `blocker_state`. This is the preferred contract for integrations that need to explain why a finding was prioritized.
+Every effective edge carries `evidence_layer`, `origin_layer`, `evidence_source`, `confidence`, `provider`, `language`, `blockers`, `unknowns`, and `blocker_state`. Integrations that need the full prioritization chain should read this graph.
 
 The older arrays still exist as compatibility views so consumers can inspect assets, components, vulnerabilities, findings, network paths, IAM capability edges, and code reachability edges without parsing rationale text.
 
@@ -534,7 +533,7 @@ Schema draft: `schemas/evidence-graph.schema.json`.
 
 Generated with `--baseline-out`.
 
-The baseline artifact is the stable default-branch input for pull-request gates. It keeps only comparison fields and removes volatile evidence such as file paths, source snippets, rationale text, and raw network evidence.
+The baseline artifact is the default-branch input for pull-request gates. It keeps comparison fields and removes volatile evidence such as file paths, source snippets, rationale text, and raw network evidence.
 
 ```json
 {
@@ -576,7 +575,7 @@ It visualizes:
 - colors that emphasize the highest tier/criticality on each asset and vulnerability;
 - a searchable, filterable findings list with click-through details.
 
-The graph supports mouse-wheel zoom, drag-to-pan, tier filtering, exposure filtering, active-only filtering, and text search. The canonical machine-readable result remains `--out` findings JSON.
+The graph supports mouse-wheel zoom, drag-to-pan, tier filtering, exposure filtering, active-only filtering, and text search. Use `--out` findings JSON for automation.
 
 ## Terraform fixture pack JSON
 

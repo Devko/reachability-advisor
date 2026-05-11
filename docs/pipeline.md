@@ -12,7 +12,7 @@ The scanner itself does not call external services. Keep Syft, Grype, Terraform,
 
 ## GitHub Actions Workflow
 
-This workflow is designed for GitHub-hosted Linux runners. It uses source-mode SBOM generation for pull requests because it works before an image has been built. The release variant below uses an image SBOM.
+This example targets GitHub-hosted Linux runners. It uses source-mode SBOM generation for pull requests because no image exists yet. The release variant below uses an image SBOM.
 
 ```yaml
 name: reachability-advisor
@@ -139,7 +139,7 @@ python -m pip install -e .
 
 ## Composite Action Variant
 
-When you want the scanner installed directly from this repository, use the composite action. It accepts newline-separated SBOMs, source roots, artifact aliases, rendered Kubernetes manifests, and an optional default-branch baseline, then exposes stable output paths for SARIF/artifact upload steps.
+The composite action installs the scanner from this repository. It accepts newline-separated SBOMs, source roots, artifact aliases, rendered Kubernetes manifests, and an optional default-branch baseline, then exposes fixed output paths for SARIF/artifact upload steps.
 
 ```yaml
       - name: Run Reachability Advisor
@@ -242,7 +242,7 @@ For release branches and deployment gates, scan the built artifact instead of th
 
 Use `--terraform-source infra` only for advisory feedback when a plan cannot be generated in the job. Source mode cannot evaluate modules, `count`, `for_each`, data sources, provider defaults, rendered Helm output, or generated Kubernetes child resources. It is rejected by `--analysis-profile production`.
 
-## Recommended Pattern
+## Baseline Pipeline Pattern
 
 1. Generate one CycloneDX SBOM per deployable artifact.
 2. Generate Grype JSON from the same SBOM.
@@ -277,7 +277,7 @@ reachability-advisor scan \
   --out outputs/no-cloud/findings.json
 ```
 
-This proves the scanner path, artifact matching, public network context, IAM capability extraction, source reachability, evidence graph, and HTML output without a real cloud account. It does not prove that a real environment matches the fixture.
+This exercises the scanner path, artifact matching, public network context, IAM capability extraction, source reachability, evidence graph, and HTML output without a cloud account. It does not prove that a real environment matches the fixture.
 
 ## Fallback Without a Plan
 
@@ -348,11 +348,11 @@ reachability-advisor scan \
   --out reachability/findings.json
 ```
 
-Start with advisory thresholds on existing repositories, then tighten them after SBOM metadata and artifact aliases are stable.
+Start with advisory thresholds on existing repositories. Raise thresholds after SBOM metadata and artifact aliases are consistent in CI.
 
 ## PR Delta Gate
 
-For mature repositories, publish `reachability-baseline.json` from the default branch and compare pull requests against that artifact. The PR report contains only new and worsened findings, so historical backlog does not block every PR:
+To avoid blocking on old backlog, publish `reachability-baseline.json` from the default branch and compare pull requests against that artifact. The PR report contains only new and worsened findings:
 
 ```bash
 reachability-advisor scan \

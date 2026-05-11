@@ -1,6 +1,6 @@
 # Roadmap
 
-## Stable v1.0 release baseline
+## v1.0 baseline
 
 - Local-first CLI.
 - CycloneDX JSON ingestion.
@@ -18,7 +18,7 @@
 
 ## v1.1 roadmap: quality, evidence, and CI adoption
 
-Goal: make the public repository easy to trust in CI. The scanner should stay local, deterministic, and explainable.
+Goal: make CI behavior reviewable from local artifacts. The scanner should stay local, deterministic, and explainable.
 
 Priority 1: CI quality gates
 
@@ -36,7 +36,7 @@ Priority 2: Source reachability coverage
 - Done: source coverage reports rule coverage, rule gaps, weak-source findings, and usable external evidence ratio.
 - Done: native adapters import Semgrep `dataflow_trace` taint paths and CodeQL SARIF `codeFlows` when package, purl, or vulnerability selectors are available.
 - Done: external source evidence reports artifact-only and unscoped selector records instead of silently ignoring them.
-- Done: `--analysis-profile production` makes external analyzer evidence and rendered deployment evidence the release-gate default.
+- Done: `--analysis-profile production` requires external analyzer evidence and rendered deployment evidence for release gates.
 - Add native adapters for more language-specific analyzer output when selectors are available.
 - Done: unknown source states are split into diagnostics for rule gaps, package-manager gaps, missing source roots, unsupported source roots, and unobserved imports.
 
@@ -58,7 +58,7 @@ Priority 4: Policy and baseline workflow
 
 - Publish a schema for runtime policy files.
 - Validate the example policy during release checks.
-- Done: stable default-branch baseline artifacts are generated with `scan --baseline-out`.
+- Done: default-branch baseline artifacts are generated with `scan --baseline-out`.
 - Done: `compare --baseline` emits PR deltas with only new and worsened findings.
 - Done: policy examples cover strict release gates, advisory PR mode, exception expiration, and backlog migration.
 

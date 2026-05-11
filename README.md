@@ -2,7 +2,7 @@
 
 Reachability Advisor ranks dependency vulnerabilities with deployment reachability evidence.
 
-The normal input set is:
+Release-gate inputs:
 
 - one CycloneDX SBOM per deployable artifact;
 - Grype JSON or normalized local vulnerability data from the same artifact;
@@ -28,13 +28,13 @@ Outputs:
 - rendered Kubernetes manifest coverage reports;
 - SBOM/source/Terraform mapping reports.
 
-Package status: **stable v1.0.0**.
+Package version: **v1.0.0**.
 License: **GNU GPL v3.0 or later**.
 
 ## Operating Rules
 
 1. The scanner is local. It does not upload SBOMs, source, Terraform plans, or vulnerability data.
-2. Terraform plan analysis is the primary deployment-context path.
+2. Terraform plan analysis is the release-gate deployment-context path.
 3. Rendered Kubernetes manifests add workload, Service, Ingress, and RBAC context for Kubernetes deployments.
 4. Semgrep, CodeQL/SARIF, govulncheck, or native source evidence is the production path for code reachability. Built-in source rules are fallback evidence.
 5. Source-only or HCL-static analysis is for early feedback, not release confidence.
@@ -93,7 +93,7 @@ See `docs/sbom_generation.md`.
 
 ## Quick start
 
-In production, generate vulnerability matches from the same SBOM with Grype:
+For release gates, generate vulnerability matches from the same SBOM with Grype:
 
 ```bash
 grype sbom:sboms/payments-api.cdx.json -o json > vulns/payments-api.grype.json
@@ -201,13 +201,13 @@ SBOM artifact
   -> score, tier, and outputs
 ```
 
-The mapper uses three guardrails:
+The mapper records three proof points:
 
-| Area | Improvement |
+| Area | What is recorded |
 |---|---|
-| SBOM identity | Reads metadata component properties and external references; supports artifact aliases. |
-| Artifact matching | Uses explicit image/reference/digest/repository-tag scoring and records the selected candidate source and strength. |
-| Source reachability | Uses vulnerability-aware rules and requires same-function input/sink evidence or a bounded handler-to-sink call path for `attacker_controlled`. |
+| SBOM identity | Metadata component properties, external references, and scan-time aliases. |
+| Artifact matching | Image/reference/digest/repository-tag match method plus selected candidate source and strength. |
+| Source reachability | Evidence state plus matched symbols, locations, dependency path, and source diagnostics when available. |
 
 Verify the logic with:
 
@@ -358,7 +358,7 @@ python scripts/run_complex_app_validation.py \
 ```
 
 Outputs are written to `outputs/external-complex/`, including schema-validated `benchmark.json` and `benchmark.md` for release-to-release drift checks.
-Current local snapshots:
+Local scale-test snapshot:
 
 - AWS Retail Store: 5 service SBOMs, 40 Grype matches, 40 findings, 24 remediation groups, 91 Terraform resources, and generated HTML graph.
 - Google Cloud Online Boutique: 10 service SBOMs, 38 Grype matches, 38 findings, 23 remediation groups, Kubernetes context with public frontend ingress and internal service hops, and generated HTML graph.
@@ -411,11 +411,11 @@ reachability-advisor compare \
   --fail-on-new-tier high
 ```
 
-`--baseline` reads the stable artifact written by `scan --baseline-out`. The PR delta JSON and Markdown include only new and worsened findings.
+`--baseline` reads the artifact written by `scan --baseline-out`. The PR delta JSON and Markdown include only new and worsened findings.
 
 ## IDE integration
 
-The `ide/vscode` directory contains a VS Code extension wrapper. It discovers local scan inputs, invokes the Python CLI, filters diagnostics by tier or baseline, and opens finding evidence on demand. Security-sensitive logic stays in the audited Python CLI.
+The `ide/vscode` directory contains a VS Code extension wrapper. It discovers local scan inputs, invokes the Python CLI, filters diagnostics by tier or baseline, and opens finding evidence on demand. Security-sensitive logic stays in the Python CLI.
 
 ## Supported evidence
 
@@ -435,7 +435,7 @@ The `ide/vscode` directory contains a VS Code extension wrapper. It discovers lo
 
 ## Import/export contract
 
-The release check runs an executable contract for the public import/export claims:
+The release check exercises the documented import and export paths:
 
 ```bash
 python scripts/validate_release.py
@@ -464,7 +464,7 @@ make package
 Current validation snapshot:
 
 ```text
-Ran 420 tests: OK
+Ran 423 tests: OK
 Coverage: 93%
 Coverage gate: 93% passed
 Fixture packs: 9 passed, 0 failed
