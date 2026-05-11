@@ -2,7 +2,7 @@
 
 ## Current gates
 
-- Unit and workflow tests: 342.
+- Unit and workflow tests: 349.
 - Coverage threshold: 93%.
 - Current measured coverage: 94% line/branch-aware coverage report.
 - Compile check: `python -m compileall`.
@@ -22,6 +22,7 @@
 - Thin IDE wrapper that delegates logic to the CLI.
 - Multi-cloud Terraform coverage is manifest-driven and auditable.
 - SBOM/source/Terraform mapping is exposed through `--mapping-out`.
+- Source analysis coverage is exposed through `--source-coverage-out`.
 - Unsupported Terraform resources are reported as visibility gaps instead of being silently ignored.
 
 ## Logic quality bar
@@ -34,10 +35,13 @@ The logic layer has tests for:
 - SBOM-to-source-root mapping reports.
 - Vulnerability-specific source reachability rules.
 - Custom reachability rule loading.
-- Same-file and direct handler-to-sink gating for `attacker_controlled` evidence.
+- Same-function and bounded handler-to-sink gating for `attacker_controlled` evidence.
+- CycloneDX dependency-graph evidence for imported parent dependencies.
+- External source evidence import from native JSON, Semgrep JSON, SARIF, and govulncheck-style JSONL.
+- Semgrep starter rule export from built-in and custom reachability rules.
 - Weaker rationale when input/entrypoint evidence appears in a different file.
 - Java/Spring, Node/Express/NestJS, Python/FastAPI/Chainlit/aiohttp, common SSRF/template/JWT/XML/deserialization/archive package families, and Go source evidence.
-- CLI generation of mapping, coverage, SARIF, diagnostics, Markdown, HTML, and annotations.
+- CLI generation of mapping, source coverage, Terraform coverage, SARIF, diagnostics, Markdown, HTML, and annotations.
 - Visual graph generation for public, internal, lateral, private, and Kubernetes public-ingress-to-internal-hop paths.
 - Generated output validation against repository JSON schemas through `scripts/validate_release.py`.
 
@@ -56,7 +60,7 @@ The Terraform layer has tests for:
 
 ## Fixture-pack quality bar
 
-Every Terraform fixture pack should validate and run through the fixture harness. The current packs assert:
+Every Terraform fixture pack must validate and run through the fixture harness. The current packs assert:
 
 - `resource_accounting_coverage == 1.0`;
 - `semantic_classification_coverage == 1.0`;

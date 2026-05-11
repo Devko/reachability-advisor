@@ -9,7 +9,7 @@ shows what was semantically understood and what remained a visibility gap.
 Design guarantees:
 * every resource in the plan is accounted for in coverage output;
 * unsupported or unclassified resources are reported, never silently ignored;
-* missing links are treated as unknown, not safe;
+* missing links are treated as unknown;
 * resource-type support is declared in ``TERRAFORM_COVERAGE_MANIFEST`` and tested.
 """
 
@@ -2508,7 +2508,7 @@ def coverage_report(resources: list[TerraformResource], artifacts: list[Artifact
         "visibility_gaps": visibility_gaps,
         "notes": [
             "100% resource accounting means every Terraform resource in the plan is represented in this report.",
-            "Semantic coverage is limited to the declared manifest; unclassified resources are visibility gaps, not safe states.",
+            "Semantic coverage is limited to the declared manifest; unclassified resources are visibility gaps.",
             "Opaque manifest wrappers such as Helm releases are classified as Kubernetes support resources but still require rendered manifest evidence for child workloads.",
             "Use source reachability and explicit context files for evidence that Terraform cannot infer from a static plan.",
         ],

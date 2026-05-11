@@ -13,6 +13,7 @@ PYTHONPATH=src python -m reachability_advisor scan \
   --vulns samples/vulnerabilities.json \
   --terraform-plan samples/tfplan-multicloud.json \
   --terraform-coverage-out outputs/terraform-coverage.json \
+  --source-coverage-out outputs/source-coverage.json \
   --mapping-out outputs/mapping.json \
   --source-root payments-api=samples/source/payments-api \
   --source-root notifier=samples/source/notifier \

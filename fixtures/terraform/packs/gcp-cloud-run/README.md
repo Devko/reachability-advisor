@@ -4,9 +4,9 @@ Provider: `gcp`
 
 Upstream/module reference: `GoogleCloudPlatform/cloud-run/google`
 
-This is a reduced and sanitized module-shaped fixture. It is designed to exercise Reachability Advisor's Terraform coverage and artifact matching, not to reproduce the upstream module.
+This reduced module-shaped fixture covers Cloud Run workload matching, public invoker IAM, service accounts, project IAM, Secret Manager, and domain mapping.
 
-Run just this pack:
+Run this pack:
 
 ```bash
 PYTHONPATH=src python -m reachability_advisor fixtures run --fixture gcp-cloud-run --out outputs/gcp-cloud-run-report.json

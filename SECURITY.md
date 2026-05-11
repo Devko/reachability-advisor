@@ -8,7 +8,7 @@ The current maintained version is `1.x`.
 
 Please report suspected vulnerabilities privately to the maintainers listed in `GOVERNANCE.md`. Do not open a public issue containing exploitable details until maintainers have assessed the report.
 
-A useful report includes:
+A report must include enough detail to reproduce and assess the issue:
 
 - affected version or commit;
 - reproduction steps;
@@ -26,5 +26,5 @@ In scope:
 
 Out of scope:
 
-- vulnerability results caused by intentionally wrong user-supplied intelligence files;
+- vulnerability results caused by deliberately wrong user-supplied intelligence files;
 - malicious source repositories that exploit unrelated tools in the user's pipeline.

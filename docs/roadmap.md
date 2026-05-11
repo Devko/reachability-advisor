@@ -5,10 +5,11 @@
 - Local-first CLI.
 - CycloneDX JSON ingestion.
 - Grype, local vulnerability intelligence, and OSV-style parsers.
-- Java, Node, Python, and Go source heuristics with direct handler-to-sink evidence.
-- Context JSON, Terraform plan context, and conservative HCL static context.
+- Java, Node, Python, and Go source heuristics with same-function and bounded handler-to-sink evidence.
+- CycloneDX dependency-graph source evidence and external evidence import for Semgrep, SARIF, and govulncheck-style output.
+- Terraform plan context, context JSON enrichment, and conservative HCL static fallback.
 - JSON, SARIF, diagnostics, Markdown, HTML graph, and annotation outputs.
-- Mapping reports, Terraform coverage reports, HCL audit reports, SBOM planning, and remediation groups.
+- Mapping reports, source coverage reports, Terraform coverage reports, HCL audit reports, SBOM planning, and remediation groups.
 - PR delta workflow.
 - Release validation against repository JSON schemas.
 - VS Code extension skeleton.
@@ -16,12 +17,12 @@
 
 ## v1.1 roadmap: CI adoption and policy hardening
 
-Goal: make the published GitHub repository easy to consume from production CI while keeping the scanner local-first and auditable.
+Goal: make the published GitHub repository straightforward to consume from production CI while keeping the scanner local and auditable.
 
 Priority 1: GitHub Actions consumption
 
 - Harden the composite action so external repositories can use the published action without checking out this repository as their application source.
-- Support multiple SBOMs, source-root mappings, artifact aliases, runtime policy, custom reachability rules, Terraform plan/source context, SARIF, diagnostics, HTML graph, mapping, and Terraform coverage outputs through action inputs.
+- Support multiple SBOMs, source-root mappings, artifact aliases, runtime policy, custom reachability rules, external source evidence, Terraform plan context, HCL static fallback, SARIF, diagnostics, HTML graph, mapping, source coverage, and Terraform coverage outputs through action inputs.
 - Expose stable action output paths so downstream workflow steps can upload SARIF and artifacts without duplicating path conventions.
 - Add an action usage example to the pipeline documentation.
 
@@ -36,15 +37,16 @@ Priority 3: Evidence coverage
 
 - Improve package-manager manifest coverage for Gradle, pnpm, yarn, Poetry, and Go modules.
 - Add more precise source diagnostics for package manager files and vulnerable call sites.
+- Add native adapters for richer Semgrep and CodeQL trace formats where selectors are available.
 - Add fixture packs for AWS Lambda, Azure App Service, GCP GKE, and Helm-heavy Kubernetes shapes.
 
-Priority 4: Baseline and developer workflow
+Priority 4: Baseline and PR workflow
 
 - Add a stable baseline artifact format for default-branch findings.
 - Provide a first-class workflow for comparing PR findings against a downloaded baseline artifact.
 - Keep the CLI output deterministic so teams can diff findings in code review.
 
-## Completed milestone: Multi-cloud Terraform developer context
+## Completed milestone: Multi-cloud Terraform context
 
 - AWS, Azure, GCP, and Kubernetes Terraform plan support.
 - Manifest-driven resource coverage.
@@ -72,7 +74,7 @@ Priority 4: Baseline and developer workflow
 - Conservative artifact identity matching with digest/repository/tag scores and reduced substring matching.
 - `--mapping-out` to inspect SBOM candidates, source roots, Terraform match scores, and warnings.
 - Vulnerability-aware source reachability rules.
-- Same-file and direct handler-to-sink requirement for `attacker_controlled` evidence.
+- Same-function and bounded handler-to-sink requirement for `attacker_controlled` evidence.
 - Custom reachability rule JSON.
 - Go import evidence plus common JWT/YAML sink hints.
 - Expanded test suite to 224 tests and raised the coverage gate to 93%.
@@ -87,18 +89,18 @@ Priority 4: Baseline and developer workflow
 - Linked IaC exposure inference instead of provider-wide public fallback for supported workload patterns.
 - Expanded test suite to 269 tests while keeping the coverage gate at 93%.
 
-## Post-v1 candidates
+## Post-v1 Candidates
 
-- Optional npm package wrapper for projects that want Node-native install ergonomics.
-- Optional pre-commit hook example for source-only advisory runs.
+- npm package wrapper for projects that want Node-native install ergonomics.
+- pre-commit hook example for source-only advisory runs.
 - Small public corpus for action-level workflow validation.
 
 ## Longer-term candidates
 
-- Optional language-server wrapper.
+- language-server wrapper.
 - Baseline cache format.
 - Community registry for source-reachability rules.
-- Optional call-graph plugin interface for projects that want deeper source reachability.
+- call-graph plugin interface for projects that want deeper source reachability.
 
 ## Out of scope for now
 

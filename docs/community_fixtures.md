@@ -1,10 +1,10 @@
 # Community Terraform Fixture Packs
 
-Reachability Advisor uses fixture packs to keep Terraform coverage reviewable and contributor-friendly. A fixture pack is a small, executable test case for a provider or module-shaped plan.
+Terraform fixture packs are executable test cases for provider and module-shaped plans. Each pack protects a specific resource graph and expected finding behavior.
 
 ## Why fixture packs exist
 
-The project is intended for CI and IDE workflows, not live cloud inventory. Terraform fixture packs let maintainers test common module outputs locally without cloud credentials. They also make coverage claims auditable: a pack either passes its expected assertions or it does not.
+Fixture packs let maintainers test common Terraform outputs locally without cloud credentials. A pack either passes its expected assertions or it does not.
 
 ## Current packs
 
@@ -47,4 +47,4 @@ fixtures/terraform/packs/<id>/
 7. Register the pack in `fixtures/terraform/index.json`.
 8. Run `make fixtures` and `make coverage`.
 
-Unsupported resources should remain visible as coverage gaps. Do not mark a fixture as passed by deleting realistic resources unless the README explains why the resource is intentionally out of scope.
+Unsupported resources must remain visible as coverage gaps. Do not delete realistic resources to make a pack pass unless the pack README states why the resource is out of scope.

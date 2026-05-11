@@ -39,7 +39,7 @@
         "reachabilityAdvisor.context": {
           "type": "string",
           "default": "",
-          "description": "Optional context JSON path relative to the workspace root."
+          "description": "Context JSON path relative to the workspace root."
         },
         "reachabilityAdvisor.sourceRootArtifact": {
           "type": "string",

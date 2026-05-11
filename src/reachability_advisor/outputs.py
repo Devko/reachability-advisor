@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .models import Finding, SourceLocation, Tier
+from .models import Finding, SourceLocation, Tier, reachability_label
 from .remediation import build_remediation_groups
 
 
@@ -156,7 +156,7 @@ def _finding_message(finding: Finding) -> str:
     return (
         f"{finding.vulnerability.id} in {finding.component.name}@{finding.component.version or 'unknown'} "
         f"is {finding.tier.value} (score {finding.score:.1f}); "
-        f"reachability={finding.source.reachability.value}; exposure={finding.context.exposure}; "
+        f"source={reachability_label(finding.source.reachability)}; exposure={finding.context.exposure}; "
         f"owner={finding.context.owner or 'unknown'}"
     )
 
@@ -170,7 +170,7 @@ def write_markdown_report(findings: list[Finding], path: str | Path, max_finding
         "",
         f"Generated at: {datetime.now(timezone.utc).isoformat()}",
         "",
-        "This report prioritizes dependency vulnerabilities using SBOM presence, source reachability hints, and optional deployment context. It does not prove exploitability and should not be used for automatic suppression without review.",
+        "This report prioritizes dependency vulnerabilities using SBOM presence, source reachability, Terraform deployment context, and policy state. It does not prove exploitability and must not be used for automatic suppression without review.",
         "",
         "## Remediation queue",
         "",
@@ -202,7 +202,7 @@ def _remediation_markdown(index: int, remediation: dict[str, Any]) -> list[str]:
         f"- Vulnerabilities grouped: `{remediation['vulnerability_count']}`",
         f"- Max score: `{float(remediation['max_score']):.1f}`; confidence: `{remediation['confidence']}`",
         f"- Owner: `{owner}`",
-        f"- Source signal: `{remediation['reachability']}`",
+        f"- Source signal: `{remediation.get('reachability_label', remediation['reachability'])}` (`{remediation['reachability']}`)",
         f"- Context: exposure=`{context['exposure']}`, environment=`{context['environment']}`, privilege=`{context['privilege']}`, criticality=`{context.get('criticality', 'unknown')}`",
     ]
     if context.get("iam_impacts"):
@@ -234,7 +234,7 @@ def _finding_markdown(index: int, finding: Finding) -> list[str]:
         f"- Component: `{finding.component.name}@{finding.component.version or 'unknown'}`",
         f"- Score: `{finding.score:.1f}`; confidence: `{finding.confidence.value}`",
         f"- Owner: `{owner}`",
-        f"- Source signal: `{finding.source.reachability.value}` ({finding.source.reason})",
+        f"- Source signal: `{reachability_label(finding.source.reachability)}` (`{finding.source.reachability.value}`) - {finding.source.reason}",
         f"- Context: exposure=`{finding.context.exposure}`, environment=`{finding.context.environment}`, privilege=`{finding.context.privilege}`, criticality=`{finding.context.criticality}`",
     ]
     if finding.context.iam_impacts:
@@ -286,7 +286,7 @@ def render_table(findings: list[Finding], limit: int = 20) -> str:
                 finding.artifact.name,
                 finding.component.name,
                 finding.vulnerability.id,
-                finding.source.reachability.value,
+                reachability_label(finding.source.reachability),
                 finding.context.owner or "unknown",
             )
         )
@@ -319,7 +319,7 @@ def explain_finding(data: dict[str, Any], key: str | None = None, artifact: str 
         f"Tier: `{selected['tier']}`; score: `{selected['score']}`; confidence: `{selected['confidence']}`",
         "",
         "## Evidence",
-        f"- Source reachability: `{selected['source_reachability']['state']}` - {selected['source_reachability']['reason']}",
+        f"- Source reachability: `{selected['source_reachability'].get('label', selected['source_reachability']['state'])}` (`{selected['source_reachability']['state']}`) - {selected['source_reachability']['reason']}",
         f"- Context: exposure=`{selected['context']['exposure']}`, environment=`{selected['context']['environment']}`, privilege=`{selected['context']['privilege']}`, criticality=`{selected['context'].get('criticality', 'unknown')}`",
     ]
     if selected["context"].get("iam_impacts"):

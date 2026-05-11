@@ -420,6 +420,7 @@ def _run_advisor(
     markdown_out = case_out / "summary.md"
     html_out = case_out / "reachability-graph.html"
     coverage_out = case_out / "terraform-coverage.json"
+    source_coverage_out = case_out / "source-coverage.json"
     mapping_out = case_out / "mapping.json"
     args = ["scan"]
     for row in workload_rows:
@@ -435,6 +436,8 @@ def _run_advisor(
             str(terraform_source),
             "--terraform-coverage-out",
             str(coverage_out),
+            "--source-coverage-out",
+            str(source_coverage_out),
             "--mapping-out",
             str(mapping_out),
             "--out",

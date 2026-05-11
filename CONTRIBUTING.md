@@ -1,11 +1,10 @@
 # Contributing
 
-Thank you for helping improve Reachability Advisor.
-
 ## Contribution rules
 
 - Use respectful communication and follow the Code of Conduct.
-- Keep the scanner local-first; do not add network calls to the core scan path.
+- Keep the scanner local; do not add network calls to the core scan path.
+- Treat Terraform plan analysis as a primary feature. New deployment-context behavior needs tests and documentation.
 - Do not add automatic suppression from weak evidence.
 - Add tests for new behavior.
 - Sign off commits using DCO:

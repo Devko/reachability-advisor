@@ -1,8 +1,8 @@
 # SBOM Generation and Artifact Identity
 
-Reachability Advisor consumes CycloneDX JSON SBOMs. It does not generate SBOMs itself in the scanner process; that keeps the CLI dependency-light and suitable for CI and IDE workflows. The `sbom-plan` command emits recommended commands that teams can copy into their own build or image pipeline.
+Reachability Advisor consumes CycloneDX JSON SBOMs. The scanner does not generate SBOMs during `scan`; SBOM generation belongs in the build or image pipeline. The `sbom-plan` command prints tool-specific commands for that pipeline.
 
-## Principle: one SBOM per deployable artifact
+## One SBOM Per Deployable Artifact
 
 Create one SBOM for each deployable unit that can appear in Terraform, Kubernetes, or runtime context.
 
@@ -16,7 +16,7 @@ Examples:
 | Node service | npm or image SBOM. |
 | Python service | environment/package SBOM, plus image SBOM when deployed as a container. |
 
-Runtime or image SBOMs are preferred for release gates because they describe what is actually deployed. Source or filesystem SBOMs are useful for early PR and IDE feedback.
+Use runtime or image SBOMs for release gates. Use source or filesystem SBOMs for early PR and IDE feedback. Preserve CycloneDX `dependencies` entries when the SBOM tool emits them; Reachability Advisor uses that graph to identify transitive packages reached through imported parent dependencies.
 
 ## Generate an SBOM plan
 
@@ -72,7 +72,7 @@ cyclonedx-py environment --of JSON -o sboms/worker.cdx.json
 
 ## Required metadata for reliable mapping
 
-The scanner can work from minimal SBOMs, but mapping quality improves sharply when the SBOM identifies the deployable artifact and its image reference.
+The scanner can parse minimal SBOMs, but Terraform mapping depends on artifact identity. Include the deployed image reference or digest whenever possible.
 
 Recommended CycloneDX metadata component shape:
 
@@ -98,7 +98,7 @@ Recommended CycloneDX metadata component shape:
 }
 ```
 
-Useful property names:
+Artifact metadata property names:
 
 | Property | Purpose |
 |---|---|

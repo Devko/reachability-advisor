@@ -1,6 +1,6 @@
-# Reachability Mapping Logic
+# Reachability Mapping
 
-This document explains how Reachability Advisor maps from an SBOM vulnerability to source-code evidence and optional Terraform deployment context.
+This document describes how Reachability Advisor maps an SBOM vulnerability to source evidence and Terraform deployment context.
 
 The short version:
 
@@ -12,7 +12,7 @@ SBOM artifact
   -> artifact identity candidates
   -> Terraform workload match
   -> exposure / identity / data context
-  -> explainable score and developer output
+  -> score, tier, and outputs
 ```
 
 ## Step 1: SBOM artifact identity
@@ -24,7 +24,7 @@ The SBOM loader extracts artifact identity from:
 3. `metadata.component.properties` such as `container:image`, `oci:image:ref`, `artifact:reference`, and `reachability:artifact_ref`;
 4. `metadata.component.externalReferences`, especially `distribution`, `container-image`, `vcs`, and source references.
 
-The mapping report exposes all candidates so a developer can see exactly what the scanner used.
+The mapping report exposes every candidate used by the scanner.
 
 ## Step 2: vulnerability-to-component matching
 
@@ -46,7 +46,7 @@ Version matching is conservative. If a vulnerability record provides `affected_v
 
 ## Step 3: source reachability
 
-Source reachability is vulnerability-aware. The analyzer receives the component and matched vulnerability, then selects a rule by ecosystem, package, and optional vulnerability ID.
+Source reachability is vulnerability-aware. The analyzer receives the component and matched vulnerability, then selects a rule by ecosystem, package, and vulnerability ID when available.
 
 States:
 
@@ -55,11 +55,16 @@ States:
 | `absent` | Reserved for explicit evidence that a package is not present in analyzed source or runtime scope. |
 | `unknown_due_to_no_rule` | Package is in the SBOM, but no package-specific source rule exists and generic import usage was not observed. |
 | `package_present` | Package is in the SBOM; no stronger source evidence was observed. |
+| `dependency_reachable` | CycloneDX dependency graph links the package to an imported parent dependency. |
 | `imported` | A matching import/require/use statement was observed. |
 | `function_reachable` | Import plus risky function/class usage was observed. |
-| `attacker_controlled` | Import, risky usage, and input/entrypoint evidence appear in the same file, or a direct static call path links an attacker-controlled handler to a sink function. |
+| `attacker_controlled` | Risky usage and input/entrypoint evidence appear in the same function, or a bounded static call path links an attacker-controlled handler to a sink function. |
 
-Same-file attacker control is still the conservative baseline. The analyzer also builds a lightweight function index and can promote direct handler-to-sink calls, including one-hop cross-file calls such as a route handler calling a service function that contains the vulnerable sink. Unlinked handlers elsewhere remain `function_reachable` with explicit rationale; the tool does not claim multi-hop dataflow proof.
+Reports show these as human labels: `absent from scanned source`, `no source rule`, `SBOM only`, `reachable through dependency graph`, `import observed`, `reachable vulnerable API`, and `request-controlled path`.
+
+Same-function attacker control is the baseline. The analyzer also builds one source index per artifact and can promote bounded handler-to-sink call paths, including cross-file calls such as a route handler calling a service function that calls a vulnerable sink wrapper. Unlinked handlers remain `function_reachable` with explicit rationale.
+
+Use `--source-coverage-out` to review files scanned, skipped files, state counts, dependency-graph evidence, and imported external evidence. Use `--source-evidence-in` to import stronger Semgrep, SARIF, govulncheck, or native evidence.
 
 Supported built-in rule families:
 
@@ -99,9 +104,9 @@ reachability-advisor scan \
   --reachability-rules reachability-rules.json
 ```
 
-## Step 5: Terraform deployment matching
+## Step 5: Terraform Deployment Matching
 
-Terraform context is optional. When supplied, the analyzer reads Terraform plan JSON and accounts for every resource. It then semantically classifies resources whose provider/type appears in the supported manifest.
+Terraform plan JSON is the primary deployment-context input. The analyzer reads the plan, accounts for every resource, and semantically classifies resources whose provider/type appears in the support manifest.
 
 Artifact-to-workload matching uses conservative evidence scores:
 
@@ -114,9 +119,9 @@ Artifact-to-workload matching uses conservative evidence scores:
 | `repository-leaf` | 58 | Last path segment matches. |
 | `name` / `artifact-name` | 45-52 | Weak name-only match. |
 
-Low-confidence matches are still visible. They do not silently become proof.
+Low-confidence matches remain visible and do not become high-confidence evidence.
 
-Terraform context also combines network reachability and IAM. The analyzer links workload identities to IAM policies where the plan exposes task roles, instance profiles, service accounts, managed identities, or role assignments. It records impact classes such as `data_access`, `network_control`, `iam_escalation`, and `compute_control`; those impacts raise context criticality only after considering whether the workload is public, external, internal, or private.
+Terraform context also combines network reachability and IAM. The analyzer links workload identities to IAM policies where the plan exposes task roles, instance profiles, service accounts, managed identities, or role assignments. It records impact classes such as `data_access`, `network_control`, `iam_escalation`, and `compute_control`. Those impacts raise context criticality only after considering whether the workload is public, external, internal, or private.
 
 ## Step 6: mapping report
 
@@ -141,4 +146,4 @@ The report includes:
 
 ## Non-goals
 
-Reachability Advisor does not prove exploitability, does not build a complete interprocedural call graph, and does not mark vulnerabilities as `not_affected`. It ranks developer work using transparent evidence and clearly reports uncertainty.
+Reachability Advisor does not prove exploitability, does not build a complete interprocedural call graph, and does not mark vulnerabilities as `not_affected`. It ranks remediation work and reports uncertainty.

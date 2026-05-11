@@ -1,6 +1,6 @@
 # Quickstart
 
-This guide shows the shortest path from demo data to developer-facing outputs.
+This guide runs the checked-in sample and shows the files to inspect. The sample includes SBOMs, vulnerability data, source roots, and a multi-cloud Terraform plan.
 
 ## 1. Install locally
 
@@ -10,7 +10,7 @@ python -m venv .venv
 python -m pip install -e .
 ```
 
-## 2. Run the demo scan
+## 2. Run the sample scan
 
 ```bash
 ./scripts/run_sample.sh
@@ -21,11 +21,12 @@ The command writes:
 - `outputs/findings.json` - canonical machine-readable finding set;
 - `outputs/findings.sarif` - CI/code-scanning output;
 - `outputs/diagnostics.json` - editor diagnostics output;
-- `outputs/pr-summary.md` - developer summary for pull requests;
+- `outputs/pr-summary.md` - pull request summary;
 - `outputs/reachability-graph.html` - searchable graph of assets, vulnerabilities, network/IAM context, code exposure, and findings;
 - `outputs/annotations.txt` - GitHub Actions workflow-command annotations;
-- `outputs/terraform-coverage.json` - AWS/Azure/GCP/Kubernetes Terraform accounting and semantic coverage report;
-- `outputs/mapping.json` - SBOM/source/Terraform mapping verification report.
+- `outputs/terraform-coverage.json` - Terraform resource accounting, semantic coverage, artifact matches, and visibility gaps;
+- `outputs/source-coverage.json` - source files scanned, skipped files, evidence states, dependency-graph evidence, and external evidence counts;
+- `outputs/mapping.json` - SBOM, source-root, and Terraform workload mapping.
 
 
 ## 3. Inspect mapping logic
@@ -42,7 +43,7 @@ for artifact in mapping['artifacts']:
 PY
 ```
 
-Use this report when a finding looks wrong. It shows artifact candidates, source roots, Terraform match methods/scores, and warnings.
+Use this report first when a finding looks wrong. It shows the artifact candidates, source root status, Terraform match methods, match scores, and warnings.
 
 ## 4. Inspect Terraform coverage
 
@@ -55,7 +56,7 @@ print(json.dumps(coverage['summary'], indent=2))
 PY
 ```
 
-The sample plan has 100% resource accounting, 100% semantic classification coverage, and 100% artifact matching across AWS, Azure, GCP, and Kubernetes resources.
+The sample plan has full resource accounting, full semantic classification coverage, and full artifact matching across AWS, Azure, GCP, and Kubernetes resources.
 
 ## 5. Explain one finding
 
@@ -67,7 +68,7 @@ reachability-advisor explain \
   --vulnerability CVE-2021-44228
 ```
 
-## 6. Fail a pipeline only on actionable risk
+## 6. Run a release-style gate
 
 ```bash
 reachability-advisor scan \
@@ -75,6 +76,7 @@ reachability-advisor scan \
   --vulns samples/vulnerabilities.json \
   --terraform-plan samples/tfplan-multicloud.json \
   --terraform-coverage-out outputs/terraform-coverage.json \
+  --source-coverage-out outputs/source-coverage.json \
   --mapping-out outputs/mapping.json \
   --source-root payments-api=samples/source/payments-api \
   --sarif-out outputs/findings.sarif \
@@ -93,7 +95,7 @@ reachability-advisor compare \
   --fail-on-new-tier high
 ```
 
-## 8. Run community Terraform fixture packs
+## 8. Run Terraform fixture packs
 
 ```bash
 ./scripts/run_fixture_packs.sh
@@ -104,7 +106,8 @@ The fixture harness writes:
 - `outputs/fixtures-validate.json` - fixture metadata and parseability validation;
 - `outputs/fixtures-report.json` - aggregate pass/fail report;
 - `outputs/fixtures/<pack>/findings.json` - per-fixture findings;
-- `outputs/fixtures/<pack>/terraform-coverage.json` - per-fixture Terraform coverage.
+- `outputs/fixtures/<pack>/terraform-coverage.json` - per-fixture Terraform coverage;
+- `outputs/fixtures/<pack>/source-coverage.json` - per-fixture source coverage.
 
 List packs:
 

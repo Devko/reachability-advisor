@@ -1,25 +1,27 @@
-# Terraform Multi-Cloud Coverage
+# Terraform Context and Coverage
 
-Reachability Advisor adds a provider-neutral Terraform context layer for developer pipelines and IDE integrations.
+Terraform is the primary deployment-context input for Reachability Advisor. It links SBOM artifacts to workloads, builds network paths, classifies exposure, and evaluates workload IAM impact.
 
-The intent is not to become a CNAPP or live cloud inventory product. The tool reads a local `terraform show -json` plan and extracts enough context to help developers prioritize dependency findings:
+The scanner reads a local `terraform show -json` plan and extracts:
 
 - whether an SBOM artifact appears to be deployed;
-- whether the deployment is likely public, external, internal, private, or unknown;
-- whether linked workload IAM permissions suggest limited, sensitive, or admin blast radius;
+- whether the deployment is public, external, internal, private, or unknown;
+- whether linked workload IAM permissions imply limited, sensitive, or admin blast radius;
 - whether tags or labels identify environment and owner;
-- which Terraform resources were semantically classified and which became visibility gaps.
+- which Terraform resources were classified and which remain visibility gaps.
+
+This is not a live cloud inventory or CNAPP. It is plan-based context for CI and release review.
 
 ## What "100% Terraform coverage" means here
 
-There are thousands of Terraform resource types and modules can create arbitrary provider shapes. A defensible pipeline/IDE tool should not pretend to understand all of them semantically.
+Terraform providers expose thousands of resource types, and modules can generate arbitrary resource graphs. Coverage reporting makes unsupported shapes explicit.
 
 This project uses two coverage concepts:
 
 1. **Resource accounting coverage:** every resource observed in the plan is parsed and represented in `--terraform-coverage-out`. This is expected to be `1.0` for every valid plan.
-2. **Semantic classification coverage:** the fraction of observed resources whose type appears in the declared support manifest below. Unsupported resources are reported as `visibility_gaps`, not treated as safe.
+2. **Semantic classification coverage:** the fraction of observed resources whose type appears in the support manifest. Unsupported resources are reported as `visibility_gaps`.
 
-The sample multi-cloud plan intentionally reaches `1.0` for both accounting and semantic coverage. Plans with unsupported resources still reach `1.0` accounting coverage and explicitly show gaps.
+The sample multi-cloud plan reaches `1.0` for both accounting and semantic coverage. Plans with unsupported resources still reach `1.0` accounting coverage and show gaps.
 
 ## Supported providers
 
@@ -32,11 +34,11 @@ The sample multi-cloud plan intentionally reaches `1.0` for both accounting and 
 
 | Class | Meaning |
 |---|---|
-| `workload` | Resource can help match an SBOM artifact to a deployed container, function, batch job, app, VM, or Kubernetes workload. |
+| `workload` | Resource can match an SBOM artifact to a deployed container, function, batch job, app, VM, or Kubernetes workload. |
 | `exposure` | Resource can indicate public/external/internal access. |
 | `identity` | Resource can indicate IAM or role blast radius. |
 | `sensitive_data` | Resource can indicate nearby secrets, storage, databases, or KMS assets. |
-| `supporting` | Resource is common in module plans and should be semantically accounted for even when it does not directly score a finding. |
+| `supporting` | Resource is common in module plans and is counted even when it does not directly score a finding. |
 
 The exact support manifest is generated from `reachability_advisor.terraform.TERRAFORM_COVERAGE_MANIFEST` and included in every coverage report.
 
@@ -77,9 +79,9 @@ terraform show -json tfplan.binary > tfplan.json
 }
 ```
 
-## Conservative behavior
+## Scoring Behavior
 
-- Missing Terraform context is `unknown`, not safe.
+- Missing Terraform context is `unknown`; it is not isolation evidence.
 - Unsupported resource types become visibility gaps.
 - Helm and kubectl manifest wrappers are semantically classified as Kubernetes support resources, but still emit `opaque_manifest_wrapper` gaps because rendered child workloads are not inspected.
 - Public exposure is only raised when a supported resource provides a clear public signal linked to the matched workload. A public resource elsewhere in the same provider plan does not create provider-wide public context.
@@ -94,14 +96,14 @@ terraform show -json tfplan.binary > tfplan.json
 - The tool never emits automatic `not_affected` claims.
 
 
-## Community fixture packs
+## Terraform Fixture Packs
 
 The fixture harness turns Terraform coverage into executable documentation. Each fixture pack includes:
 
 - a reduced `terraform show -json` plan;
 - one or more CycloneDX SBOMs;
 - local vulnerability intelligence;
-- optional source roots;
+- source roots;
 - expected coverage and finding assertions.
 
 Run all packs:
@@ -112,7 +114,7 @@ PYTHONPATH=src python -m reachability_advisor fixtures run \
   --output-dir outputs/fixtures
 ```
 
-The current packs cover AWS ECS/Fargate service module shapes, Azure Container Apps, GCP Cloud Run, and Kubernetes ingress workloads. They are sanitized and module-shaped: they model common Terraform resource graphs without vendoring third-party module source code.
+The current packs cover AWS ECS/Fargate service module shapes, Azure Container Apps, GCP Cloud Run, and Kubernetes ingress workloads. They are sanitized, module-shaped plans. They model common Terraform resource graphs without vendoring third-party module source code.
 
 ## Adding provider/module coverage
 
@@ -120,4 +122,4 @@ The current packs cover AWS ECS/Fargate service module shapes, Azure Container A
 2. Add a fixture pack under `fixtures/terraform/packs/<id>`.
 3. Include expected assertions for resource types, matched artifacts, and minimum finding tiers.
 4. Run `make fixtures` and `make coverage`.
-5. Document any unsupported resources as visibility gaps rather than treating them as safe.
+5. Document unsupported resources as visibility gaps.

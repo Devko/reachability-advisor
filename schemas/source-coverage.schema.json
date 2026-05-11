@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Reachability Advisor Source Coverage",
+  "type": "object",
+  "required": ["schema_version", "summary", "artifacts"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "summary": {
+      "type": "object",
+      "required": ["artifact_count", "files_scanned", "findings_analyzed", "source_evidence_coverage"],
+      "properties": {
+        "artifact_count": {"type": "integer", "minimum": 0},
+        "artifacts_with_source_root": {"type": "integer", "minimum": 0},
+        "files_scanned": {"type": "integer", "minimum": 0},
+        "files_skipped": {"type": "integer", "minimum": 0},
+        "findings_analyzed": {"type": "integer", "minimum": 0},
+        "findings_with_external_evidence": {"type": "integer", "minimum": 0},
+        "findings_with_dependency_graph_path": {"type": "integer", "minimum": 0},
+        "source_evidence_coverage": {"type": "number", "minimum": 0, "maximum": 1},
+        "external_evidence_records": {"type": "integer", "minimum": 0},
+        "states": {"type": "object"}
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["artifact", "files_scanned", "findings_analyzed", "states"],
+        "properties": {
+          "artifact": {"type": "string"},
+          "source_root": {"type": ["string", "null"]},
+          "source_root_exists": {"type": "boolean"},
+          "files_scanned": {"type": "integer", "minimum": 0},
+          "files_skipped": {"type": "integer", "minimum": 0},
+          "languages": {"type": "array", "items": {"type": "string"}},
+          "findings_analyzed": {"type": "integer", "minimum": 0},
+          "states": {"type": "object"},
+          "skipped_files": {"type": "array"}
+        }
+      }
+    },
+    "notes": {"type": "array", "items": {"type": "string"}}
+  }
+}

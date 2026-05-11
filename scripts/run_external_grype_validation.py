@@ -83,6 +83,7 @@ def _run_case(case: ValidationCase) -> dict[str, Any]:
     findings_out = OUT / f"{case.case_id}.findings.json"
     markdown_out = OUT / f"{case.case_id}.summary.md"
     coverage_out = OUT / f"{case.case_id}.terraform-coverage.json"
+    source_coverage_out = OUT / f"{case.case_id}.source-coverage.json"
     mapping_out = OUT / f"{case.case_id}.mapping.json"
     code = main(
         [
@@ -101,6 +102,8 @@ def _run_case(case: ValidationCase) -> dict[str, Any]:
             str(markdown_out),
             "--terraform-coverage-out",
             str(coverage_out),
+            "--source-coverage-out",
+            str(source_coverage_out),
             "--mapping-out",
             str(mapping_out),
             "--no-table",

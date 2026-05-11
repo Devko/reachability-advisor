@@ -1,6 +1,17 @@
 # Reachability Advisor
 
-Reachability Advisor is a **developer-first** dependency vulnerability prioritization tool for CI pipelines and IDEs. It reads CycloneDX SBOMs, Grype or local vulnerability intelligence, source roots, and optional Terraform deployment context, then produces actionable outputs for engineers:
+Reachability Advisor ranks dependency vulnerabilities with deployment reachability evidence.
+
+The normal input set is:
+
+- one CycloneDX SBOM per deployable artifact;
+- Grype JSON or normalized local vulnerability data from the same artifact;
+- source roots for code reachability;
+- Terraform plan JSON for workload, network, and IAM context.
+
+The scanner can run without Terraform, but that is a degraded mode. Without Terraform it cannot prove public exposure, lateral network paths, private isolation, workload IAM, or artifact-to-infrastructure mapping.
+
+Outputs:
 
 - ranked findings JSON;
 - remediation-grouped fix queue;
@@ -11,21 +22,22 @@ Reachability Advisor is a **developer-first** dependency vulnerability prioritiz
 - self-contained interactive HTML graph report;
 - PR delta comparison;
 - single-finding explanations;
+- source-analysis coverage reports;
 - Terraform multi-cloud coverage reports;
 - SBOM/source/Terraform mapping reports.
 
 Package status: **stable v1.0.0**.
 License: **GNU GPL v3.0 or later**.
 
-## Design principles
+## Operating Rules
 
-1. **Developer workflow first.** The tool should run in pull requests, local terminals, and editor integrations without requiring a cloud inventory platform.
-2. **Privacy by default.** No network calls are made by the scanner. Vulnerability intelligence is supplied by a file produced by another tool or internal process.
-3. **Conservative reachability.** Source and Terraform evidence improve prioritization, but weak evidence never auto-suppresses a vulnerability.
-4. **Explainable scoring.** Every score includes rationale that a developer can inspect.
-5. **Auditable mapping.** SBOM identity, source roots, and Terraform matches are visible through `--mapping-out`.
-6. **Auditable Terraform coverage.** Every Terraform resource in a valid plan is accounted for; unsupported resources are reported as visibility gaps.
-7. **Small, reviewable scope.** The focused edition intentionally avoids live cloud posture management, ticketing integrations, dashboards, secrets scanning, malware scanning, and DSPM.
+1. The scanner is local. It does not upload SBOMs, source, Terraform plans, or vulnerability data.
+2. Terraform plan analysis is the primary deployment-context path.
+3. Source-only or HCL-static analysis is for early feedback, not release confidence.
+4. Weak evidence never suppresses a vulnerability or marks it `not_affected`.
+5. Every score includes rationale and every artifact match is visible in `--mapping-out`.
+6. Every Terraform resource in a valid plan is represented in `--terraform-coverage-out`; unsupported resources are reported as visibility gaps.
+7. This project does not provide live cloud inventory, posture management, ticketing, dashboards, secrets scanning, malware scanning, or DSPM.
 
 ## Install
 
@@ -51,9 +63,9 @@ For local development without installation:
 PYTHONPATH=src python -m reachability_advisor version
 ```
 
-## How do we get SBOMs?
+## SBOM Inputs
 
-Reachability Advisor consumes CycloneDX JSON SBOMs; it does not generate them during the scan. Use the new planning command to get reproducible commands for your artifact:
+Reachability Advisor consumes CycloneDX JSON SBOMs; it does not generate them during the scan. Use `sbom-plan` to generate commands for a specific artifact:
 
 ```bash
 PYTHONPATH=src python -m reachability_advisor sbom-plan \
@@ -104,6 +116,7 @@ PYTHONPATH=src python -m reachability_advisor scan \
   --vulns samples/vulnerabilities.json \
   --terraform-plan samples/tfplan-multicloud.json \
   --terraform-coverage-out outputs/terraform-coverage.json \
+  --source-coverage-out outputs/source-coverage.json \
   --mapping-out outputs/mapping.json \
   --source-root payments-api=samples/source/payments-api \
   --source-root notifier=samples/source/notifier \
@@ -138,14 +151,14 @@ inventory-api / requests: high
 batch-worker / lodash: medium
   AWS ECS private security group + no detected ingress path + function-level source use
 
-batch-worker / left-pad: medium
+batch-worker / left-pad: low
   AWS ECS private security group + package present, but no source rule/import evidence
 
-reports-api / requests: high
+reports-api / requests: medium
   AWS ECS internal-only security group + read-only IAM + function-level source use
 ```
 
-The checked-in sample intentionally covers the main network, IAM, and code-exposure combinations:
+The checked-in sample covers the main network, IAM, and code-exposure combinations:
 
 | Case | Sample asset |
 |---|---|
@@ -160,10 +173,10 @@ The checked-in sample intentionally covers the main network, IAM, and code-expos
 
 | Code exposure case | Sample finding |
 |---|---|
-| Covered by attacker-controlled code path | `payments-api / log4j-core`, `orders-api / requests`, `audit-api / jackson-databind`, `inventory-api / requests` |
-| Vulnerable sink observed, no attacker-controlled path proven | `batch-worker / lodash`, `reports-api / requests` |
-| Package present, source usage not observed | `payments-api / guava`, `notifier / minimist` |
-| Package present, no source rule/import evidence | `batch-worker / left-pad` |
+| Request-controlled path | `payments-api / log4j-core`, `orders-api / requests`, `audit-api / jackson-databind`, `inventory-api / requests` |
+| Reachable vulnerable API, no attacker-controlled path proven | `batch-worker / lodash`, `reports-api / requests` |
+| SBOM only, source usage not observed | `payments-api / guava`, `notifier / minimist` |
+| No source rule/import evidence | `batch-worker / left-pad` |
 
 ## How mapping works
 
@@ -175,7 +188,7 @@ SBOM artifact
   -> artifact identity candidates
   -> Terraform workload match
   -> exposure / identity / data context
-  -> score and developer output
+  -> score, tier, and outputs
 ```
 
 The mapper uses three guardrails:
@@ -184,7 +197,7 @@ The mapper uses three guardrails:
 |---|---|
 | SBOM identity | Reads metadata component properties and external references; supports artifact aliases. |
 | Artifact matching | Uses explicit image/reference/digest/repository-tag scoring instead of permissive substring matching. |
-| Source reachability | Uses vulnerability-aware rules and requires same-file input evidence or a direct handler-to-sink call path for `attacker_controlled`. |
+| Source reachability | Uses vulnerability-aware rules and requires same-function input/sink evidence or a bounded handler-to-sink call path for `attacker_controlled`. |
 
 Verify the logic with:
 
@@ -221,6 +234,25 @@ reachability-advisor scan \
 
 See `docs/data_formats.md` for the rule JSON format.
 
+Generate starter Semgrep rules from the same rule set:
+
+```bash
+reachability-advisor export-semgrep-rules \
+  --reachability-rules reachability-rules.json \
+  --out semgrep-reachability.yml
+```
+
+Import stronger analyzer output when available:
+
+```bash
+reachability-advisor scan \
+  --sbom app.cdx.json \
+  --vulns vulnerabilities.json \
+  --source-root app=. \
+  --source-evidence-in semgrep-results.json \
+  --source-coverage-out source-coverage.json
+```
+
 ## Terraform coverage model
 
 Reachability Advisor supports AWS, Azure, GCP, and Kubernetes provider resources through a manifest-driven Terraform analyzer and executable community fixture packs.
@@ -229,8 +261,8 @@ Two coverage numbers are reported:
 
 | Metric | Meaning |
 |---|---|
-| `resource_accounting_coverage` | Every Terraform resource observed in the plan is represented in the coverage report. This should be `1.0` for valid plans. |
-| `semantic_classification_coverage` | Fraction of observed resources covered by the declared semantic manifest. Unsupported resources become `visibility_gaps`, not safe assumptions. |
+| `resource_accounting_coverage` | Every Terraform resource observed in the plan is represented in the coverage report. Valid plans are expected to report `1.0`. |
+| `semantic_classification_coverage` | Fraction of observed resources covered by the declared semantic manifest. Unsupported resources become `visibility_gaps`. |
 
 The sample multi-cloud plan reaches:
 
@@ -264,7 +296,7 @@ PYTHONPATH=src python -m reachability_advisor fixtures run \
   --output-dir outputs/fixtures
 ```
 
-The fixture packs assert `1.0` resource accounting, semantic classification, and artifact matching for their included resources. Unsupported resources and opaque rendered-manifest wrappers remain visibility gaps, not safe assumptions.
+The fixture packs assert `1.0` resource accounting, semantic classification, and artifact matching for their included resources. Unsupported resources and opaque rendered-manifest wrappers remain visibility gaps.
 
 
 ## Real-world Terraform validation
@@ -278,7 +310,9 @@ PYTHONPATH=src python -m reachability_advisor hcl-audit \
   --markdown-out outputs/hcl-audit.md
 ```
 
-`hcl-audit` accounts for `.tf` resources and modules, classifies known AWS/Azure/GCP/Kubernetes resource types, resolves simple literal variable defaults and `.tfvars` assignments, extracts simple image/exposure/identity literals, and reports unresolved variables, modules, or opaque Helm/kubectl manifest wrappers as visibility gaps. For release gates, prefer `--terraform-plan`; for early PR/IDE or open-source repository validation, use `--terraform-source` or `hcl-audit`.
+`hcl-audit` accounts for `.tf` resources and modules, classifies known AWS/Azure/GCP/Kubernetes resource types, resolves simple literal variable defaults and `.tfvars` assignments, extracts simple image/exposure/identity literals, and reports unresolved variables, modules, or opaque Helm/kubectl manifest wrappers as visibility gaps.
+
+Use `--terraform-plan` for release gates. Use `--terraform-source` or `hcl-audit` only when a plan is not available.
 
 A curated external corpus is in `external_corpus/popular_terraform_projects.json`. In a network-enabled environment:
 
@@ -296,7 +330,7 @@ python scripts/run_external_grype_validation.py
 
 That summary currently covers Petclinic, the AWS ECS demo backend, and the Azure Chainlit app.
 
-For larger end-to-end proof, run the complex app harness. It generates one SBOM and Grype report per service, merges vulnerability matches with artifact scope, runs source plus IaC/context analysis together, and emits the HTML graph. The corpus currently includes AWS Retail Store and Google Cloud Online Boutique:
+For scale validation, run the complex app harness. It generates one SBOM and Grype report per service, merges vulnerability matches with artifact scope, runs source plus Terraform/Kubernetes context analysis, and emits the HTML graph. The corpus currently includes AWS Retail Store and Google Cloud Online Boutique:
 
 ```bash
 python scripts/run_complex_app_validation.py \
@@ -312,7 +346,7 @@ Current local snapshots:
 
 ## GitHub Actions pipeline
 
-See [docs/pipeline.md](docs/pipeline.md) for a complete GitHub Actions example using GitHub-hosted runners. The workflow generates CycloneDX SBOMs and Grype vulnerability JSON, runs Reachability Advisor, uploads SARIF, stores mapping/Terraform/HTML artifacts, and publishes a Markdown summary to the job page.
+See [docs/pipeline.md](docs/pipeline.md) for a complete GitHub Actions example using GitHub-hosted runners. The workflow generates CycloneDX SBOMs and Grype vulnerability JSON, runs Reachability Advisor, uploads SARIF, stores mapping/source-coverage/Terraform/HTML artifacts, and publishes a Markdown summary to the job page.
 
 For repositories that want to consume the published action directly:
 
@@ -333,6 +367,7 @@ reachability-advisor scan \
   --vulns vulnerabilities.json \
   --terraform-plan tfplan.json \
   --terraform-coverage-out terraform-coverage.json \
+  --source-coverage-out source-coverage.json \
   --mapping-out mapping.json \
   --source-root app=. \
   --sarif-out reachability.sarif \
@@ -354,7 +389,7 @@ reachability-advisor compare \
 
 ## IDE integration
 
-The `ide/vscode` directory contains a minimal VS Code extension skeleton. It invokes the CLI, reads `--diagnostics-out`, and places diagnostics in the editor. The extension is intentionally small so the security-sensitive logic stays in the audited Python CLI.
+The `ide/vscode` directory contains a minimal VS Code extension skeleton. It invokes the CLI, reads `--diagnostics-out`, and places diagnostics in the editor. Security-sensitive logic stays in the audited Python CLI.
 
 ## Supported evidence
 
@@ -363,11 +398,12 @@ The `ide/vscode` directory contains a minimal VS Code extension skeleton. It inv
 | SBOM | CycloneDX JSON |
 | SBOM acquisition support | `sbom-plan` command with Syft, Trivy, Maven, npm, and Python suggestions |
 | Vulnerability input | Grype JSON, local JSON, and small OSV-Scanner-style JSON |
-| Source reachability | Java/Maven, Node/npm, Python/PyPI, and Go rules with direct same-file and one-hop handler-to-sink evidence |
-| Custom source rules | `--reachability-rules` JSON |
-| Terraform context | AWS, Azure, GCP, and Kubernetes provider plan/source hints with coverage reporting and linked workload exposure inference |
-| Context JSON | Optional explicit context keyed by artifact name |
-| Outputs | JSON with remediation groups and raw findings, SARIF, diagnostics JSON, Markdown, interactive HTML, annotations, Terraform coverage JSON, mapping JSON |
+| Source reachability | Java/Maven, Node/npm, Python/PyPI, and Go rules with same-function input/sink evidence, bounded handler-to-sink paths, and CycloneDX dependency-graph evidence |
+| Custom source rules | `--reachability-rules` JSON and `export-semgrep-rules` starter YAML |
+| External source evidence | `--source-evidence-in` for Reachability Advisor JSON, Semgrep JSON, SARIF, and govulncheck JSONL |
+| Terraform context | Primary deployment context. AWS, Azure, GCP, and Kubernetes plan/source support with coverage reporting, artifact matching, network graphing, and IAM impact classification |
+| Context JSON | Explicit override/enrichment keyed by artifact name |
+| Outputs | JSON with remediation groups and raw findings, SARIF, diagnostics JSON, Markdown, interactive HTML, annotations, Terraform coverage JSON, source coverage JSON, mapping JSON |
 
 ## Run quality gates
 
@@ -384,7 +420,7 @@ make package
 Current validation snapshot:
 
 ```text
-Ran 342 tests: OK
+Ran 349 tests: OK
 Coverage: 94%
 Coverage gate: 93% passed
 Fixture packs: 4 passed, 0 failed
@@ -408,4 +444,4 @@ action.yml                 Composite GitHub Action wrapper
 
 ## Safety boundary
 
-Reachability Advisor is a prioritization aid. It does **not** prove exploitability, does **not** automatically mark findings as not affected, and does **not** replace secure engineering review. Its job is to reduce alert fatigue by putting the most actionable findings at the top of the developer workflow.
+Reachability Advisor prioritizes vulnerability remediation. It does not prove exploitability, does not mark findings as not affected, and does not replace security review. It ranks work from SBOM, vulnerability, source, Terraform network, and IAM evidence.

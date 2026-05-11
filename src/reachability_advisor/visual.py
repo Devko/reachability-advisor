@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .models import Finding
+from .models import Finding, reachability_label
 from .remediation import build_remediation_groups
 
 
@@ -82,7 +82,7 @@ def _visual_payload(findings: list[Finding], metadata: dict[str, Any] | None = N
             "cvss": vulnerability.get("cvss"),
             "knownExploited": bool(vulnerability.get("known_exploited")),
             "reachability": source.get("state") or "unknown",
-            "codeExposure": _code_exposure_label(source.get("state") or "unknown"),
+            "codeExposure": _code_exposure_label(source),
             "codeExposureDetail": _code_exposure_detail(source.get("state") or "unknown"),
             "exposure": context.get("exposure") or "unknown",
             "privilege": context.get("privilege") or "unknown",
@@ -143,7 +143,7 @@ def _raise_asset(asset: dict[str, Any], finding: dict[str, Any]) -> None:
     _append_unique(asset["criticalities"], context.get("criticality") or "unknown")
     _append_unique(asset["environments"], context.get("environment") or "unknown")
     _append_unique(asset["sourceStates"], source.get("state") or "unknown")
-    _append_unique(asset["codeExposures"], _code_exposure_label(source.get("state") or "unknown"))
+    _append_unique(asset["codeExposures"], _code_exposure_label(source))
     for impact in context.get("iam_impacts") or []:
         _append_unique(asset["iamImpacts"], impact)
     for item in context.get("evidence") or []:
@@ -347,21 +347,14 @@ def _fallback_path_summary(exposure: str) -> str:
     return "The supplied context does not prove a network entry path."
 
 
-def _code_exposure_label(state: str) -> str:
-    state = str(state or "unknown").lower()
-    if state == "attacker_controlled":
-        return "covered"
-    if state == "function_reachable":
-        return "reachable sink"
-    if state == "imported":
-        return "import only"
-    if state == "unknown_due_to_no_rule":
-        return "no rule"
-    if state == "package_present":
-        return "not observed"
-    if state == "absent":
-        return "absent"
-    return "unknown"
+def _code_exposure_label(source: dict[str, Any] | str) -> str:
+    if isinstance(source, dict):
+        if source.get("label"):
+            return str(source["label"])
+        state = source.get("state") or "unknown"
+    else:
+        state = source
+    return reachability_label(str(state or "unknown"))
 
 
 def _code_exposure_detail(state: str) -> str:
@@ -372,6 +365,8 @@ def _code_exposure_detail(state: str) -> str:
         return "Vulnerable package usage was observed, but no attacker-controlled entry path was proven."
     if state == "imported":
         return "The package is imported, but no vulnerable sink pattern was observed."
+    if state == "dependency_reachable":
+        return "The package is reached through the SBOM dependency graph from an imported parent dependency."
     if state == "unknown_due_to_no_rule":
         return "No package-specific source rule exists and generic import evidence was not observed."
     if state == "package_present":
@@ -653,9 +648,9 @@ label.check input {
 .chip.medium { background: #fef3c7; color: #92400e; }
 .chip.low { background: #dbeafe; color: #1e40af; }
 .chip.informational { background: #e2e8f0; color: #334155; }
-.chip.covered { background: #dcfce7; color: #166534; }
-.chip.reachable-sink, .chip.import-only { background: #fef3c7; color: #92400e; }
-.chip.not-observed, .chip.no-rule, .chip.absent { background: #e2e8f0; color: #334155; }
+.chip.request-controlled-path { background: #dcfce7; color: #166534; }
+.chip.reachable-vulnerable-api, .chip.import-observed, .chip.reachable-through-dependency-graph { background: #fef3c7; color: #92400e; }
+.chip.sbom-only, .chip.no-source-rule, .chip.absent-from-scanned-source { background: #e2e8f0; color: #334155; }
 .chip.score, .chip.count, .chip.paths { background: #eef2f7; color: #344054; }
 .card.urgent { border-left-color: var(--urgent); }
 .card.high { border-left-color: var(--high); }
@@ -1249,7 +1244,7 @@ function renderFindingList(findings) {
     title.append(chip);
     const meta = document.createElement("div");
     meta.className = "item-meta";
-    meta.textContent = `${finding.artifact.name} | code ${codeExposureFromState((finding.source_reachability || {}).state)} | source ${(finding.source_reachability || {}).state} | exposure ${(finding.context || {}).exposure || "unknown"} | privilege ${(finding.context || {}).privilege || "unknown"}`;
+    meta.textContent = `${finding.artifact.name} | code ${codeExposureFromState(finding.source_reachability || {})} | source ${(finding.source_reachability || {}).state} | exposure ${(finding.context || {}).exposure || "unknown"} | privilege ${(finding.context || {}).privilege || "unknown"}`;
     item.append(title, meta);
     return item;
   }));
@@ -1313,14 +1308,17 @@ function renderDetails(datum) {
   details.replaceChildren(section);
 }
 
-function codeExposureFromState(state) {
-  if (state === "attacker_controlled") return "covered";
-  if (state === "function_reachable") return "reachable sink";
-  if (state === "imported") return "import only";
-  if (state === "unknown_due_to_no_rule") return "no rule";
-  if (state === "package_present") return "not observed";
-  if (state === "absent") return "absent";
-  return "unknown";
+function codeExposureFromState(source) {
+  const state = typeof source === "object" ? source.state : source;
+  if (source && typeof source === "object" && source.label) return source.label;
+  if (state === "attacker_controlled") return "request-controlled path";
+  if (state === "function_reachable") return "reachable vulnerable API";
+  if (state === "dependency_reachable") return "reachable through dependency graph";
+  if (state === "imported") return "import observed";
+  if (state === "unknown_due_to_no_rule") return "no source rule";
+  if (state === "package_present") return "SBOM only";
+  if (state === "absent") return "absent from scanned source";
+  return "unknown source reachability";
 }
 
 function heading(value) {

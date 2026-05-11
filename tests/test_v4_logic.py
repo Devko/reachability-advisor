@@ -14,10 +14,10 @@ from reachability_advisor.artifacts import (
 )
 from reachability_advisor.cli import main
 from reachability_advisor.mapping import build_mapping_report
-from reachability_advisor.models import Artifact, Component, Reachability, VulnerabilityRecord
+from reachability_advisor.models import Artifact, Component, Reachability, SbomDocument, VulnerabilityRecord
 from reachability_advisor.sbom import load_sbom
 from reachability_advisor.sbom_plan import recommend_sbom_commands, render_sbom_plan_markdown, write_sbom_plan_json
-from reachability_advisor.source import analyze_component_source, load_reachability_rules
+from reachability_advisor.source import analyze_component_source, load_external_source_evidence, load_reachability_rules
 from reachability_advisor.terraform import TerraformAnalyzer, coverage_report, extract_resources, image_matches
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -188,6 +188,20 @@ class SourceReachabilityV4Tests(unittest.TestCase):
         self.assertEqual(evidence.reachability, Reachability.FUNCTION_REACHABLE)
         self.assertIn("elsewhere", evidence.reason)
 
+    def test_unrelated_entrypoint_in_same_file_does_not_become_attacker_controlled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Controller.java").write_text(
+                "import org.apache.logging.log4j.LogManager;\n"
+                "class C {\n"
+                "  void logInternal(String value){ LogManager.getLogger(C.class).info(value); }\n"
+                "  @PostMapping(\"/x\") void route(@RequestBody String body){ String ignored = body; }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            evidence = analyze_component_source(self._log4j_component(), root, self._log4j_vuln())
+        self.assertEqual(evidence.reachability, Reachability.FUNCTION_REACHABLE)
+
     def test_import_and_function_in_different_files_is_low_confidence_function_reachable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -236,6 +250,20 @@ class SourceReachabilityV4Tests(unittest.TestCase):
         self.assertEqual(evidence.reachability, Reachability.ATTACKER_CONTROLLED)
         self.assertIn("direct source call path", evidence.reason)
         self.assertTrue(any(symbol.startswith("call_path:") for symbol in evidence.matched_symbols))
+
+    def test_python_multi_hop_handler_to_sink_is_attacker_controlled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "api.py").write_text(
+                "from fastapi import FastAPI, Request\nfrom service import load\n"
+                "app = FastAPI()\n@app.get('/report')\nasync def report(request: Request):\n    return load(request.query_params['url'])\n",
+                encoding="utf-8",
+            )
+            (root / "service.py").write_text("from client import fetch_report\n\ndef load(url):\n    return fetch_report(url)\n", encoding="utf-8")
+            (root / "client.py").write_text("import requests\n\ndef fetch_report(url):\n    return requests.get(url, timeout=2).text\n", encoding="utf-8")
+            evidence = analyze_component_source(Component(name="requests", purl="pkg:pypi/requests@2.19.0"), root)
+        self.assertEqual(evidence.reachability, Reachability.ATTACKER_CONTROLLED)
+        self.assertIn("report->load->fetch_report", " ".join(evidence.matched_symbols))
 
     def test_javascript_route_to_local_sink_is_attacker_controlled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -324,6 +352,18 @@ class SourceReachabilityV4Tests(unittest.TestCase):
             evidence = analyze_component_source(component, root)
         self.assertEqual(evidence.reachability, Reachability.PACKAGE_PRESENT)
 
+    def test_dependency_graph_parent_import_marks_transitive_component_reachable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "app.py").write_text("import parentpkg\nparentpkg.run()\n", encoding="utf-8")
+            artifact = Artifact(name="app", bom_ref="app-ref")
+            parent = Component(name="parentpkg", purl="pkg:pypi/parentpkg@1.0.0", bom_ref="parent-ref")
+            child = Component(name="childlib", purl="pkg:pypi/childlib@1.0.0", bom_ref="child-ref")
+            sbom = SbomDocument(path=root / "bom.json", artifact=artifact, components=[parent, child], dependencies={"app-ref": ["parent-ref"], "parent-ref": ["child-ref"]})
+            evidence = analyze_component_source(child, root, sbom=sbom)
+        self.assertEqual(evidence.reachability, Reachability.DEPENDENCY_REACHABLE)
+        self.assertEqual(evidence.dependency_path, ["app", "parentpkg", "childlib"])
+
     def test_custom_rule_file_can_define_vulnerability_specific_sink(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -407,6 +447,137 @@ class MappingAndSbomPlanTests(unittest.TestCase):
         self.assertEqual(report["summary"]["artifact_count"], 1)
         self.assertTrue(report["artifacts"][0]["terraform_matched"])
         self.assertFalse(report["artifacts"][0]["mapping_warnings"])
+
+    def test_scan_writes_source_coverage_and_accepts_external_source_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sbom = root / "bom.json"
+            vulns = root / "vulns.json"
+            source = root / "src"
+            source.mkdir()
+            out = root / "findings.json"
+            coverage = root / "source-coverage.json"
+            evidence = root / "source-evidence.json"
+            sbom.write_text(
+                json.dumps(
+                    {
+                        "bomFormat": "CycloneDX",
+                        "metadata": {"component": {"name": "app"}},
+                        "components": [{"name": "left-pad", "version": "1.0.0", "purl": "pkg:npm/left-pad@1.0.0"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            vulns.write_text(json.dumps({"vulnerabilities": [{"id": "GHSA-leftpad", "package": {"name": "left-pad"}}]}), encoding="utf-8")
+            (source / "index.js").write_text("console.log('no source match');\n", encoding="utf-8")
+            evidence.write_text(
+                json.dumps(
+                    {
+                        "evidence": [
+                            {
+                                "artifact": "app",
+                                "component": "left-pad",
+                                "vulnerability": "GHSA-leftpad",
+                                "state": "attacker_controlled",
+                                "confidence": "high",
+                                "reason": "semgrep taint trace",
+                                "tool": "semgrep",
+                                "locations": [{"path": str(source / "index.js"), "line": 1}],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            code = main(
+                [
+                    "scan",
+                    "--sbom",
+                    str(sbom),
+                    "--vulns",
+                    str(vulns),
+                    "--source-root",
+                    f"app={source}",
+                    "--source-evidence-in",
+                    str(evidence),
+                    "--out",
+                    str(out),
+                    "--source-coverage-out",
+                    str(coverage),
+                    "--no-table",
+                ]
+            )
+            self.assertEqual(code, 0)
+            findings = json.loads(out.read_text(encoding="utf-8"))
+            self.assertEqual(findings["findings"][0]["source_reachability"]["state"], "attacker_controlled")
+            self.assertEqual(findings["findings"][0]["source_reachability"]["evidence_source"], "semgrep")
+            report = json.loads(coverage.read_text(encoding="utf-8"))
+            self.assertEqual(report["summary"]["external_evidence_records"], 1)
+
+    def test_external_source_evidence_purl_requires_component_purl_match(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "source-evidence.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "evidence": [
+                            {
+                                "purl": "pkg:npm/left-pad@1.0.0",
+                                "state": "attacker_controlled",
+                                "confidence": "high",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            store = load_external_source_evidence([path])
+        vuln = VulnerabilityRecord(id="GHSA-leftpad", package_name="left-pad")
+        self.assertIsNone(store.best_for("app", Component(name="left-pad"), vuln))
+        self.assertIsNotNone(store.best_for("app", Component(name="left-pad", purl="pkg:npm/left-pad@1.0.0"), vuln))
+
+    def test_semgrep_source_evidence_preserves_purl_selector(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "semgrep.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "results": [
+                            {
+                                "check_id": "reachability.test",
+                                "path": "src/index.js",
+                                "start": {"line": 1, "col": 1},
+                                "extra": {
+                                    "message": "taint trace",
+                                    "metadata": {
+                                        "reachability_advisor": {
+                                            "purl": "pkg:npm/left-pad@1.0.0",
+                                            "state": "attacker_controlled",
+                                            "confidence": "high",
+                                        }
+                                    },
+                                },
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            store = load_external_source_evidence([path])
+        vuln = VulnerabilityRecord(id="GHSA-other", package_name="left-pad")
+        evidence = store.best_for("app", Component(name="left-pad", purl="pkg:npm/left-pad@1.0.0"), vuln)
+        self.assertIsNotNone(evidence)
+        assert evidence is not None
+        self.assertEqual(evidence.evidence_source, "semgrep")
+
+    def test_export_semgrep_rules_command_writes_yaml(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "rules.yml"
+            code = main(["export-semgrep-rules", "--out", str(out)])
+            text = out.read_text(encoding="utf-8")
+        self.assertEqual(code, 0)
+        self.assertIn("reachability.npm.axios", text)
+        self.assertIn("reachability_advisor", text)
 
     def test_mapping_report_warns_when_no_strong_artifact_reference(self) -> None:
         sbom = load_sbom(ROOT / "samples/sboms/payments-api.cdx.json")

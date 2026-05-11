@@ -28,6 +28,7 @@ jobs:
             --vulns samples/vulnerabilities.json \
             --terraform-plan samples/tfplan-multicloud.json \
             --terraform-coverage-out outputs/terraform-coverage.json \
+            --source-coverage-out outputs/source-coverage.json \
             --source-root payments-api=samples/source/payments-api \
             --source-root notifier=samples/source/notifier \
             --source-root orders-api=samples/source/orders-api \

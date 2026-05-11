@@ -3,7 +3,7 @@
 Fixture packs make multi-cloud Terraform coverage reproducible without requiring
 cloud credentials or live infrastructure.  A pack contains a reduced
 ``terraform show -json`` plan, one or more SBOMs, vulnerability intelligence,
-optional source roots, and explicit expectations.  The scanner treats fixtures
+source roots, and explicit expectations.  The scanner treats fixtures
 as executable documentation: maintainers can add a pack for a real-world module
 shape, run it in CI, and see whether artifact matching, coverage accounting,
 and finding prioritization still behave as expected.
@@ -18,7 +18,7 @@ from typing import Any
 
 from .models import Tier
 from .sbom import load_sboms
-from .scoring import generate_findings
+from .scoring import generate_findings_with_source_report
 from .source import parse_source_roots
 from .terraform import TerraformContextError, analyze_terraform_plan
 from .vulnerability import load_vulnerabilities
@@ -188,7 +188,7 @@ def run_fixture_pack(pack: FixturePack, output_dir: str | Path | None = None) ->
     source_args = [f"{artifact}={path}" for artifact, path in pack.source_roots.items()]
     source_roots = parse_source_roots(source_args)
     terraform_analysis = analyze_terraform_plan(pack.plan, [sbom.artifact for sbom in sboms])
-    findings = generate_findings(sboms, vulnerabilities, source_roots, terraform_analysis.contexts)
+    findings, source_coverage = generate_findings_with_source_report(sboms, vulnerabilities, source_roots, terraform_analysis.contexts)
     assertions = evaluate_fixture_expectations(pack, findings, terraform_analysis.coverage)
     status = "passed" if not assertions["failed"] else "failed"
     report = _pack_report(
@@ -204,6 +204,7 @@ def run_fixture_pack(pack: FixturePack, output_dir: str | Path | None = None) ->
         out_root.mkdir(parents=True, exist_ok=True)
         (out_root / "findings.json").write_text(json.dumps({"findings": report["findings"]}, indent=2), encoding="utf-8")
         (out_root / "terraform-coverage.json").write_text(json.dumps(terraform_analysis.coverage, indent=2), encoding="utf-8")
+        (out_root / "source-coverage.json").write_text(json.dumps(source_coverage, indent=2), encoding="utf-8")
         (out_root / "fixture-report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report
 

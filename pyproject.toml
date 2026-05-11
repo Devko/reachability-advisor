@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "reachability-advisor"
 version = "1.0.0"
-description = "Developer-first reachability-aware dependency vulnerability prioritization for CI pipelines and IDEs."
+description = "Dependency vulnerability prioritization with source, Terraform, network, and IAM context."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "GPL-3.0-or-later"

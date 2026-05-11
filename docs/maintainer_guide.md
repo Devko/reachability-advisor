@@ -2,7 +2,7 @@
 
 ## Release criteria
 
-A release should meet these gates:
+A release must meet these gates:
 
 - `make compile` passes.
 - `make test` passes.
@@ -20,7 +20,9 @@ A release should meet these gates:
 1. Add a `ReachabilityRule` to `src/reachability_advisor/source.py`.
 2. Add a sample source fixture.
 3. Add tests for import-only, function-reachable, and attacker-controlled cases where applicable.
-4. Document the limitation in `docs/algorithms.md`.
+4. Verify same-function or bounded call-path evidence before expecting `attacker_controlled`.
+5. Export Semgrep starter rules with `export-semgrep-rules` when the rule should be reusable outside the built-in analyzer.
+6. Document the limitation in `docs/algorithms.md`.
 
 ## Adding a vulnerability adapter
 
@@ -31,17 +33,17 @@ A release should meet these gates:
 
 ## Project governance
 
-The repository uses GNU GPL v3.0 or later for code and DCO sign-off for contributions. Maintainers should keep releases small, documented, and reproducible through the local quality gates.
+The repository uses GNU GPL v3.0 or later for code and DCO sign-off for contributions. Releases must be documented and reproducible through the local quality gates.
 
 
 ## Adding a Terraform fixture pack
 
 1. Create `fixtures/terraform/packs/<id>/fixture.json`.
 2. Add a reduced `tfplan.json` generated from or shaped like `terraform show -json`.
-3. Add CycloneDX SBOMs and optional source roots for the artifact being matched.
+3. Add CycloneDX SBOMs and source roots for the artifact being matched.
 4. Declare expected coverage and finding assertions in `fixture.json`.
 5. Register the pack in `fixtures/terraform/index.json`.
 6. Run `make fixtures` and `make coverage`.
 7. Add or update docs when the pack introduces a new provider, resource category, or scanner limitation.
 
-Fixture packs should be sanitized and should not vendor third-party Terraform module source code.
+Fixture packs must be sanitized and must not vendor third-party Terraform module source code.

@@ -1,9 +1,9 @@
 """SBOM generation planning for developer workflows.
 
 The scanner intentionally does not shell out to SBOM generators.  Instead it can
-produce a pinned, reviewable command plan that teams can copy into CI and adapt
-to their ecosystem.  This keeps the scanner dependency-light while answering the
-practical question: "how do we get a useful SBOM for this artifact?"
+produce a pinned command plan that teams can copy into CI and adapt to their
+ecosystem. This keeps the scanner dependency-light while documenting how to
+generate an SBOM for a deployable artifact.
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ def recommend_sbom_commands(artifact: str, source_root: str | None = None, image
             purpose="filesystem/source SBOM",
             command=f"trivy fs --format cyclonedx --output {output_path} {source}",
             output=output_path,
-            notes=("Useful for pre-build IDE/PR feedback; image SBOM is preferred for final deployed artifacts.",),
+            notes=("Use for pre-build IDE/PR feedback; image SBOM is preferred for final deployed artifacts.",),
         )
     )
     ecosystem_l = (ecosystem or "").lower()

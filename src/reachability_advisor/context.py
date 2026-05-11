@@ -1,4 +1,4 @@
-"""Optional deployment-context loading for CI/IDE workflows.
+"""Explicit deployment-context loading for CI/IDE workflows.
 
 Teams can provide a small context JSON file or a local Terraform plan JSON.  The
 Terraform path delegates to the multi-cloud Terraform analyzer.  Missing context

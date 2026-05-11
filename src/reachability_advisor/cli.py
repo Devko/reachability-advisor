@@ -28,9 +28,9 @@ from .outputs import (
 )
 from .policy import apply_exceptions, load_runtime_policy
 from .sbom import SbomError, load_sboms
-from .scoring import generate_findings
+from .scoring import generate_findings_with_source_report
 from .sbom_plan import recommend_sbom_commands, render_sbom_plan_markdown, write_sbom_plan_json
-from .source import load_reachability_rules, parse_source_roots
+from .source import BUILTIN_RULES, load_external_source_evidence, load_reachability_rules, parse_source_roots, semgrep_rules_yaml
 from .validators import has_errors, issues_report, validate_paths
 from .visual import write_html_report
 from .vulnerability import VulnerabilityError, load_vulnerabilities
@@ -43,21 +43,23 @@ class UserFacingError(Exception):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="reachability-advisor", description="Developer-first reachability-aware dependency vulnerability prioritization.")
+    parser = argparse.ArgumentParser(prog="reachability-advisor", description="Dependency vulnerability prioritization with source, Terraform, network, and IAM context.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     scan = sub.add_parser("scan", help="Scan SBOMs and produce CI/IDE-friendly outputs.")
     scan.add_argument("--sbom", action="append", required=True, help="CycloneDX JSON SBOM path. Repeat for multiple artifacts.")
     scan.add_argument("--vulns", required=True, help="Local vulnerability intelligence JSON, Grype JSON, or OSV-Scanner-style JSON.")
-    scan.add_argument("--source-root", action="append", default=[], help="Optional source mapping: artifact=path. Repeat for multiple artifacts.")
-    scan.add_argument("--context", help="Optional lightweight context JSON keyed by artifact name.")
-    scan.add_argument("--terraform-plan", help="Optional Terraform plan JSON for AWS/Azure/GCP/Kubernetes deployment-context hints.")
-    scan.add_argument("--terraform-source", help="Optional Terraform .tf source directory for conservative static HCL context when no plan is available.")
+    scan.add_argument("--source-root", action="append", default=[], help="Source mapping: artifact=path. Repeat for multiple artifacts.")
+    scan.add_argument("--context", help="Context JSON keyed by artifact name for overrides or enrichment.")
+    scan.add_argument("--terraform-plan", help="Terraform plan JSON for AWS/Azure/GCP/Kubernetes deployment context.")
+    scan.add_argument("--terraform-source", help="Terraform .tf source directory for conservative static HCL fallback when no plan is available.")
     scan.add_argument("--terraform-coverage-out", help="Write Terraform coverage/accounting report JSON.")
     scan.add_argument("--mapping-out", help="Write SBOM/source/Terraform mapping verification report JSON.")
-    scan.add_argument("--artifact-alias", action="append", default=[], help="Add artifact mapping alias: artifact=reference. Repeatable; useful when SBOM metadata lacks image refs.")
-    scan.add_argument("--reachability-rules", help="Optional custom source reachability rules JSON.")
-    scan.add_argument("--policy", help="Optional policy JSON with exceptions and fail tier.")
+    scan.add_argument("--source-coverage-out", help="Write source-analysis coverage and evidence report JSON.")
+    scan.add_argument("--artifact-alias", action="append", default=[], help="Add artifact mapping alias: artifact=reference. Repeatable; use when SBOM metadata lacks image refs.")
+    scan.add_argument("--reachability-rules", help="Custom source reachability rules JSON.")
+    scan.add_argument("--source-evidence-in", action="append", default=[], help="External source evidence JSON, Semgrep JSON, SARIF, or govulncheck JSONL. Repeatable.")
+    scan.add_argument("--policy", help="Policy JSON with exceptions and fail tier.")
     scan.add_argument("--out", help="Findings JSON output path.")
     scan.add_argument("--sarif-out", help="SARIF 2.1.0 output path.")
     scan.add_argument("--diagnostics-out", help="IDE diagnostics JSON output path.")
@@ -78,6 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--terraform-source")
     validate.add_argument("--policy")
     validate.add_argument("--reachability-rules")
+    validate.add_argument("--source-evidence-in", action="append", default=[])
     validate.add_argument("--json-out")
 
     explain = sub.add_parser("explain", help="Explain one finding from findings JSON.")
@@ -101,9 +104,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sbom_plan = sub.add_parser("sbom-plan", help="Print recommended SBOM generation commands for an artifact.")
     sbom_plan.add_argument("--artifact", required=True, help="Artifact/service name.")
-    sbom_plan.add_argument("--image", help="Optional deployed image reference.")
-    sbom_plan.add_argument("--source-root", help="Optional source root path.")
-    sbom_plan.add_argument("--ecosystem", choices=["maven", "java", "npm", "node", "javascript", "typescript", "pypi", "python"], help="Optional primary ecosystem.")
+    sbom_plan.add_argument("--image", help="Deployed image reference.")
+    sbom_plan.add_argument("--source-root", help="Source root path.")
+    sbom_plan.add_argument("--ecosystem", choices=["maven", "java", "npm", "node", "javascript", "typescript", "pypi", "python"], help="Primary ecosystem.")
     sbom_plan.add_argument("--output-dir", default="sboms", help="Directory to place generated SBOMs in examples.")
     sbom_plan.add_argument("--out-json", help="Write command plan JSON.")
     sbom_plan.add_argument("--out-md", help="Write command plan Markdown.")
@@ -113,6 +116,11 @@ def build_parser() -> argparse.ArgumentParser:
     hcl_audit.add_argument("--out", help="Write HCL audit JSON report.")
     hcl_audit.add_argument("--markdown-out", help="Write HCL audit Markdown report.")
     hcl_audit.add_argument("--fail-on-gaps", action="store_true", help="Exit 10 when static audit reports visibility gaps.")
+
+    semgrep = sub.add_parser("export-semgrep-rules", help="Write Semgrep starter rules from reachability rules.")
+    semgrep.add_argument("--reachability-rules", help="Custom source reachability rules JSON to include.")
+    semgrep.add_argument("--custom-only", action="store_true", help="Export only custom rules, not built-in rules.")
+    semgrep.add_argument("--out", required=True, help="Output YAML path.")
 
     fixtures = sub.add_parser("fixtures", help="List, validate, or run community Terraform fixture packs.")
     fixture_sub = fixtures.add_subparsers(dest="fixtures_command", required=True)
@@ -223,6 +231,7 @@ def run_scan(args: argparse.Namespace) -> int:
             args.terraform_source,
             args.policy,
             args.reachability_rules,
+            args.source_evidence_in,
         )
         for issue in issues:
             print(f"{issue.severity}: {issue.target}: {issue.message}", file=sys.stderr)
@@ -253,9 +262,25 @@ def run_scan(args: argparse.Namespace) -> int:
             raise ContextError(str(exc)) from exc
         contexts.update(terraform_analysis.contexts)
         terraform_coverage = terraform_analysis.coverage
-    findings = generate_findings(sboms, vulnerabilities, source_roots, contexts, policy=runtime_policy.score_policy, reachability_rules=reachability_rules)
+    external_source_evidence = load_external_source_evidence(args.source_evidence_in)
+    findings, source_coverage = generate_findings_with_source_report(
+        sboms,
+        vulnerabilities,
+        source_roots,
+        contexts,
+        policy=runtime_policy.score_policy,
+        reachability_rules=reachability_rules,
+        external_source_evidence=external_source_evidence,
+    )
     findings = apply_exceptions(findings, runtime_policy)
-    metadata = {"sbom_count": len(sboms), "vulnerability_records": len(vulnerabilities), "context_artifacts": len(contexts), "terraform_resources": terraform_coverage.get("summary", {}).get("total_resources", 0)}
+    metadata = {
+        "sbom_count": len(sboms),
+        "vulnerability_records": len(vulnerabilities),
+        "context_artifacts": len(contexts),
+        "terraform_resources": terraform_coverage.get("summary", {}).get("total_resources", 0),
+        "source_files": source_coverage.get("summary", {}).get("files_scanned", 0),
+        "external_source_evidence_records": source_coverage.get("summary", {}).get("external_evidence_records", 0),
+    }
     if args.out:
         write_json_findings(findings, args.out, metadata=metadata)
     if args.sarif_out:
@@ -272,6 +297,10 @@ def run_scan(args: argparse.Namespace) -> int:
         out = Path(args.terraform_coverage_out)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(terraform_coverage, indent=2), encoding="utf-8")
+    if args.source_coverage_out:
+        out = Path(args.source_coverage_out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(source_coverage, indent=2), encoding="utf-8")
     if args.mapping_out:
         out = Path(args.mapping_out)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -301,6 +330,7 @@ def run_validate(args: argparse.Namespace) -> int:
         args.terraform_source,
         args.policy,
         args.reachability_rules,
+        args.source_evidence_in,
     )
     report = issues_report(issues)
     if args.json_out:
@@ -377,6 +407,15 @@ def run_hcl_audit(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_export_semgrep_rules(args: argparse.Namespace) -> int:
+    custom_rules = load_reachability_rules(args.reachability_rules)
+    rules = custom_rules if args.custom_only else (*BUILTIN_RULES, *custom_rules)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(semgrep_rules_yaml(rules), encoding="utf-8")
+    return 0
+
+
 def run_init_policy(args: argparse.Namespace) -> int:
     policy = {
         "$schema": "schemas/runtime-policy.schema.json",
@@ -418,6 +457,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_fixtures(args)
         if args.command == "hcl-audit":
             return run_hcl_audit(args)
+        if args.command == "export-semgrep-rules":
+            return run_export_semgrep_rules(args)
         if args.command == "version":
             print(__version__)
             return 0

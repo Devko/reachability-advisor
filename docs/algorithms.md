@@ -1,22 +1,22 @@
 # Algorithms
 
-Reachability Advisor uses transparent, conservative algorithms. The goal is to help developers decide what to fix first, not to prove exploitability.
+Reachability Advisor ranks dependency vulnerabilities from four evidence streams: SBOM, vulnerability data, source reachability, and Terraform deployment context.
 
 ## Pipeline
 
 ```text
 CycloneDX SBOMs
   + vulnerability intelligence (Grype JSON or normalized local JSON)
-  + optional source roots
-  + optional context JSON
-  + optional Terraform plan JSON
-  + optional custom source rules
+  + source roots
+  + Terraform plan JSON
+  + context JSON overrides, when needed
+  + custom source rules, when needed
   -> SBOM artifact identity
   -> vulnerability/component matches
   -> source reachability evidence
   -> artifact-to-Terraform workload matches
   -> exposure / identity / data context
-  -> explainable score
+  -> score and tier
   -> remediation groups by artifact/component/version
   -> JSON/SARIF/diagnostics/Markdown/HTML/annotations/coverage/mapping
 ```
@@ -33,7 +33,7 @@ reachability-advisor sbom-plan \
   --ecosystem maven
 ```
 
-Recommended practice:
+SBOM requirements:
 
 1. Generate one CycloneDX JSON SBOM per deployable artifact.
 2. Prefer image/runtime SBOMs for release gates.
@@ -67,7 +67,7 @@ A vulnerability matches a component when one of these conditions is true:
 2. package URL ecosystem and package name match, with namespace respected when supplied;
 3. normalized component name equals normalized vulnerability package name.
 
-Version filtering is conservative: if a vulnerability record provides `affected_versions`, the component version must be in that list. If data is incomplete, the finding is not suppressed; it receives lower confidence.
+Version filtering is conservative. If a vulnerability record provides `affected_versions`, the component version must be listed. If version data is missing, the finding remains visible with lower confidence.
 
 ## Source evidence
 
@@ -78,13 +78,14 @@ Source reachability states:
 | `absent` | Reserved for explicit evidence that a package is not present in analyzed source or runtime scope. |
 | `unknown_due_to_no_rule` | Component appears in the SBOM, but no package-specific source rule exists; generic import evidence was also not observed. |
 | `package_present` | Component appears in the SBOM, but no stronger source evidence was found. |
+| `dependency_reachable` | CycloneDX dependency graph links the component to an imported parent dependency. This is indirect runtime evidence, not vulnerable API evidence. |
 | `imported` | Source imports/requires/uses the package. |
 | `function_reachable` | Source imports the package and contains usage patterns associated with vulnerable APIs or high-risk library functions. |
-| `attacker_controlled` | The same source file contains package import, risky usage, and input/entrypoint evidence, or a direct static handler-to-sink call path links entrypoint code to the vulnerable sink. |
+| `attacker_controlled` | The same function contains risky usage and input/entrypoint evidence, or a bounded static handler-to-sink call path links entrypoint code to the vulnerable sink. |
 
-The default analyzer now builds a lightweight function index for Python, JavaScript/TypeScript, Java, and Go. Python functions are extracted with the standard-library `ast` module; the other languages use conservative syntax patterns. It can promote direct same-file helper calls and one-hop cross-file handler-to-sink calls to `attacker_controlled`. It does not attempt full interprocedural dataflow, dependency injection resolution, async framework lifecycle modeling, or multi-hop call graphs.
+The default analyzer builds one source index per artifact for Python, JavaScript/TypeScript, Java, and Go. Python functions are extracted with the standard-library `ast` module; other languages use conservative syntax patterns. The analyzer can promote same-function input/sink evidence and bounded handler-to-sink call paths to `attacker_controlled`. It does not model full interprocedural dataflow, dependency injection, async framework lifecycles, reflection, or framework-specific sanitizers.
 
-Rules are visible in `src/reachability_advisor/source.py`. Additional project-specific rules can be supplied with `--reachability-rules`.
+Rules are visible in `src/reachability_advisor/source.py`. Additional project-specific rules can be supplied with `--reachability-rules`. Use `export-semgrep-rules` to generate starter Semgrep YAML from built-in and custom rules. Use `--source-evidence-in` to import higher-confidence evidence from Reachability Advisor JSON, Semgrep JSON, SARIF, or govulncheck JSONL.
 
 Built-in high-risk source rules currently cover common Java, Node, Python, and Go evidence:
 
@@ -93,20 +94,17 @@ Built-in high-risk source rules currently cover common Java, Node, Python, and G
 - Python/PyPI import and handler patterns, including requests, PyYAML, Jinja2, PyJWT, lxml, Django, FastAPI, Chainlit, and aiohttp;
 - Go import and sink evidence for common JWT/YAML packages plus generic import evidence.
 
-The HTML report exposes these states as code-exposure labels. `attacker_controlled` is shown as `covered`; `function_reachable` as `reachable sink`; `imported` as `import only`; `package_present` as `not observed`; and `unknown_due_to_no_rule` as `no rule`.
+The JSON output includes both the machine state and a human label. The HTML report uses the labels `request-controlled path`, `reachable vulnerable API`, `reachable through dependency graph`, `import observed`, `SBOM only`, and `no source rule`.
+
+`--source-coverage-out` writes source coverage metrics: files scanned/skipped, evidence states by artifact, external evidence records consumed, and the fraction of findings with dependency-graph, import, vulnerable API, or request-controlled evidence.
 
 ## Remediation grouping
 
-Individual scanner findings are preserved, but JSON and Markdown outputs also
-include a package-level remediation queue. Findings are grouped by artifact,
-component name, component version, and package URL. The group inherits the
-highest reachability and highest score among its findings, keeps all advisory
-IDs underneath, and proposes one package upgrade from the highest fixed version
-reported by vulnerability intelligence.
+Individual scanner findings are preserved. JSON and Markdown outputs also include a package-level remediation queue. Findings are grouped by artifact, component name, component version, and package URL. The group keeps the highest reachability, highest score, advisory IDs, and the highest fixed version reported by vulnerability intelligence.
 
 ## Artifact-to-Terraform matching
 
-Terraform evidence is derived from a local `terraform show -json` plan. The analyzer is manifest-driven:
+Terraform evidence is derived from a local `terraform show -json` plan. Plan mode is the expected mode for release gates. The analyzer is manifest-driven:
 
 1. Parse every planned resource from `planned_values` and `resource_changes`.
 2. Classify the resource provider: AWS, Azure, GCP, Kubernetes, or unknown.
@@ -153,11 +151,11 @@ IAM criticality is network-aware. Critical IAM impacts on public, external, or i
 
 Supported public links include AWS ECS services through public security groups or public load balancer target groups and target attachments, AWS Lambda function URLs, Azure application gateway or load balancer backend pool paths, GCP forwarding rule/backend service/NEG paths, GCP Cloud Run and Cloud Functions public invoker grants, Azure Container Apps external ingress, and Kubernetes Service/Ingress names or selectors. Provider-bridge lateral inference is limited to bridge resources such as peering, VPN, transit, ExpressRoute, and Interconnect; unrelated private resources do not make every workload internal.
 
-This is deployment context, not exploit proof. Unsupported resources and opaque rendered-manifest wrappers do not lower risk; they are reported as gaps.
+This is deployment context, not exploit confirmation. Unsupported resources and opaque rendered-manifest wrappers are reported as gaps.
 
 ## Context evidence
 
-Context may come from a small JSON file or from Terraform inference. The JSON format is useful when teams want to override or enrich Terraform with known service ownership and criticality.
+Terraform is the primary source for deployment context. Context JSON can override or enrich Terraform-derived fields such as owner, environment, or criticality.
 
 ```json
 {
@@ -175,11 +173,11 @@ Context may come from a small JSON file or from Terraform inference. The JSON fo
 }
 ```
 
-Missing context is `unknown`, not safe.
+Missing context is `unknown`; it is not isolation evidence.
 
 ## Scoring
 
-The score is additive and capped at 100:
+The score is explainable and capped at 100. It starts from vulnerability severity, then adds exploit likelihood, source evidence, dependency scope, network exposure, environment, and the strongest context impact:
 
 ```text
 score = severity
@@ -189,15 +187,30 @@ score = severity
       + scope adjustment
       + exposure points
       + environment points
-      + privilege points
-      + network/IAM-derived criticality points
-      - weak-evidence penalty
+      + max(privilege impact, IAM impact, asset criticality)
 ```
 
-Two caps prevent weakly actionable findings from crossing priority gates only because several small signals add up:
+Context impact is not fully additive. `admin`, `sensitive`, `data_access`, `network_control`, `iam_escalation`, and high asset criticality can describe the same blast radius, so the scorer takes the strongest one instead of stacking all of them.
 
-- dev/test dependencies without source usage are capped below `high`;
-- private/no-ingress findings without attacker-controlled source evidence, known exploitation, admin/sensitive privilege, IAM impact, or high criticality are capped below `high`.
+Priority gates prevent weakly actionable findings from crossing high-severity thresholds only because several small signals add up:
+
+- dev/test dependencies without source usage are capped below `medium`;
+- weak source evidence (`SBOM only`, `no source rule`, or `absent`) is capped below `high` unless the vulnerability is known exploited or has high EPSS; even then it stays below `urgent` until source usage is proven;
+- dependency-graph evidence is capped below `high` unless it is public/external with critical context, and below `urgent` until direct vulnerable API usage or stronger exploit intelligence exists;
+- import-only evidence is capped below `high` unless it is public/external and has critical context;
+- private/no-ingress findings without exploit signal or critical context are capped below `high`;
+- `urgent` requires known exploitation, high EPSS, a request-controlled public/external path, or critical reachable context.
+
+The default model is meant to separate these common cases:
+
+| Example | Expected priority |
+|---|---|
+| Public request-controlled vulnerable code path plus sensitive/admin context | `urgent` |
+| Public request-controlled vulnerable code path without critical context | `high` |
+| Internal/lateral request-controlled vulnerable code path | `high` when severity is high enough |
+| Function/API usage with no proven attacker-controlled path | usually `medium` |
+| Import-only, SBOM-only, or no-rule evidence | usually `low` or `medium`, depending on severity and context |
+| Private/no-ingress workload without exploit signal or critical context | below `high` |
 
 Default tiers:
 

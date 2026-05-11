@@ -18,6 +18,7 @@
           "max_score": {"type": "number", "minimum": 0, "maximum": 100},
           "tier": {"enum": ["urgent", "high", "medium", "low", "informational"]},
           "reachability": {"type": "string"},
+          "reachability_label": {"type": "string"},
           "fix_available": {"type": "boolean"},
           "suggested_version": {"type": ["string", "null"]},
           "suggested_fix": {"type": ["string", "null"]},
@@ -38,7 +39,31 @@
           "artifact": {"type": "object"},
           "component": {"type": "object"},
           "vulnerability": {"type": "object"},
-          "source_reachability": {"type": "object"},
+          "source_reachability": {
+            "type": "object",
+            "required": ["state", "label"],
+            "properties": {
+              "state": {
+                "enum": [
+                  "absent",
+                  "unknown_due_to_no_rule",
+                  "package_present",
+                  "dependency_reachable",
+                  "imported",
+                  "function_reachable",
+                  "attacker_controlled"
+                ]
+              },
+              "label": {"type": "string"},
+              "confidence": {"enum": ["high", "medium", "low"]},
+              "language": {"type": "string"},
+              "reason": {"type": "string"},
+              "matched_symbols": {"type": "array", "items": {"type": "string"}},
+              "dependency_path": {"type": "array", "items": {"type": "string"}},
+              "evidence_source": {"type": "string"},
+              "locations": {"type": "array"}
+            }
+          },
           "context": {"type": "object"},
           "rationale": {"type": "array", "items": {"type": "string"}}
         }

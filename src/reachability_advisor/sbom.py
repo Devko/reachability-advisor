@@ -93,7 +93,32 @@ def _artifact_from_metadata(path: Path, data: dict[str, Any]) -> Artifact:
         or props.get("oci:image:ref")
         or props.get("distribution")
     )
-    return Artifact(name=str(name), version=str(version) if version else None, reference=str(reference) if reference else None, properties=props)
+    return Artifact(
+        name=str(name),
+        version=str(version) if version else None,
+        reference=str(reference) if reference else None,
+        bom_ref=str(component.get("bom-ref")) if component.get("bom-ref") else None,
+        properties=props,
+    )
+
+
+def _dependencies(data: dict[str, Any]) -> dict[str, list[str]]:
+    graph: dict[str, list[str]] = {}
+    for item in data.get("dependencies", []) or []:
+        if not isinstance(item, dict):
+            continue
+        ref = str(item.get("ref") or "").strip()
+        if not ref:
+            continue
+        depends_on = []
+        for dependency in item.get("dependsOn", []) or []:
+            if dependency is None:
+                continue
+            dependency_ref = str(dependency).strip()
+            if dependency_ref:
+                depends_on.append(dependency_ref)
+        graph[ref] = list(dict.fromkeys(depends_on))
+    return graph
 
 
 def load_sbom(path: str | Path) -> SbomDocument:
@@ -129,7 +154,7 @@ def load_sbom(path: str | Path) -> SbomDocument:
                 ),
             )
         )
-    return SbomDocument(path=sbom_path, artifact=artifact, components=components)
+    return SbomDocument(path=sbom_path, artifact=artifact, components=components, dependencies=_dependencies(data))
 
 
 def load_sboms(paths: list[str]) -> list[SbomDocument]:

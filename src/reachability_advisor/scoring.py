@@ -16,7 +16,7 @@ from .models import (
     VulnerabilityRecord,
     finding_key,
 )
-from .source import ReachabilityRule, analyze_component_source
+from .source import ExternalSourceEvidenceStore, ReachabilityRule, analyze_component_source, build_source_index, merge_source_evidence, source_coverage_report
 from .vulnerability import matching_vulnerabilities
 
 
@@ -37,27 +37,37 @@ class ScorePolicy:
     reachability_points: dict[Reachability, float] = field(
         default_factory=lambda: {
             Reachability.ABSENT: -10.0,
-            Reachability.UNKNOWN_DUE_TO_NO_RULE: 3.0,
-            Reachability.PACKAGE_PRESENT: 4.0,
-            Reachability.IMPORTED: 14.0,
-            Reachability.FUNCTION_REACHABLE: 24.0,
-            Reachability.ATTACKER_CONTROLLED: 34.0,
+            Reachability.UNKNOWN_DUE_TO_NO_RULE: 0.0,
+            Reachability.PACKAGE_PRESENT: 1.0,
+            Reachability.DEPENDENCY_REACHABLE: 4.0,
+            Reachability.IMPORTED: 8.0,
+            Reachability.FUNCTION_REACHABLE: 16.0,
+            Reachability.ATTACKER_CONTROLLED: 26.0,
         }
     )
     scope_adjustments: dict[str, float] = field(
         default_factory=lambda: {"runtime": 0.0, "test": -18.0, "dev": -18.0, "development": -18.0, "provided": -8.0, "optional": -8.0}
     )
     exposure_points: dict[str, float] = field(
-        default_factory=lambda: {"public": 16.0, "external": 12.0, "internal": 5.0, "private": 3.0, "none": 0.0, "unknown": 0.0}
+        default_factory=lambda: {"public": 14.0, "external": 10.0, "internal": 5.0, "private": 0.0, "none": 0.0, "unknown": 0.0}
     )
     environment_points: dict[str, float] = field(
-        default_factory=lambda: {"prod": 12.0, "production": 12.0, "staging": 5.0, "dev": 1.0, "development": 1.0, "unknown": 0.0}
+        default_factory=lambda: {"prod": 4.0, "production": 4.0, "staging": 2.0, "dev": 0.0, "development": 0.0, "unknown": 0.0}
     )
     privilege_points: dict[str, float] = field(
-        default_factory=lambda: {"admin": 18.0, "sensitive": 12.0, "limited": 4.0, "none": 0.0, "unknown": 0.0}
+        default_factory=lambda: {"admin": 16.0, "sensitive": 10.0, "limited": 3.0, "none": 0.0, "unknown": 0.0}
     )
     criticality_points: dict[str, float] = field(
-        default_factory=lambda: {"high": 10.0, "medium": 5.0, "low": 1.0, "unknown": 0.0}
+        default_factory=lambda: {"high": 13.0, "medium": 6.0, "low": 1.0, "unknown": 0.0}
+    )
+    iam_impact_points: dict[str, float] = field(
+        default_factory=lambda: {
+            "admin_control": 22.0,
+            "iam_escalation": 20.0,
+            "network_control": 18.0,
+            "compute_control": 16.0,
+            "data_access": 12.0,
+        }
     )
 
 
@@ -113,18 +123,98 @@ def _confidence(source: SourceEvidence, context: ContextEvidence) -> Confidence:
     return Confidence.LOW
 
 
-def _private_no_ingress_cap_applies(vulnerability: VulnerabilityRecord, source: SourceEvidence, context: ContextEvidence) -> bool:
-    exposure = (context.exposure or "unknown").lower()
-    privilege = (context.privilege or "unknown").lower()
-    criticality = (context.criticality or "unknown").lower()
+WEAK_SOURCE_STATES = {Reachability.ABSENT, Reachability.UNKNOWN_DUE_TO_NO_RULE, Reachability.PACKAGE_PRESENT}
+
+
+def _normalized(value: str | None, default: str = "unknown") -> str:
+    return (value or default).lower()
+
+
+def _high_exploit_signal(vulnerability: VulnerabilityRecord) -> bool:
+    return vulnerability.known_exploited or (vulnerability.epss is not None and vulnerability.epss >= 0.5)
+
+
+def _context_impact(context: ContextEvidence, policy: ScorePolicy) -> tuple[float, str]:
+    candidates: list[tuple[float, str]] = []
+    privilege = _normalized(context.privilege)
+    privilege_points = policy.privilege_points.get(privilege, 0.0)
+    if privilege_points:
+        candidates.append((privilege_points, f"privilege {privilege}"))
+    criticality = _normalized(context.criticality)
+    criticality_points = policy.criticality_points.get(criticality, 0.0)
+    if criticality_points:
+        candidates.append((criticality_points, f"criticality {criticality}"))
+    for impact in context.iam_impacts:
+        impact_name = _normalized(impact, "")
+        impact_points = policy.iam_impact_points.get(impact_name, 0.0)
+        if impact_points:
+            candidates.append((impact_points, f"IAM impact {impact_name}"))
+    if not candidates:
+        return 0.0, ""
+    return max(candidates, key=lambda item: item[0])
+
+
+def _has_critical_context(context: ContextEvidence) -> bool:
+    privilege = _normalized(context.privilege)
+    criticality = _normalized(context.criticality)
+    iam_impacts = {_normalized(impact, "") for impact in context.iam_impacts}
     return (
-        exposure in {"private", "none"}
-        and source.reachability != Reachability.ATTACKER_CONTROLLED
-        and not vulnerability.known_exploited
-        and privilege not in {"admin", "sensitive"}
-        and criticality != "high"
-        and not context.iam_impacts
+        privilege in {"admin", "sensitive"}
+        or criticality == "high"
+        or bool(iam_impacts & {"admin_control", "iam_escalation", "network_control", "compute_control", "data_access"})
     )
+
+
+def _urgent_gate_satisfied(vulnerability: VulnerabilityRecord, source: SourceEvidence, context: ContextEvidence) -> bool:
+    exposure = _normalized(context.exposure)
+    if _high_exploit_signal(vulnerability):
+        return True
+    if source.reachability == Reachability.ATTACKER_CONTROLLED and exposure in {"public", "external"}:
+        return True
+    if source.reachability == Reachability.ATTACKER_CONTROLLED and _has_critical_context(context):
+        return True
+    if source.reachability == Reachability.FUNCTION_REACHABLE and exposure in {"public", "external"} and _has_critical_context(context):
+        return True
+    return False
+
+
+def _private_no_ingress_cap_applies(vulnerability: VulnerabilityRecord, source: SourceEvidence, context: ContextEvidence) -> bool:
+    return (
+        _normalized(context.exposure) in {"private", "none"}
+        and source.reachability != Reachability.ATTACKER_CONTROLLED
+        and not _high_exploit_signal(vulnerability)
+        and not _has_critical_context(context)
+    )
+
+
+def _score_caps(vulnerability: VulnerabilityRecord, source: SourceEvidence, context: ContextEvidence, policy: ScorePolicy) -> list[tuple[float, str]]:
+    caps: list[tuple[float, str]] = []
+    below_high = policy.tier_thresholds[Tier.HIGH] - 1.0
+    below_urgent = policy.tier_thresholds[Tier.URGENT] - 1.0
+    exposure = _normalized(context.exposure)
+    exploit_signal = _high_exploit_signal(vulnerability)
+
+    if source.reachability in WEAK_SOURCE_STATES:
+        if exploit_signal:
+            caps.append((below_urgent, "weak source evidence keeps the finding below urgent until source usage is proven"))
+        else:
+            caps.append((below_high, "weak source evidence keeps the finding below high until source usage, known exploitation, or high EPSS is observed"))
+    elif source.reachability == Reachability.DEPENDENCY_REACHABLE and not exploit_signal:
+        if exposure not in {"public", "external"} or not _has_critical_context(context):
+            caps.append((below_high, "dependency-graph source evidence without public/external critical context is capped below high"))
+        else:
+            caps.append((below_urgent, "dependency-graph source evidence is capped below urgent until direct vulnerable API usage is observed"))
+    elif source.reachability == Reachability.IMPORTED and not exploit_signal:
+        if exposure not in {"public", "external"} or not _has_critical_context(context):
+            caps.append((below_high, "import-only source evidence without public/external critical context is capped below high"))
+        else:
+            caps.append((below_urgent, "import-only source evidence is capped below urgent until vulnerable API usage is observed"))
+
+    if _private_no_ingress_cap_applies(vulnerability, source, context):
+        caps.append((below_high, "private/no-ingress finding without exploit signal or critical context is capped below high"))
+    if not _urgent_gate_satisfied(vulnerability, source, context):
+        caps.append((below_urgent, "urgent requires known exploitation, high EPSS, request-controlled public/external code, or critical reachable context"))
+    return caps
 
 
 def fix_commands(component: Component, vulnerability: VulnerabilityRecord) -> list[str]:
@@ -172,22 +262,24 @@ def score_finding(
     for label, table, value in (
         ("exposure", policy.exposure_points, context.exposure),
         ("environment", policy.environment_points, context.environment),
-        ("privilege", policy.privilege_points, context.privilege),
-        ("criticality", policy.criticality_points, context.criticality),
     ):
         points = table.get((value or "unknown").lower(), 0.0)
         if points:
             score += points
             rationale.append(f"{label} {value} contributes {points:.1f} points")
+    context_points, context_reason = _context_impact(context, policy)
+    if context_points:
+        score += context_points
+        rationale.append(f"highest context impact ({context_reason}) contributes {context_points:.1f} points")
     if source.reachability in {Reachability.PACKAGE_PRESENT, Reachability.UNKNOWN_DUE_TO_NO_RULE} and component.scope in {"test", "dev", "development"}:
         score = min(score, 39.0)
-        rationale.append("dev/test dependency without source usage is capped below high priority")
-    if _private_no_ingress_cap_applies(vulnerability, source, context):
-        score = min(score, policy.tier_thresholds[Tier.HIGH] - 1.0)
-        rationale.append("private/no-ingress finding without attacker-controlled source, known exploitation, privilege, IAM impact, or high criticality is capped below high priority")
-    if source.reachability in {Reachability.PACKAGE_PRESENT, Reachability.UNKNOWN_DUE_TO_NO_RULE} and context.exposure == "unknown":
-        score -= 6.0
-        rationale.append("weak evidence penalty subtracts 6.0 points")
+        rationale.append("dev/test dependency without source usage is capped below medium priority")
+    for cap, reason in _score_caps(vulnerability, source, context, policy):
+        if score > cap:
+            score = cap
+            rationale.append(f"{reason}; score capped at {cap:.1f}")
+        elif not reason.startswith("urgent requires"):
+            rationale.append(f"{reason}; score remains below cap")
     score = max(0.0, min(100.0, score))
     return Finding(
         key=finding_key(sbom.artifact, component, vulnerability),
@@ -211,16 +303,44 @@ def generate_findings(
     contexts: dict[str, ContextEvidence],
     policy: ScorePolicy = DEFAULT_POLICY,
     reachability_rules: tuple[ReachabilityRule, ...] = (),
+    external_source_evidence: ExternalSourceEvidenceStore | None = None,
 ) -> list[Finding]:
+    findings, _ = generate_findings_with_source_report(
+        sboms,
+        vulnerabilities,
+        source_roots,
+        contexts,
+        policy=policy,
+        reachability_rules=reachability_rules,
+        external_source_evidence=external_source_evidence,
+    )
+    return findings
+
+
+def generate_findings_with_source_report(
+    sboms: list[SbomDocument],
+    vulnerabilities: list[VulnerabilityRecord],
+    source_roots: dict[str, object],
+    contexts: dict[str, ContextEvidence],
+    policy: ScorePolicy = DEFAULT_POLICY,
+    reachability_rules: tuple[ReachabilityRule, ...] = (),
+    external_source_evidence: ExternalSourceEvidenceStore | None = None,
+) -> tuple[list[Finding], dict[str, object]]:
     findings: list[Finding] = []
+    source_indexes = {artifact: build_source_index(root) for artifact, root in source_roots.items()}
     for sbom in sboms:
         root = source_roots.get(sbom.artifact.name)
+        source_index = source_indexes.get(sbom.artifact.name)
         context = contexts.get(sbom.artifact.name, ContextEvidence())
         for component in sbom.components:
             matches = matching_vulnerabilities(component, vulnerabilities, sbom.artifact.name)
             if not matches:
                 continue
             for vulnerability in matches:
-                source = analyze_component_source(component, root, vulnerability=vulnerability, custom_rules=reachability_rules)  # type: ignore[arg-type]
+                source = analyze_component_source(component, root, vulnerability=vulnerability, custom_rules=reachability_rules, source_index=source_index, sbom=sbom)  # type: ignore[arg-type]
+                if external_source_evidence:
+                    source = merge_source_evidence(source, external_source_evidence.best_for(sbom.artifact.name, component, vulnerability))
                 findings.append(score_finding(sbom, component, vulnerability, source, context, policy))
-    return sorted(findings, key=lambda finding: finding.score, reverse=True)
+    sorted_findings = sorted(findings, key=lambda finding: finding.score, reverse=True)
+    report = source_coverage_report(sboms, source_roots, source_indexes, sorted_findings, external_source_evidence)  # type: ignore[arg-type]
+    return sorted_findings, report

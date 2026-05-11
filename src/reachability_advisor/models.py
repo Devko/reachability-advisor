@@ -2,8 +2,8 @@
 
 The project intentionally keeps the model small.  The tool is meant to be
 embeddable in CI pipelines and editor integrations, so the primary objects are
-SBOM components, vulnerability records, source evidence, optional deployment
-context, and developer-facing findings.
+SBOM components, vulnerability records, source evidence, deployment context,
+and findings.
 """
 
 from __future__ import annotations
@@ -17,16 +17,36 @@ from typing import Any
 class Reachability(str, Enum):
     """Conservative source reachability states.
 
-    These states are not exploitability proof. They represent increasing levels
+    These states do not prove exploitability. They represent increasing levels
     of static source evidence that the dependency is used by the application.
     """
 
     ABSENT = "absent"
     UNKNOWN_DUE_TO_NO_RULE = "unknown_due_to_no_rule"
     PACKAGE_PRESENT = "package_present"
+    DEPENDENCY_REACHABLE = "dependency_reachable"
     IMPORTED = "imported"
     FUNCTION_REACHABLE = "function_reachable"
     ATTACKER_CONTROLLED = "attacker_controlled"
+
+
+REACHABILITY_LABELS: dict[Reachability, str] = {
+    Reachability.ABSENT: "absent from scanned source",
+    Reachability.UNKNOWN_DUE_TO_NO_RULE: "no source rule",
+    Reachability.PACKAGE_PRESENT: "SBOM only",
+    Reachability.DEPENDENCY_REACHABLE: "reachable through dependency graph",
+    Reachability.IMPORTED: "import observed",
+    Reachability.FUNCTION_REACHABLE: "reachable vulnerable API",
+    Reachability.ATTACKER_CONTROLLED: "request-controlled path",
+}
+
+
+def reachability_label(reachability: Reachability | str) -> str:
+    try:
+        state = reachability if isinstance(reachability, Reachability) else Reachability(str(reachability))
+    except ValueError:
+        return "unknown source reachability"
+    return REACHABILITY_LABELS[state]
 
 
 class Tier(str, Enum):
@@ -83,6 +103,7 @@ class Artifact:
     name: str
     reference: str | None = None
     version: str | None = None
+    bom_ref: str | None = None
     properties: dict[str, str] = field(default_factory=dict)
 
 
@@ -91,6 +112,7 @@ class SbomDocument:
     path: Path
     artifact: Artifact
     components: list[Component]
+    dependencies: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -135,6 +157,8 @@ class SourceEvidence:
     reason: str = "component appears in SBOM"
     locations: list[SourceLocation] = field(default_factory=list)
     matched_symbols: list[str] = field(default_factory=list)
+    dependency_path: list[str] = field(default_factory=list)
+    evidence_source: str = "builtin"
 
 
 @dataclass
@@ -172,6 +196,7 @@ class Finding:
                 "name": self.artifact.name,
                 "reference": self.artifact.reference,
                 "version": self.artifact.version,
+                "bom_ref": self.artifact.bom_ref,
                 "properties": self.artifact.properties,
             },
             "component": {
@@ -196,10 +221,13 @@ class Finding:
             },
             "source_reachability": {
                 "state": self.source.reachability.value,
+                "label": reachability_label(self.source.reachability),
                 "confidence": self.source.confidence.value,
                 "language": self.source.language,
                 "reason": self.source.reason,
                 "matched_symbols": self.source.matched_symbols,
+                "dependency_path": self.source.dependency_path,
+                "evidence_source": self.source.evidence_source,
                 "locations": [location.to_json() for location in self.source.locations],
             },
             "context": {

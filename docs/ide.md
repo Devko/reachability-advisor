@@ -9,7 +9,7 @@ Security logic stays in the Python CLI so it can be tested, audited, and reused 
 ## Extension behavior
 
 1. Read workspace settings.
-2. Run `reachability-advisor scan` with configured SBOM, vulnerability, context, and source-root paths.
+2. Run `reachability-advisor scan` with configured SBOM, vulnerability, source-root, and Terraform paths.
 3. Read diagnostics JSON.
 4. Publish diagnostics to VS Code.
 
@@ -20,6 +20,7 @@ Security logic stays in the Python CLI so it can be tested, audited, and reused 
   "reachabilityAdvisor.executable": "reachability-advisor",
   "reachabilityAdvisor.sbom": "app.cdx.json",
   "reachabilityAdvisor.vulns": "vulnerabilities.json",
+  "reachabilityAdvisor.terraformPlan": "tfplan.json",
   "reachabilityAdvisor.context": "reachability-context.json",
   "reachabilityAdvisor.sourceRootArtifact": "app"
 }

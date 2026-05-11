@@ -254,7 +254,35 @@ class SourceAndScoringEdgeTests(unittest.TestCase):
             ScorePolicy(),
         )
         self.assertGreater(critical.score, base.score)
-        self.assertIn("criticality high contributes", " ".join(critical.rationale))
+        self.assertIn("highest context impact (criticality high) contributes", " ".join(critical.rationale))
+
+    def test_weak_source_evidence_cannot_stack_into_high(self) -> None:
+        sbom_like = type("SbomLike", (), {"artifact": Artifact(name="catalog")})()
+        finding = score_finding(
+            sbom_like,
+            Component(name="docker", version="28.0.0", purl="pkg:golang/github.com/docker/docker@28.0.0"),
+            VulnerabilityRecord(id="GHSA-X", package_name="github.com/docker/docker", cvss=8.8),
+            SourceEvidence(reachability=Reachability.UNKNOWN_DUE_TO_NO_RULE, confidence=Confidence.LOW),
+            ContextEvidence(exposure="internal", privilege="sensitive", criticality="high", confidence=Confidence.MEDIUM),
+            ScorePolicy(),
+        )
+        self.assertEqual(finding.tier, Tier.MEDIUM)
+        self.assertLess(finding.score, 65)
+        self.assertIn("weak source evidence", " ".join(finding.rationale))
+
+    def test_import_only_internal_prod_without_blast_radius_stays_medium(self) -> None:
+        sbom_like = type("SbomLike", (), {"artifact": Artifact(name="shippingservice")})()
+        finding = score_finding(
+            sbom_like,
+            Component(name="google.golang.org/grpc", version="1.33.2", purl="pkg:golang/google.golang.org/grpc@1.33.2"),
+            VulnerabilityRecord(id="GHSA-Y", package_name="google.golang.org/grpc", cvss=9.1),
+            SourceEvidence(reachability=Reachability.IMPORTED, confidence=Confidence.MEDIUM),
+            ContextEvidence(exposure="internal", environment="prod", confidence=Confidence.MEDIUM),
+            ScorePolicy(),
+        )
+        self.assertEqual(finding.tier, Tier.MEDIUM)
+        self.assertLess(finding.score, 65)
+        self.assertIn("import-only source evidence", " ".join(finding.rationale))
 
     def test_high_source_confidence_is_not_downgraded_to_low(self) -> None:
         sbom_like = type("SbomLike", (), {"artifact": Artifact(name="app")})()
@@ -297,7 +325,7 @@ class SourceAndScoringEdgeTests(unittest.TestCase):
             Component(name="lib", version="1", purl="pkg:npm/lib@1"),
             VulnerabilityRecord(id="CVE-Y", package_name="lib", cvss=7.5),
             SourceEvidence(reachability=Reachability.ATTACKER_CONTROLLED, confidence=Confidence.HIGH),
-            ContextEvidence(exposure="private", environment="prod", confidence=Confidence.MEDIUM),
+            ContextEvidence(exposure="private", environment="prod", criticality="high", confidence=Confidence.MEDIUM),
             ScorePolicy(),
         )
         self.assertGreaterEqual(known_exploited.score, 65)

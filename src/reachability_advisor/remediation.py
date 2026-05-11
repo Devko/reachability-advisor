@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .models import Component, Finding, Reachability, Tier
+from .models import Component, Finding, Reachability, Tier, reachability_label
 
 
 TIER_ORDER = {Tier.INFORMATIONAL: 0, Tier.LOW: 1, Tier.MEDIUM: 2, Tier.HIGH: 3, Tier.URGENT: 4}
@@ -13,9 +13,10 @@ REACHABILITY_ORDER = {
     Reachability.ABSENT: 0,
     Reachability.UNKNOWN_DUE_TO_NO_RULE: 1,
     Reachability.PACKAGE_PRESENT: 2,
-    Reachability.IMPORTED: 3,
-    Reachability.FUNCTION_REACHABLE: 4,
-    Reachability.ATTACKER_CONTROLLED: 5,
+    Reachability.DEPENDENCY_REACHABLE: 3,
+    Reachability.IMPORTED: 4,
+    Reachability.FUNCTION_REACHABLE: 5,
+    Reachability.ATTACKER_CONTROLLED: 6,
 }
 
 
@@ -78,6 +79,7 @@ def _group_to_json(key: str, findings: list[Finding]) -> dict[str, Any]:
         "tier": top.tier.value,
         "confidence": top.confidence.value,
         "reachability": highest_reachability.value,
+        "reachability_label": reachability_label(highest_reachability),
         "context": {
             "exposure": top.context.exposure,
             "environment": top.context.environment,

@@ -1,6 +1,6 @@
 # Governance
 
-Reachability Advisor is prepared for transfer to an open foundation governance model.
+Reachability Advisor uses maintainers for code review, releases, and scope control.
 
 ## Maintainer roles
 

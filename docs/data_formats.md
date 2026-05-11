@@ -1,6 +1,15 @@
 # Data Formats
 
-Reachability Advisor is local-first. Inputs are files supplied by the developer pipeline; outputs are JSON, Markdown, SARIF, and self-contained HTML artifacts suitable for CI and IDE integrations.
+Reachability Advisor reads local files and writes local artifacts. The scanner does not fetch vulnerability databases, cloud inventory, SBOMs, or source code.
+
+Primary scan inputs:
+
+- CycloneDX SBOM JSON;
+- Grype JSON or normalized vulnerability JSON;
+- source-root mappings;
+- Terraform plan JSON.
+
+Context JSON, Terraform source mode, and custom source rules are enrichment or fallback inputs.
 
 ## CycloneDX SBOM JSON
 
@@ -35,7 +44,7 @@ Recommended artifact metadata:
 
 Use `--artifact-alias artifact=image-or-reference` when generated SBOMs lack artifact/image metadata.
 
-For source-only validation, Grype's CycloneDX output is acceptable SBOM input when it includes the package inventory:
+For early source-only validation, Grype's CycloneDX output is acceptable SBOM input when it includes the package inventory:
 
 ```bash
 grype dir:path/to/app -o cyclonedx-json --name app --file app.cdx.json
@@ -99,8 +108,7 @@ Recommended local format:
 }
 ```
 
-`artifact` is optional. Use it when one vulnerability file is shared across
-multiple SBOMs and a record should only apply to one artifact.
+Use `artifact` when one vulnerability file is shared across multiple SBOMs and a record applies to only one artifact.
 
 Small OSV-Scanner-style inputs are also supported by the vulnerability loader.
 
@@ -125,9 +133,75 @@ Use `--reachability-rules` to add package/vulnerability-specific source heuristi
 
 Schema draft: `schemas/reachability-rules.schema.json`.
 
+Generate starter Semgrep rules from the same rule set:
+
+```bash
+reachability-advisor export-semgrep-rules \
+  --reachability-rules reachability-rules.json \
+  --out semgrep-reachability.yml
+```
+
+## External source evidence
+
+Use `--source-evidence-in` to import source evidence from another analyzer. The native JSON format is:
+
+```json
+{
+  "evidence": [
+    {
+      "artifact": "payments-api",
+      "component": "requests",
+      "vulnerability": "GHSA-example",
+      "state": "attacker_controlled",
+      "confidence": "high",
+      "reason": "Semgrep taint trace links request query to requests.get",
+      "tool": "semgrep",
+      "locations": [{"path": "src/api.py", "line": 42, "column": 12}]
+    }
+  ]
+}
+```
+
+`component`, `purl`, and `vulnerability` are matching selectors. `artifact` narrows a selector match to one SBOM artifact. Provide at least one `component`, `purl`, or `vulnerability` selector besides the evidence state. Imported evidence can upgrade the built-in result; it does not downgrade stronger built-in evidence.
+
+Supported imported formats:
+
+- native Reachability Advisor evidence JSON;
+- Reachability Advisor findings JSON;
+- Semgrep JSON with `extra.metadata.reachability_advisor`;
+- SARIF with matching selectors in `result.properties`;
+- govulncheck JSONL for Go call-stack evidence.
+
+## Source coverage JSON
+
+Generated with `--source-coverage-out`.
+
+```json
+{
+  "schema_version": "1.0",
+  "summary": {
+    "artifact_count": 1,
+    "artifacts_with_source_root": 1,
+    "files_scanned": 42,
+    "findings_analyzed": 12,
+    "source_evidence_coverage": 0.75,
+    "external_evidence_records": 3,
+    "states": {
+      "attacker_controlled": 2,
+      "function_reachable": 4,
+      "dependency_reachable": 3,
+      "package_present": 3
+    }
+  },
+  "artifacts": []
+}
+```
+
+Schema draft: `schemas/source-coverage.schema.json`.
+
 ## Runtime policy JSON
 
-Runtime policy files control CI fail thresholds and temporary exceptions. The scanner never treats an exception as proof that a vulnerability is not affected; it marks matching findings as `policy_status: excepted` and preserves the rationale in the finding.
+Runtime policy files control CI fail thresholds and temporary exceptions. The scanner never treats an exception as evidence that a vulnerability is not affected; it marks matching findings as `policy_status: excepted` and preserves the rationale in the finding.
 
 ```json
 {
@@ -205,7 +279,7 @@ Generated with `--terraform-coverage-out`.
 }
 ```
 
-`visibility_gaps` is intentionally part of the format. A gap means the resource was seen and accounted for, but the tool does not yet have semantic rules for that resource type.
+`visibility_gaps` is part of the format. A gap means the resource was parsed and counted, but no semantic rule currently maps it to workload, exposure, identity, data, or supporting context.
 
 Schema draft: `schemas/terraform-coverage.schema.json`.
 
@@ -283,12 +357,9 @@ The canonical output is:
 }
 ```
 
-`remediations[]` groups findings by artifact and dependency so developers see a
-package-level fix queue before individual advisory rows. Each finding still
-includes artifact, component, vulnerability, source reachability, context,
-score, tier, confidence, rationale, fix commands, and policy status.
+`remediations[]` groups findings by artifact and dependency. Each finding still includes artifact, component, vulnerability, source reachability, context, score, tier, confidence, rationale, fix commands, and policy status.
 
-`source_reachability.state` is one of `absent`, `unknown_due_to_no_rule`, `package_present`, `imported`, `function_reachable`, or `attacker_controlled`. The `unknown_due_to_no_rule` state is a coverage warning: the vulnerable package is present, but no package-specific source rule exists and generic import evidence was not observed.
+`source_reachability.state` is one of `absent`, `unknown_due_to_no_rule`, `package_present`, `dependency_reachable`, `imported`, `function_reachable`, or `attacker_controlled`. `source_reachability.label` is the human-facing version used by reports: `absent from scanned source`, `no source rule`, `SBOM only`, `reachable through dependency graph`, `import observed`, `reachable vulnerable API`, or `request-controlled path`. The `unknown_due_to_no_rule` state is a coverage warning: the vulnerable package is present, but no package-specific source rule exists and generic import evidence was not observed.
 
 Schema draft: `schemas/findings.schema.json`.
 
@@ -302,11 +373,11 @@ It visualizes:
 
 - attacker entry and ingress/path cards derived from Terraform network-path evidence, such as Internet -> public security group/load balancer/application gateway -> workload;
 - deployable asset cards with network, IAM, code exposure, source, environment, owner, and criticality context;
-- vulnerability cards linked to the affected asset, including a plain code-exposure label such as `covered`, `reachable sink`, `not observed`, or `no rule`;
+- vulnerability cards linked to the affected asset, including a plain code-exposure label such as `request-controlled path`, `reachable vulnerable API`, `reachable through dependency graph`, `SBOM only`, or `no source rule`;
 - colors that emphasize the highest tier/criticality on each asset and vulnerability;
 - a searchable, filterable findings list with click-through details.
 
-The graph supports mouse-wheel zoom, drag-to-pan, tier filtering, exposure filtering, active-only filtering, and text search. It is an audit artifact, not a separate source of truth; the canonical machine-readable data remains `--out` findings JSON.
+The graph supports mouse-wheel zoom, drag-to-pan, tier filtering, exposure filtering, active-only filtering, and text search. The canonical machine-readable result remains `--out` findings JSON.
 
 ## Terraform fixture pack JSON
 

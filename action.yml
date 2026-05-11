@@ -1,6 +1,6 @@
 name: Reachability Advisor
-summary: Developer-first reachability-aware dependency vulnerability prioritization
-description: Runs Reachability Advisor and emits JSON, SARIF, diagnostics, Markdown, HTML, GitHub annotations, mapping, and optional Terraform coverage.
+summary: Dependency vulnerability prioritization with source, Terraform, network, and IAM context
+description: Runs Reachability Advisor and emits JSON, SARIF, diagnostics, Markdown, HTML, GitHub annotations, mapping, source coverage, and Terraform coverage.
 inputs:
   sbom:
     description: One or more CycloneDX SBOM paths. Use newline-separated paths for multiple artifacts.
@@ -9,31 +9,35 @@ inputs:
     description: Vulnerability intelligence JSON path, usually Grype JSON generated from the same SBOM set.
     required: true
   source-root:
-    description: Optional newline-separated artifact=path source-root mappings.
+    description: Newline-separated artifact=path source-root mappings. Required for code reachability.
     required: false
     default: ""
   artifact-alias:
-    description: Optional newline-separated artifact=reference aliases for SBOMs without strong artifact metadata.
+    description: Newline-separated artifact=reference aliases for SBOMs without strong artifact metadata.
     required: false
     default: ""
   context:
-    description: Optional context JSON path.
+    description: Context JSON path for explicit overrides or enrichment.
     required: false
     default: ""
   terraform-plan:
-    description: Optional terraform show -json plan path.
+    description: terraform show -json plan path. Required for full deployment scoring.
     required: false
     default: ""
   terraform-source:
-    description: Optional Terraform source directory or .tf file for conservative static HCL context when no plan is available.
+    description: Terraform source directory or .tf file for conservative static HCL fallback when no plan is available.
     required: false
     default: ""
   reachability-rules:
-    description: Optional custom reachability rules JSON path.
+    description: Custom reachability rules JSON path.
+    required: false
+    default: ""
+  source-evidence-in:
+    description: Newline-separated external source evidence files. Supports Reachability Advisor JSON, Semgrep JSON, SARIF, and govulncheck JSONL.
     required: false
     default: ""
   policy:
-    description: Optional runtime policy JSON path.
+    description: Runtime policy JSON path.
     required: false
     default: ""
   output-dir:
@@ -41,7 +45,7 @@ inputs:
     required: false
     default: outputs/reachability-advisor
   fail-on-tier:
-    description: Optional tier threshold: urgent, high, medium, low, informational.
+    description: Tier threshold: urgent, high, medium, low, informational.
     required: false
     default: ""
 outputs:
@@ -67,8 +71,11 @@ outputs:
     description: SBOM/source/Terraform mapping JSON output path.
     value: ${{ steps.scan.outputs.mapping }}
   terraform_coverage:
-    description: Terraform coverage JSON output path, written when Terraform context is supplied.
+    description: Terraform coverage JSON output path.
     value: ${{ steps.scan.outputs.terraform_coverage }}
+  source_coverage:
+    description: Source-analysis coverage JSON output path.
+    value: ${{ steps.scan.outputs.source_coverage }}
 runs:
   using: composite
   steps:
@@ -115,12 +122,14 @@ runs:
         annotations="$output_dir/reachability-annotations.txt"
         mapping="$output_dir/reachability-mapping.json"
         terraform_coverage="$output_dir/terraform-coverage.json"
+        source_coverage="$output_dir/source-coverage.json"
 
-        args=(scan --vulns "${{ inputs.vulns }}" --out "$findings" --sarif-out "$sarif" --diagnostics-out "$diagnostics" --markdown-out "$markdown" --html-out "$html" --annotations-out "$annotations" --mapping-out "$mapping" --no-table)
+        args=(scan --vulns "${{ inputs.vulns }}" --out "$findings" --sarif-out "$sarif" --diagnostics-out "$diagnostics" --markdown-out "$markdown" --html-out "$html" --annotations-out "$annotations" --mapping-out "$mapping" --source-coverage-out "$source_coverage" --no-table)
 
         add_repeated_args "--sbom" "${{ inputs.sbom }}"
         add_repeated_args "--source-root" "${{ inputs.source-root }}"
         add_repeated_args "--artifact-alias" "${{ inputs.artifact-alias }}"
+        add_repeated_args "--source-evidence-in" "${{ inputs.source-evidence-in }}"
 
         if [[ -n "${{ inputs.context }}" ]]; then args+=(--context "${{ inputs.context }}"); fi
         if [[ -n "${{ inputs.reachability-rules }}" ]]; then args+=(--reachability-rules "${{ inputs.reachability-rules }}"); fi
@@ -149,6 +158,7 @@ runs:
             echo "annotations=$annotations"
             echo "mapping=$mapping"
             echo "terraform_coverage=$terraform_coverage"
+            echo "source_coverage=$source_coverage"
           } >> "$GITHUB_OUTPUT"
         fi
 

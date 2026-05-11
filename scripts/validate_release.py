@@ -249,6 +249,7 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
     findings = out_dir / "findings.json"
     html = out_dir / "graph.html"
     terraform_coverage = out_dir / "terraform-coverage.json"
+    source_coverage = out_dir / "source-coverage.json"
     mapping = out_dir / "mapping.json"
     run_cli(
         [
@@ -273,6 +274,8 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
             str(ROOT / "samples" / "tfplan-multicloud.json"),
             "--terraform-coverage-out",
             str(terraform_coverage),
+            "--source-coverage-out",
+            str(source_coverage),
             "--mapping-out",
             str(mapping),
             "--source-root",
@@ -301,6 +304,7 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
         raise ReleaseCheckError("generated HTML graph report is missing report data")
     checks.append({"name": "generated HTML graph report", "status": "passed", "document": str(html)})
     check("generated Terraform coverage", terraform_coverage, "terraform-coverage.schema.json")
+    check("generated source coverage", source_coverage, "source-coverage.schema.json")
     check("generated mapping report", mapping, "mapping-report.schema.json")
 
     fixture_report = out_dir / "fixtures-report.json"

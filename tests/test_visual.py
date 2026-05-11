@@ -159,15 +159,15 @@ class VisualPayloadTests(unittest.TestCase):
         ])
 
         assets = {asset["name"]: asset for asset in payload["assets"]}
-        self.assertIn("covered", assets["api"]["codeExposures"])
-        self.assertIn("reachable sink", assets["job"]["codeExposures"])
-        self.assertIn("not observed", assets["unused"]["codeExposures"])
-        self.assertIn("no rule", assets["worker"]["codeExposures"])
+        self.assertIn("request-controlled path", assets["api"]["codeExposures"])
+        self.assertIn("reachable vulnerable API", assets["job"]["codeExposures"])
+        self.assertIn("SBOM only", assets["unused"]["codeExposures"])
+        self.assertIn("no source rule", assets["worker"]["codeExposures"])
         vulns = {vuln["assetId"]: vuln for vuln in payload["vulnerabilities"]}
-        self.assertEqual(vulns["asset:api"]["codeExposure"], "covered")
-        self.assertEqual(vulns["asset:job"]["codeExposure"], "reachable sink")
-        self.assertEqual(vulns["asset:unused"]["codeExposure"], "not observed")
-        self.assertEqual(vulns["asset:worker"]["codeExposure"], "no rule")
+        self.assertEqual(vulns["asset:api"]["codeExposure"], "request-controlled path")
+        self.assertEqual(vulns["asset:job"]["codeExposure"], "reachable vulnerable API")
+        self.assertEqual(vulns["asset:unused"]["codeExposure"], "SBOM only")
+        self.assertEqual(vulns["asset:worker"]["codeExposure"], "no source rule")
         self.assertIn("No package-specific source rule", vulns["asset:worker"]["codeExposureDetail"])
 
     def test_html_uses_explicit_priority_score_labels_and_fan_edges(self) -> None:
