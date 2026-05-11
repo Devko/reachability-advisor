@@ -36,9 +36,7 @@ def package_match(component_name: str, component_purl: str | None, vuln_name: st
     if component_purl and vuln_purl and component_purl == vuln_purl:
         return True
     if comp and vuln and comp.ptype == vuln.ptype and comp.name == vuln.name:
-        if vuln.namespace and comp.namespace != vuln.namespace:
-            return False
-        return True
+        return not (vuln.namespace and comp.namespace != vuln.namespace)
     normalized_component = component_name.lower().replace("_", "-")
     normalized_vuln = vuln_name.lower().replace("_", "-")
     return normalized_component == normalized_vuln

@@ -22,12 +22,31 @@ from __future__ import annotations
 import ast
 import json
 import re
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
-from .models import Component, Confidence, Reachability, SbomDocument, SourceEvidence, SourceLocation, VulnerabilityRecord
+from .models import (
+    Component,
+    Confidence,
+    Reachability,
+    SbomDocument,
+    SourceEvidence,
+    SourceLocation,
+    VulnerabilityRecord,
+)
 from .purl import ecosystem_from_component, parse_purl
+from .source_external import (
+    ExternalSourceEvidenceStore,
+    load_external_source_evidence,
+    merge_source_evidence,
+)
+from .source_manifests import (
+    is_manifest_file,
+    manifest_dependency_evidence,
+    manifest_language_for,
+)
 
 MAX_FILE_BYTES = 1_000_000
 SUPPORTED_EXTENSIONS = {".java", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".py", ".go"}
@@ -83,6 +102,7 @@ class IndexedSourceFile:
 class SourceIndex:
     root: Path | None
     files: list[IndexedSourceFile] = field(default_factory=list)
+    manifest_files: list[IndexedSourceFile] = field(default_factory=list)
     skipped_files: list[dict[str, str]] = field(default_factory=list)
     import_cache: dict[str, bool] = field(default_factory=dict)
 
@@ -474,7 +494,9 @@ def build_source_index(root: Path | None) -> SourceIndex:
             continue
         if not path.is_file():
             continue
-        if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+        is_source = path.suffix.lower() in SUPPORTED_EXTENSIONS
+        is_manifest = is_manifest_file(path)
+        if not is_source and not is_manifest:
             continue
         try:
             size = path.stat().st_size
@@ -489,7 +511,10 @@ def build_source_index(root: Path | None) -> SourceIndex:
         except OSError as exc:
             index.skipped_files.append({"path": str(path), "reason": f"read failed: {exc}"})
             continue
-        index.files.append(IndexedSourceFile(path=path, language=_language_for(path), text=text))
+        if is_source:
+            index.files.append(IndexedSourceFile(path=path, language=_language_for(path), text=text))
+        if is_manifest:
+            index.manifest_files.append(IndexedSourceFile(path=path, language=manifest_language_for(path), text=text))
     return index
 
 
@@ -628,6 +653,7 @@ def _call_names(text: str) -> set[str]:
 
 
 def _regex_function_segments(text: str, language: str) -> list[FunctionSegment]:
+    patterns: tuple[str, ...]
     if language == "javascript":
         patterns = (
             r"(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\([^{};]*\)\s*\{",
@@ -965,277 +991,6 @@ def _scan_file(path: Path, text: str, import_patterns: tuple[str, ...], function
     return signal
 
 
-REACHABILITY_STRENGTH = {
-    Reachability.ABSENT: 0,
-    Reachability.UNKNOWN_DUE_TO_NO_RULE: 1,
-    Reachability.PACKAGE_PRESENT: 2,
-    Reachability.DEPENDENCY_REACHABLE: 3,
-    Reachability.IMPORTED: 4,
-    Reachability.FUNCTION_REACHABLE: 5,
-    Reachability.ATTACKER_CONTROLLED: 6,
-}
-
-
-@dataclass(frozen=True)
-class ExternalSourceEvidenceRecord:
-    evidence: SourceEvidence
-    artifact: str | None = None
-    component: str | None = None
-    vulnerability: str | None = None
-    package_purl: str | None = None
-
-
-@dataclass
-class ExternalSourceEvidenceStore:
-    records: list[ExternalSourceEvidenceRecord] = field(default_factory=list)
-
-    def best_for(self, artifact: str, component: Component, vulnerability: VulnerabilityRecord) -> SourceEvidence | None:
-        candidates: list[SourceEvidence] = []
-        component_names = {component.name.lower(), component.display_name.lower()}
-        if component.purl:
-            component_names.add(component.purl.lower())
-        vuln_ids = {vulnerability.id.lower(), *(alias.lower() for alias in vulnerability.aliases)}
-        for record in self.records:
-            if record.artifact and record.artifact != artifact:
-                continue
-            if record.vulnerability and record.vulnerability.lower() not in vuln_ids:
-                continue
-            if record.package_purl:
-                if not component.purl:
-                    continue
-                if record.package_purl.lower() != component.purl.lower():
-                    continue
-            if record.component and record.component.lower() not in component_names:
-                continue
-            if not record.component and not record.package_purl and not record.vulnerability:
-                continue
-            candidates.append(record.evidence)
-        if not candidates:
-            return None
-        return max(candidates, key=lambda item: (REACHABILITY_STRENGTH[item.reachability], _confidence_strength(item.confidence)))
-
-
-def _confidence_strength(confidence: Confidence) -> int:
-    return {Confidence.LOW: 0, Confidence.MEDIUM: 1, Confidence.HIGH: 2}[confidence]
-
-
-def merge_source_evidence(base: SourceEvidence, external: SourceEvidence | None) -> SourceEvidence:
-    if external is None:
-        return base
-    base_key = (REACHABILITY_STRENGTH[base.reachability], _confidence_strength(base.confidence))
-    external_key = (REACHABILITY_STRENGTH[external.reachability], _confidence_strength(external.confidence))
-    if external_key < base_key:
-        return base
-    locations = [*external.locations, *base.locations][:8]
-    symbols = list(dict.fromkeys([*external.matched_symbols, *base.matched_symbols]))
-    dependency_path = external.dependency_path or base.dependency_path
-    reason = external.reason
-    if base.reason and base.reachability != external.reachability:
-        reason = f"{external.reason}; built-in analyzer reported {base.reachability.value}: {base.reason}"
-    return SourceEvidence(
-        reachability=external.reachability,
-        confidence=external.confidence,
-        language=external.language if external.language != "unknown" else base.language,
-        reason=reason,
-        locations=locations,
-        matched_symbols=symbols,
-        dependency_path=dependency_path,
-        evidence_source=external.evidence_source,
-    )
-
-
-def load_external_source_evidence(paths: Iterable[str | Path]) -> ExternalSourceEvidenceStore:
-    store = ExternalSourceEvidenceStore()
-    for path in paths:
-        evidence_path = Path(path)
-        text = evidence_path.read_text(encoding="utf-8")
-        try:
-            data = json.loads(text)
-            store.records.extend(_external_records_from_data(data, evidence_path))
-        except json.JSONDecodeError:
-            for line in text.splitlines():
-                if not line.strip():
-                    continue
-                store.records.extend(_external_records_from_data(json.loads(line), evidence_path))
-    return store
-
-
-def _external_records_from_data(data: Any, path: Path) -> list[ExternalSourceEvidenceRecord]:
-    if isinstance(data, dict) and isinstance(data.get("evidence"), list):
-        return [_record_from_plain(item, path) for item in data["evidence"] if isinstance(item, dict)]
-    if isinstance(data, dict) and isinstance(data.get("findings"), list):
-        return [_record_from_finding(item, path) for item in data["findings"] if isinstance(item, dict)]
-    if isinstance(data, dict) and isinstance(data.get("results"), list):
-        if data.get("version") == "2.1.0" or data.get("$schema"):
-            return _records_from_sarif(data, path)
-        return [_record_from_semgrep(item, path) for item in data["results"] if isinstance(item, dict)]
-    if isinstance(data, dict) and isinstance(data.get("runs"), list):
-        return _records_from_sarif(data, path)
-    if isinstance(data, list):
-        return [_record_from_plain(item, path) for item in data if isinstance(item, dict)]
-    # govulncheck can emit JSON lines. If a caller parsed one line, support it.
-    if isinstance(data, dict) and ("finding" in data or "osv" in data):
-        record = _record_from_govulncheck(data, path)
-        return [record] if record else []
-    return []
-
-
-def _state(value: Any, default: Reachability = Reachability.FUNCTION_REACHABLE) -> Reachability:
-    try:
-        return Reachability(str(value or default.value))
-    except ValueError:
-        return default
-
-
-def _confidence(value: Any, default: Confidence = Confidence.MEDIUM) -> Confidence:
-    try:
-        return Confidence(str(value or default.value))
-    except ValueError:
-        return default
-
-
-def _locations(items: Any, base_path: Path) -> list[SourceLocation]:
-    locations: list[SourceLocation] = []
-    for item in items or []:
-        if not isinstance(item, dict):
-            continue
-        raw_path = item.get("path") or item.get("uri") or item.get("file")
-        if not raw_path:
-            continue
-        locations.append(
-            SourceLocation(
-                path=Path(str(raw_path)),
-                line=int(item.get("line") or item.get("startLine") or 1),
-                column=int(item.get("column") or item.get("startColumn") or 1),
-                snippet=str(item.get("snippet") or ""),
-            )
-        )
-    return locations
-
-
-def _record_from_plain(item: dict[str, Any], path: Path) -> ExternalSourceEvidenceRecord:
-    source = str(item.get("tool") or item.get("source") or path.name)
-    evidence = SourceEvidence(
-        reachability=_state(item.get("state") or item.get("reachability")),
-        confidence=_confidence(item.get("confidence")),
-        language=str(item.get("language") or "unknown"),
-        reason=str(item.get("reason") or f"external source evidence from {source}"),
-        locations=_locations(item.get("locations"), path),
-        matched_symbols=[str(symbol) for symbol in item.get("matched_symbols", []) or []],
-        dependency_path=[str(part) for part in item.get("dependency_path", []) or []],
-        evidence_source=source,
-    )
-    return ExternalSourceEvidenceRecord(
-        evidence=evidence,
-        artifact=str(item.get("artifact")) if item.get("artifact") else None,
-        component=str(item.get("component") or item.get("package")) if item.get("component") or item.get("package") else None,
-        vulnerability=str(item.get("vulnerability") or item.get("vulnerability_id")) if item.get("vulnerability") or item.get("vulnerability_id") else None,
-        package_purl=str(item.get("purl") or item.get("package_purl")) if item.get("purl") or item.get("package_purl") else None,
-    )
-
-
-def _record_from_finding(item: dict[str, Any], path: Path) -> ExternalSourceEvidenceRecord:
-    source = item.get("source_reachability") if isinstance(item.get("source_reachability"), dict) else {}
-    plain = {
-        "artifact": item.get("artifact", {}).get("name") if isinstance(item.get("artifact"), dict) else None,
-        "component": item.get("component", {}).get("name") if isinstance(item.get("component"), dict) else None,
-        "purl": item.get("component", {}).get("purl") if isinstance(item.get("component"), dict) else None,
-        "vulnerability": item.get("vulnerability", {}).get("id") if isinstance(item.get("vulnerability"), dict) else None,
-        "state": source.get("state"),
-        "confidence": source.get("confidence"),
-        "language": source.get("language"),
-        "reason": source.get("reason"),
-        "locations": source.get("locations"),
-        "matched_symbols": source.get("matched_symbols"),
-        "dependency_path": source.get("dependency_path"),
-        "tool": source.get("evidence_source") or "reachability-advisor",
-    }
-    return _record_from_plain(plain, path)
-
-
-def _record_from_semgrep(item: dict[str, Any], path: Path) -> ExternalSourceEvidenceRecord:
-    extra = item.get("extra") if isinstance(item.get("extra"), dict) else {}
-    metadata = extra.get("metadata") if isinstance(extra.get("metadata"), dict) else {}
-    ra = metadata.get("reachability_advisor") if isinstance(metadata.get("reachability_advisor"), dict) else metadata
-    start = item.get("start") if isinstance(item.get("start"), dict) else {}
-    plain = {
-        "artifact": ra.get("artifact"),
-        "component": ra.get("component") or ra.get("package"),
-        "purl": ra.get("purl") or ra.get("package_purl"),
-        "vulnerability": ra.get("vulnerability") or ra.get("vulnerability_id"),
-        "state": ra.get("state") or ra.get("reachability") or Reachability.FUNCTION_REACHABLE.value,
-        "confidence": ra.get("confidence") or Confidence.MEDIUM.value,
-        "language": ra.get("language") or _language_for(Path(str(item.get("path") or ""))),
-        "reason": extra.get("message") or f"Semgrep rule {item.get('check_id')}",
-        "locations": [{"path": item.get("path"), "line": start.get("line", 1), "column": start.get("col", 1)}],
-        "matched_symbols": [str(item.get("check_id"))],
-        "tool": "semgrep",
-    }
-    return _record_from_plain(plain, path)
-
-
-def _records_from_sarif(data: dict[str, Any], path: Path) -> list[ExternalSourceEvidenceRecord]:
-    records: list[ExternalSourceEvidenceRecord] = []
-    for run in data.get("runs", []) or []:
-        if not isinstance(run, dict):
-            continue
-        tool_name = run.get("tool", {}).get("driver", {}).get("name", "sarif") if isinstance(run.get("tool"), dict) else "sarif"
-        for result in run.get("results", []) or []:
-            if not isinstance(result, dict):
-                continue
-            props = result.get("properties") if isinstance(result.get("properties"), dict) else {}
-            locations = []
-            for location in result.get("locations", []) or []:
-                physical = location.get("physicalLocation") if isinstance(location, dict) else {}
-                artifact = physical.get("artifactLocation", {}) if isinstance(physical, dict) else {}
-                region = physical.get("region", {}) if isinstance(physical, dict) else {}
-                locations.append({"path": artifact.get("uri"), "line": region.get("startLine", 1), "column": region.get("startColumn", 1)})
-            plain = {
-                "artifact": props.get("artifact"),
-                "component": props.get("component") or props.get("package"),
-                "purl": props.get("purl") or props.get("package_purl"),
-                "vulnerability": props.get("vulnerability") or result.get("ruleId"),
-                "state": props.get("reachability") or props.get("source_state") or Reachability.FUNCTION_REACHABLE.value,
-                "confidence": props.get("confidence") or Confidence.MEDIUM.value,
-                "reason": result.get("message", {}).get("text") if isinstance(result.get("message"), dict) else f"SARIF result {result.get('ruleId')}",
-                "locations": locations,
-                "matched_symbols": [str(result.get("ruleId"))],
-                "tool": str(tool_name),
-            }
-            records.append(_record_from_plain(plain, path))
-    return records
-
-
-def _record_from_govulncheck(item: dict[str, Any], path: Path) -> ExternalSourceEvidenceRecord | None:
-    finding = item.get("finding") if isinstance(item.get("finding"), dict) else item
-    vuln = finding.get("osv") or finding.get("osv_id") or finding.get("id")
-    trace = finding.get("trace") if isinstance(finding.get("trace"), list) else []
-    if not vuln:
-        return None
-    package = None
-    locations = []
-    for frame in trace:
-        if not isinstance(frame, dict):
-            continue
-        package = frame.get("module") or frame.get("package") or package
-        position = frame.get("position") if isinstance(frame.get("position"), dict) else {}
-        if position.get("filename"):
-            locations.append({"path": position.get("filename"), "line": position.get("line", 1), "column": position.get("column", 1)})
-    return _record_from_plain(
-        {
-            "component": package,
-            "vulnerability": vuln,
-            "state": Reachability.FUNCTION_REACHABLE.value,
-            "confidence": Confidence.HIGH.value,
-            "reason": "govulncheck reported a call stack to a vulnerable function",
-            "locations": locations,
-            "tool": "govulncheck",
-            "language": "go",
-        },
-        path,
-    )
-
-
 def analyze_component_source(
     component: Component,
     root: Path | None,
@@ -1253,11 +1008,14 @@ def analyze_component_source(
             reason="component appears in SBOM; no source root supplied",
         )
     if not index.files:
+        manifest_evidence = manifest_dependency_evidence(component, index.manifest_files)
+        if manifest_evidence:
+            return manifest_evidence
         return SourceEvidence(
             reachability=Reachability.PACKAGE_PRESENT,
             confidence=Confidence.LOW,
             language="unknown",
-            reason="component appears in SBOM; no supported source files found",
+            reason="component appears in SBOM; no supported source files or matching package-manager manifest entries found",
         )
 
     rules = _rules_for(component, vulnerability, custom_rules)
@@ -1280,6 +1038,9 @@ def analyze_component_source(
             if dependency_evidence.reachability == Reachability.PACKAGE_PRESENT:
                 dependency_evidence.reason += "; no package-specific source rule exists and generic import usage was not observed"
             return dependency_evidence
+        manifest_evidence = manifest_dependency_evidence(component, index.manifest_files)
+        if manifest_evidence:
+            return manifest_evidence
         return SourceEvidence(
             reachability=Reachability.UNKNOWN_DUE_TO_NO_RULE,
             confidence=Confidence.LOW,
@@ -1292,6 +1053,9 @@ def analyze_component_source(
         dependency_evidence = _dependency_reachable_evidence(component, sbom, index, custom_rules, language)
         if dependency_evidence:
             return dependency_evidence
+        manifest_evidence = manifest_dependency_evidence(component, index.manifest_files)
+        if manifest_evidence:
+            return manifest_evidence
         return SourceEvidence(
             reachability=Reachability.PACKAGE_PRESENT,
             confidence=Confidence.LOW,
@@ -1370,6 +1134,9 @@ def analyze_component_source(
     dependency_evidence = _dependency_reachable_evidence(component, sbom, index, custom_rules, language)
     if dependency_evidence:
         return dependency_evidence
+    manifest_evidence = manifest_dependency_evidence(component, index.manifest_files)
+    if manifest_evidence:
+        return manifest_evidence
     return SourceEvidence(
         reachability=Reachability.PACKAGE_PRESENT,
         confidence=Confidence.LOW,
@@ -1398,8 +1165,8 @@ def _rule_text(rules: tuple[ReachabilityRule, ...], vulnerability: Vulnerability
 
 def source_coverage_report(
     sboms: list[SbomDocument],
-    source_roots: dict[str, Path],
-    indexes: dict[str, SourceIndex],
+    source_roots: Mapping[str, Path],
+    indexes: Mapping[str, SourceIndex],
     findings: list[Any],
     external_evidence: ExternalSourceEvidenceStore | None = None,
 ) -> dict[str, Any]:
@@ -1407,14 +1174,16 @@ def source_coverage_report(
     for finding in findings:
         by_artifact.setdefault(finding.artifact.name, []).append(finding)
     artifacts: list[dict[str, Any]] = []
-    totals = {
+    totals: dict[str, Any] = {
         "artifact_count": len(sboms),
         "artifacts_with_source_root": 0,
         "files_scanned": 0,
+        "manifest_files_scanned": 0,
         "files_skipped": 0,
         "findings_analyzed": len(findings),
         "findings_with_external_evidence": 0,
         "findings_with_dependency_graph_path": 0,
+        "findings_with_manifest_evidence": 0,
     }
     state_counts: dict[str, int] = {}
     for sbom in sboms:
@@ -1423,6 +1192,7 @@ def source_coverage_report(
         if sbom.artifact.name in source_roots:
             totals["artifacts_with_source_root"] += 1
         totals["files_scanned"] += len(index.files)
+        totals["manifest_files_scanned"] += len(index.manifest_files)
         totals["files_skipped"] += len(index.skipped_files)
         artifact_states: dict[str, int] = {}
         for finding in artifact_findings:
@@ -1433,12 +1203,15 @@ def source_coverage_report(
                 totals["findings_with_external_evidence"] += 1
             if finding.source.dependency_path:
                 totals["findings_with_dependency_graph_path"] += 1
+            if any(str(symbol).startswith("manifest:") for symbol in finding.source.matched_symbols):
+                totals["findings_with_manifest_evidence"] += 1
         artifacts.append(
             {
                 "artifact": sbom.artifact.name,
                 "source_root": str(source_roots.get(sbom.artifact.name)) if sbom.artifact.name in source_roots else None,
                 "source_root_exists": bool(index.root and index.root.exists() and index.root.is_dir()),
                 "files_scanned": len(index.files),
+                "manifest_files_scanned": len(index.manifest_files),
                 "files_skipped": len(index.skipped_files),
                 "languages": index.languages,
                 "findings_analyzed": len(artifact_findings),
@@ -1463,6 +1236,7 @@ def source_coverage_report(
         "notes": [
             "Source evidence coverage counts findings with dependency graph, import, vulnerable API, or request-controlled evidence.",
             "No-rule findings are rule coverage gaps; package-present findings are evidence gaps.",
+            "Package-manager manifest evidence is weak dependency evidence. It does not prove runtime import or vulnerable API execution.",
             "External evidence must match a component/package, package URL, or vulnerability selector; artifact only narrows a selector match.",
         ],
     }

@@ -34,9 +34,14 @@ class FixtureDiscoveryTests(unittest.TestCase):
             ids,
             [
                 "aws-ecs-fargate-service",
+                "aws-lambda-function-url",
                 "azure-container-apps",
+                "azure-app-service",
                 "gcp-cloud-run",
+                "gcp-gke-workload",
                 "kubernetes-ingress-workload",
+                "helm-heavy-kubernetes",
+                "kubernetes-private-service-mesh",
             ],
         )
 
@@ -57,9 +62,8 @@ class FixtureDiscoveryTests(unittest.TestCase):
         self.assertTrue(pack.vulnerabilities.exists())
 
     def test_load_fixture_pack_rejects_missing_manifest(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaises(FixtureError):
-                load_fixture_pack(Path(tmp) / "missing")
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaises(FixtureError):
+            load_fixture_pack(Path(tmp) / "missing")
 
     def test_load_fixture_pack_rejects_non_list_sboms(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -99,7 +103,7 @@ class FixtureRunTests(unittest.TestCase):
     def test_run_all_fixture_packs_passes(self) -> None:
         report = run_fixture_packs(FIXTURES)
         self.assertEqual(report["status"], "passed")
-        self.assertEqual(report["fixture_count"], 4)
+        self.assertEqual(report["fixture_count"], 9)
         self.assertEqual(report["failed_count"], 0)
 
     def test_each_fixture_has_100_percent_accounting_and_semantic_coverage(self) -> None:
@@ -144,6 +148,53 @@ class FixtureRunTests(unittest.TestCase):
         finding = report["top_findings"][0]
         self.assertEqual(finding["context"]["exposure"], "public")
         self.assertEqual(finding["context"]["privilege"], "admin")
+
+    def test_lambda_fixture_marks_function_url_public(self) -> None:
+        pack = load_fixture_pack(FIXTURES / "packs" / "aws-lambda-function-url")
+        report = run_fixture_pack(pack)
+        finding = report["top_findings"][0]
+        self.assertEqual(finding["artifact"]["name"], "lambda-orders")
+        self.assertEqual(finding["context"]["exposure"], "public")
+        self.assertEqual(finding["context"]["privilege"], "sensitive")
+        self.assertTrue(any("aws_lambda_function_url" in item for item in finding["context"]["evidence"]))
+
+    def test_azure_app_service_fixture_marks_web_app_public(self) -> None:
+        pack = load_fixture_pack(FIXTURES / "packs" / "azure-app-service")
+        report = run_fixture_pack(pack)
+        finding = report["top_findings"][0]
+        self.assertEqual(finding["artifact"]["name"], "web-portal")
+        self.assertEqual(finding["context"]["exposure"], "public")
+        self.assertEqual(finding["context"]["privilege"], "sensitive")
+
+    def test_gke_fixture_combines_cluster_and_kubernetes_workload(self) -> None:
+        pack = load_fixture_pack(FIXTURES / "packs" / "gcp-gke-workload")
+        report = run_fixture_pack(pack)
+        coverage_types = set(report["coverage"]["resource_types_seen"])
+        finding = report["top_findings"][0]
+        self.assertIn("google_container_cluster", coverage_types)
+        self.assertIn("kubernetes_deployment", coverage_types)
+        self.assertEqual(finding["artifact"]["name"], "checkout-api")
+        self.assertEqual(finding["context"]["exposure"], "public")
+
+    def test_helm_fixture_keeps_rendered_workload_and_opaque_wrapper_visible(self) -> None:
+        pack = load_fixture_pack(FIXTURES / "packs" / "helm-heavy-kubernetes")
+        report = run_fixture_pack(pack)
+        finding = report["top_findings"][0]
+        gaps = report["coverage"]["visibility_gaps"]
+        self.assertEqual(finding["artifact"]["name"], "helm-dashboard")
+        self.assertEqual(finding["context"]["exposure"], "public")
+        self.assertEqual(finding["context"]["privilege"], "admin")
+        self.assertTrue(any(gap["type"] == "helm_release" and gap["gap_type"] == "opaque_manifest_wrapper" for gap in gaps))
+
+    def test_private_service_mesh_fixture_stays_internal_and_limited(self) -> None:
+        pack = load_fixture_pack(FIXTURES / "packs" / "kubernetes-private-service-mesh")
+        report = run_fixture_pack(pack)
+        finding = report["top_findings"][0]
+        gaps = report["coverage"]["visibility_gaps"]
+        self.assertEqual(finding["artifact"]["name"], "mesh-worker")
+        self.assertEqual(finding["context"]["exposure"], "internal")
+        self.assertEqual(finding["context"]["privilege"], "limited")
+        self.assertTrue(any(gap["type"] == "kubectl_manifest" and gap["gap_type"] == "opaque_manifest_wrapper" for gap in gaps))
 
     def test_run_fixture_pack_writes_per_fixture_outputs(self) -> None:
         pack = load_fixture_pack(FIXTURES / "packs" / "gcp-cloud-run")

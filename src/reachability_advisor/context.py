@@ -27,7 +27,8 @@ class ContextError(ValueError):
 
 
 def _context_from_mapping(raw: dict[str, Any], source: str) -> ContextEvidence:
-    evidence = raw.get("evidence") if isinstance(raw.get("evidence"), list) else []
+    raw_evidence = raw.get("evidence")
+    evidence = raw_evidence if isinstance(raw_evidence, list) else []
     confidence = str(raw.get("confidence") or "medium").lower()
     if confidence not in {"high", "medium", "low"}:
         confidence = "medium"

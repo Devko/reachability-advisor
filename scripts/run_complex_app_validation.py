@@ -19,15 +19,18 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from reachability_advisor.cli import main as advisor_main  # noqa: E402
-from reachability_advisor.hcl_static import audit_hcl_project, render_hcl_audit_markdown  # noqa: E402
-
+from reachability_advisor.hcl_static import (  # noqa: E402
+    audit_hcl_project,
+    render_hcl_audit_markdown,
+)
+from reachability_advisor.kubernetes import analyze_kubernetes_manifests  # noqa: E402
+from reachability_advisor.models import Artifact  # noqa: E402
 
 DEFAULT_CORPUS = ROOT / "external_corpus" / "complex_app_cases.json"
 DEFAULT_WORKTREES = ROOT / "external_corpus" / "worktrees"
@@ -333,77 +336,43 @@ def _generate_kubernetes_context(case: dict[str, Any], checkout: Path, workload_
     if not manifest.exists():
         return {"status": "missing", "path": str(manifest), "contexts": 0}
 
-    documents = _parse_simple_yaml_documents(manifest)
-    deployments = [doc for doc in documents if str(doc.get("kind")) in {"Deployment", "StatefulSet", "DaemonSet"}]
-    services = [doc for doc in documents if str(doc.get("kind")) == "Service"]
-    deployment_by_name: dict[str, dict[str, Any]] = {}
-    for deployment in deployments:
-        for name in _deployment_names(deployment):
-            deployment_by_name[name] = deployment
-    public_entry: tuple[dict[str, Any], dict[str, Any] | None] | None = None
-    for service in services:
-        if _service_exposure(service) != "public":
-            continue
-        target_names = _service_selector_names(service)
-        deployment = next((deployment_by_name[name] for name in target_names if name in deployment_by_name), None)
-        public_entry = (service, deployment)
-        break
-
     passed_artifacts = {str(row["artifact"]) for row in workload_rows if row.get("status") == "passed"}
-    context: dict[str, Any] = {"schema_version": "1.0", "artifacts": {}}
-    matched_services = 0
+    artifacts: list[Artifact] = []
     for workload in case.get("workloads") or []:
         artifact = str(workload["artifact"])
         if artifact not in passed_artifacts:
             continue
-        deployment = deployment_by_name.get(artifact)
-        service_matches = [service for service in services if artifact in _service_selector_names(service)]
-        exposures = [_service_exposure(service) for service in service_matches]
-        exposure = _max_exposure(exposures or (["private"] if deployment else ["unknown"]))
-        evidence: list[str] = []
-        deployment_ref = f"kubernetes_deployment.{_manifest_metadata_name(deployment) or artifact}" if deployment else f"kubernetes_workload.{artifact}"
-        for service in service_matches:
-            service_name = _manifest_metadata_name(service)
-            service_type = str(_nested(service, "spec", "type") or "ClusterIP")
-            service_exposure = _service_exposure(service)
-            evidence.append(f"context network path: {service_exposure} via kubernetes_service.{service_name} {service_type} -> {deployment_ref}")
-        if case.get("infer_cluster_lateral_from_public_entry") and public_entry and exposure == "internal":
-            entry_service, entry_deployment = public_entry
-            entry_service_name = _manifest_metadata_name(entry_service)
-            entry_service_type = str(_nested(entry_service, "spec", "type") or "ClusterIP")
-            entry_deployment_ref = (
-                f"kubernetes_deployment.{_manifest_metadata_name(entry_deployment)}" if entry_deployment else "kubernetes_workload.public-entry"
-            )
-            service_step = ""
-            if service_matches:
-                service = service_matches[0]
-                service_step = f" -> kubernetes_service.{_manifest_metadata_name(service)} {str(_nested(service, 'spec', 'type') or 'ClusterIP')}"
-            evidence.insert(
-                0,
-                f"context network path: internal via kubernetes_service.{entry_service_name} {entry_service_type} -> {entry_deployment_ref}{service_step} -> {deployment_ref}",
-            )
-        if not evidence:
-            evidence.append(f"context exposure inference: {exposure} via {deployment_ref}")
-        matched_services += len(service_matches)
+        aliases = ",".join(str(alias) for alias in workload.get("aliases") or [])
+        artifacts.append(Artifact(name=artifact, properties={"reachability:aliases": aliases} if aliases else {}))
+
+    analysis = analyze_kubernetes_manifests(
+        [manifest],
+        artifacts,
+        infer_lateral_from_public_entry=bool(case.get("infer_cluster_lateral_from_public_entry")),
+    )
+    context: dict[str, Any] = {"schema_version": "1.0", "artifacts": {}}
+    for artifact, evidence in analysis.contexts.items():
         context["artifacts"][artifact] = {
-            "environment": "prod",
-            "exposure": exposure,
-            "privilege": "unknown",
-            "criticality": "unknown",
-            "confidence": "medium",
-            "evidence": evidence,
+            "environment": evidence.environment,
+            "exposure": evidence.exposure,
+            "privilege": evidence.privilege,
+            "criticality": evidence.criticality,
+            "iam_impacts": evidence.iam_impacts,
+            "confidence": evidence.confidence.value,
+            "evidence": evidence.evidence,
         }
 
     output = case_out / "kubernetes-context.json"
     _write_json(output, context)
+    summary = analysis.coverage.get("summary", {})
     return {
         "status": "passed",
         "path": str(output),
         "manifest": str(manifest),
         "workloads": len(context["artifacts"]),
-        "services": len(services),
-        "service_matches": matched_services,
-        "exposure_counts": _count_by([item for item in context["artifacts"].values()], "exposure"),
+        "services": summary.get("service_resources", 0),
+        "service_matches": summary.get("artifacts_matched", 0),
+        "exposure_counts": summary.get("exposure_counts", {}),
     }
 
 
@@ -414,12 +383,15 @@ def _run_advisor(
     merged_vulns: Path,
     case_out: Path,
     context_path: Path | None = None,
+    kubernetes_manifest: Path | None = None,
+    infer_kubernetes_lateral: bool = False,
 ) -> dict[str, Any]:
     terraform_source = checkout / str(case["terraform_source"])
     findings_out = case_out / "findings.json"
     markdown_out = case_out / "summary.md"
     html_out = case_out / "reachability-graph.html"
     coverage_out = case_out / "terraform-coverage.json"
+    kubernetes_coverage_out = case_out / "kubernetes-coverage.json"
     source_coverage_out = case_out / "source-coverage.json"
     mapping_out = case_out / "mapping.json"
     args = ["scan"]
@@ -428,6 +400,10 @@ def _run_advisor(
             args.extend(["--sbom", str(row["sbom"])])
     if context_path:
         args.extend(["--context", str(context_path)])
+    if kubernetes_manifest:
+        args.extend(["--kubernetes-manifest", str(kubernetes_manifest), "--kubernetes-coverage-out", str(kubernetes_coverage_out)])
+        if infer_kubernetes_lateral:
+            args.append("--kubernetes-infer-lateral")
     args.extend(
         [
             "--vulns",
@@ -464,6 +440,7 @@ def _run_advisor(
         "markdown": str(markdown_out),
         "html": str(html_out),
         "terraform_coverage": str(coverage_out),
+        "kubernetes_coverage": str(kubernetes_coverage_out),
         "mapping": str(mapping_out),
     }
 
@@ -502,7 +479,8 @@ def _advisor_summary(advisor: dict[str, Any]) -> dict[str, Any]:
         "remediation_count": len(remediations),
         "services_with_findings": len(services_with_findings),
         "service_names_with_findings": services_with_findings,
-        "tier_counts": _count_by(remediations, "tier"),
+        "tier_counts": _count_by(findings, "tier"),
+        "remediation_tier_counts": _count_by(remediations, "tier"),
         "source_reachability_counts": _count_by(source_states, "state"),
         "exposure_counts": _count_by(contexts, "exposure"),
         "privilege_counts": _count_by(contexts, "privilege"),
@@ -588,8 +566,18 @@ def _run_case(case: dict[str, Any], args: argparse.Namespace, grype: Path | None
         merged_summary = _merge_grype_reports(passed_workloads, merged_vulns)
         hcl_summary = _run_hcl_audit(terraform_source, case_out)
         kubernetes_context = _generate_kubernetes_context(case, checkout, passed_workloads, case_out)
-        context_path = Path(str(kubernetes_context["path"])) if kubernetes_context and kubernetes_context.get("status") == "passed" else None
-        advisor = _run_advisor(case, checkout, passed_workloads, merged_vulns, case_out, context_path=context_path)
+        kubernetes_manifest = checkout / str(case["kubernetes_manifest"]) if case.get("kubernetes_manifest") else None
+        if kubernetes_manifest and not kubernetes_manifest.exists():
+            kubernetes_manifest = None
+        advisor = _run_advisor(
+            case,
+            checkout,
+            passed_workloads,
+            merged_vulns,
+            case_out,
+            kubernetes_manifest=kubernetes_manifest,
+            infer_kubernetes_lateral=bool(case.get("infer_cluster_lateral_from_public_entry")),
+        )
         advisor_metrics = _advisor_summary(advisor)
         metrics = {
             "sbom_count": len(passed_workloads),
@@ -641,6 +629,8 @@ def _write_case_markdown(row: dict[str, Any], path: Path) -> None:
                 f"| Grype matches | {metrics.get('vulnerability_matches', 0)} |",
                 f"| Findings | {metrics.get('finding_count', 0)} |",
                 f"| Remediation groups | {metrics.get('remediation_count', 0)} |",
+                f"| Finding tier counts | `{json.dumps(metrics.get('tier_counts', {}), sort_keys=True)}` |",
+                f"| Remediation tier counts | `{json.dumps(metrics.get('remediation_tier_counts', {}), sort_keys=True)}` |",
                 f"| Services with findings | {metrics.get('services_with_findings', 0)} |",
                 f"| Terraform resources | {metrics.get('terraform_resources', 0)} |",
                 f"| Terraform semantic coverage | {metrics.get('terraform_semantic_coverage')} |",
@@ -671,6 +661,7 @@ def _write_case_markdown(row: dict[str, Any], path: Path) -> None:
                 f"- Findings JSON: `{advisor.get('findings')}`",
                 f"- HTML graph: `{advisor.get('html')}`",
                 f"- Terraform coverage: `{advisor.get('terraform_coverage')}`",
+                f"- Kubernetes coverage: `{advisor.get('kubernetes_coverage')}`",
                 f"- Mapping report: `{advisor.get('mapping')}`",
                 "",
             ]

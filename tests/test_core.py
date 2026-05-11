@@ -7,13 +7,25 @@ from pathlib import Path
 
 from reachability_advisor.context import infer_context_from_terraform, load_context_file
 from reachability_advisor.models import Component, Confidence, Reachability, Tier
-from reachability_advisor.outputs import explain_finding, render_table, write_annotations, write_diagnostics, write_json_findings, write_markdown_report, write_sarif
+from reachability_advisor.outputs import (
+    explain_finding,
+    render_table,
+    write_annotations,
+    write_diagnostics,
+    write_json_findings,
+    write_markdown_report,
+    write_sarif,
+)
 from reachability_advisor.purl import ecosystem_from_component, package_match, parse_purl
 from reachability_advisor.sbom import load_sbom, load_sboms
 from reachability_advisor.scoring import generate_findings, tier_for_score
 from reachability_advisor.source import analyze_component_source, parse_source_roots
 from reachability_advisor.validators import has_errors, validate_paths
-from reachability_advisor.vulnerability import VulnerabilityError, load_vulnerabilities, matching_vulnerabilities
+from reachability_advisor.vulnerability import (
+    VulnerabilityError,
+    load_vulnerabilities,
+    matching_vulnerabilities,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 

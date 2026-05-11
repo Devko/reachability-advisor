@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Reachability Advisor Baseline",
+  "type": "object",
+  "required": ["schema_version", "kind", "metadata", "findings"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "kind": {"const": "reachability-advisor-baseline"},
+    "metadata": {
+      "type": "object",
+      "required": ["finding_count", "active_finding_count", "tier_counts", "policy_status_counts"],
+      "properties": {
+        "finding_count": {"type": "integer", "minimum": 0},
+        "active_finding_count": {"type": "integer", "minimum": 0},
+        "tier_counts": {"type": "object"},
+        "policy_status_counts": {"type": "object"},
+        "source_metadata": {"type": "object"}
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["key", "artifact", "component", "vulnerability", "score", "tier", "policy_status", "source_reachability", "context"],
+        "properties": {
+          "key": {"type": "string", "minLength": 1},
+          "artifact": {"type": "object"},
+          "component": {"type": "object"},
+          "vulnerability": {"type": "object"},
+          "score": {"type": "number", "minimum": 0, "maximum": 100},
+          "tier": {"enum": ["urgent", "high", "medium", "low", "informational"]},
+          "confidence": {"enum": ["high", "medium", "low"]},
+          "policy_status": {"type": "string"},
+          "source_reachability": {"type": "object"},
+          "context": {"type": "object"}
+        }
+      }
+    }
+  }
+}

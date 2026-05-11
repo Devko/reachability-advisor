@@ -7,7 +7,6 @@ from typing import Any
 
 from .models import Component, Finding, Reachability, Tier, reachability_label
 
-
 TIER_ORDER = {Tier.INFORMATIONAL: 0, Tier.LOW: 1, Tier.MEDIUM: 2, Tier.HIGH: 3, Tier.URGENT: 4}
 REACHABILITY_ORDER = {
     Reachability.ABSENT: 0,

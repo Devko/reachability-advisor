@@ -15,36 +15,48 @@
 - VS Code extension skeleton.
 - Governance, contribution, and security docs.
 
-## v1.1 roadmap: CI adoption and policy hardening
+## v1.1 roadmap: quality, evidence, and CI adoption
 
-Goal: make the published GitHub repository straightforward to consume from production CI while keeping the scanner local and auditable.
+Goal: make the public repository easy to trust in CI. The scanner should stay local, deterministic, and explainable.
 
-Priority 1: GitHub Actions consumption
+Priority 1: CI quality gates
 
-- Harden the composite action so external repositories can use the published action without checking out this repository as their application source.
-- Support multiple SBOMs, source-root mappings, artifact aliases, runtime policy, custom reachability rules, external source evidence, Terraform plan context, HCL static fallback, SARIF, diagnostics, HTML graph, mapping, source coverage, and Terraform coverage outputs through action inputs.
-- Expose stable action output paths so downstream workflow steps can upload SARIF and artifacts without duplicating path conventions.
-- Add an action usage example to the pipeline documentation.
+- Install `.[dev]` in CI and run `make lint`, `make type-check`, `make coverage`, `make release-check`, and `make package`.
+- Keep Python 3.10, 3.11, and 3.12 in the matrix.
+- Keep strict `mypy` passing across all `src` modules.
+- Publish coverage, SARIF, diagnostics, HTML graph, mapping, source coverage, and Terraform coverage as workflow artifacts.
+- Keep generated outputs deterministic so PR reviews can diff them.
 
-Priority 2: Policy packs
+Priority 2: Source reachability coverage
+
+- Keep package-manager manifest coverage current for Gradle, Maven POMs, pnpm, Yarn, npm locks, Poetry, Python requirements, and Go modules.
+- Add richer source diagnostics for package-manager roots, imported vulnerable packages, vulnerable call sites, and handler-to-sink paths.
+- Done: native adapters import Semgrep `dataflow_trace` taint paths and CodeQL SARIF `codeFlows` when package, purl, or vulnerability selectors are available.
+- Add native adapters for more language-specific analyzer output when selectors are available.
+- Track unknown source states as rule gaps, package-manager gaps, or missing source roots instead of one generic unknown bucket.
+
+Priority 3: Terraform and IaC coverage
+
+- Done: rendered Kubernetes YAML/JSON manifests are first-class `scan` inputs with workload, service, ingress, RBAC, context, and coverage output.
+- Done: fixture packs now cover AWS Lambda function URLs, Azure App Service, GKE plus Kubernetes workloads, Helm-heavy Kubernetes deployments, and private service meshes.
+- Expand rendered Helm/Kustomize validation cases beyond the current Kubernetes manifest parser.
+- Expand lateral movement evidence for route tables, peering, VPN, transit gateways, private endpoints, service endpoints, and Kubernetes network policies.
+- Keep unsupported IaC resources visible in coverage reports.
+
+Priority 4: Policy and baseline workflow
 
 - Publish a schema for runtime policy files.
 - Validate the example policy during release checks.
-- Expand policy examples for exceptions, fail thresholds, and expiration hygiene.
-- Later: add named policy pack examples for strict release gates, PR-only advisory mode, and legacy backlog migration.
+- Done: stable default-branch baseline artifacts are generated with `scan --baseline-out`.
+- Done: `compare --baseline` emits PR deltas with only new and worsened findings.
+- Add policy examples for strict release gates, advisory PR mode, exception expiration, and backlog migration.
 
-Priority 3: Evidence coverage
+Priority 5: Validation corpus
 
-- Improve package-manager manifest coverage for Gradle, pnpm, yarn, Poetry, and Go modules.
-- Add more precise source diagnostics for package manager files and vulnerable call sites.
-- Add native adapters for richer Semgrep and CodeQL trace formats where selectors are available.
-- Add fixture packs for AWS Lambda, Azure App Service, GCP GKE, and Helm-heavy Kubernetes shapes.
-
-Priority 4: Baseline and PR workflow
-
-- Add a stable baseline artifact format for default-branch findings.
-- Provide a first-class workflow for comparing PR findings against a downloaded baseline artifact.
-- Keep the CLI output deterministic so teams can diff findings in code review.
+- Keep AWS Retail Store and Google Online Boutique as scale tests.
+- Add compact fixtures for each important exposure class: public, restricted external, lateral, internal-only, IAM admin, critical limited role, read-only role, no role, code reachable, and code not observed.
+- Publish expected outputs for fixtures so downstream contributors can verify behavior without reading implementation details.
+- Done: visual graph regression tests cover connected network-path rendering and dense multi-asset layouts.
 
 ## Completed milestone: Multi-cloud Terraform context
 
@@ -60,7 +72,7 @@ Priority 4: Baseline and PR workflow
 ## Completed milestone: Community Terraform fixture packs
 
 - Fixture harness with `fixtures list`, `fixtures validate`, and `fixtures run`.
-- Sanitized module-shaped fixture packs for AWS ECS/Fargate, Azure Container Apps, GCP Cloud Run, and Kubernetes ingress workloads.
+- Sanitized module-shaped fixture packs for AWS ECS/Fargate, AWS Lambda function URLs, Azure Container Apps, Azure App Service, GCP Cloud Run, GKE workloads, Kubernetes ingress, Helm-heavy Kubernetes, and private service-mesh workloads.
 - Per-fixture expected assertions for resource accounting, semantic classification, artifact matching, required resource types, and minimum finding tiers.
 - CI target `make fixtures`.
 - Fixture pack and fixture report schemas.

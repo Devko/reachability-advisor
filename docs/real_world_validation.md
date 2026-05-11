@@ -146,8 +146,8 @@ Run a single case by adding `--case <case-id>`. If a checkout does not exist and
 - per-service SBOMs under `outputs/external-complex/<case>/sboms/`;
 - per-service Grype JSON under `outputs/external-complex/<case>/vulns/`;
 - a merged artifact-scoped Grype file at `outputs/external-complex/<case>/merged-grype.json`;
-- Kubernetes manifest context at `outputs/external-complex/<case>/kubernetes-context.json` when the case defines a manifest;
-- Reachability Advisor findings, mapping, source coverage, Terraform coverage, and HTML graph under `outputs/external-complex/<case>/`;
+- Kubernetes manifest context at `outputs/external-complex/<case>/kubernetes-context.json` and Kubernetes coverage at `outputs/external-complex/<case>/kubernetes-coverage.json` when the case defines a manifest;
+- Reachability Advisor findings, mapping, source coverage, Terraform coverage, Kubernetes coverage, and HTML graph under `outputs/external-complex/<case>/`;
 - aggregate `summary.json` and `summary.md` under `outputs/external-complex/`.
 
 Use `--refresh` to regenerate SBOM/vulnerability files. Use `--skip-grype` to reuse already generated SBOM/Grype files without invoking Grype.

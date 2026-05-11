@@ -1,6 +1,6 @@
 # Quickstart
 
-This guide runs the checked-in sample and shows the files to inspect. The sample includes SBOMs, vulnerability data, source roots, and a multi-cloud Terraform plan.
+This guide runs the checked-in sample and shows the files to inspect. The sample includes SBOMs, vulnerability data, source roots, a multi-cloud Terraform plan, and rendered Kubernetes manifests.
 
 ## 1. Install locally
 
@@ -19,13 +19,15 @@ python -m pip install -e .
 The command writes:
 
 - `outputs/findings.json` - canonical machine-readable finding set;
+- `outputs/reachability-baseline.json` - stable baseline artifact for default-branch PR comparisons;
 - `outputs/findings.sarif` - CI/code-scanning output;
 - `outputs/diagnostics.json` - editor diagnostics output;
 - `outputs/pr-summary.md` - pull request summary;
 - `outputs/reachability-graph.html` - searchable graph of assets, vulnerabilities, network/IAM context, code exposure, and findings;
 - `outputs/annotations.txt` - GitHub Actions workflow-command annotations;
 - `outputs/terraform-coverage.json` - Terraform resource accounting, semantic coverage, artifact matches, and visibility gaps;
-- `outputs/source-coverage.json` - source files scanned, skipped files, evidence states, dependency-graph evidence, and external evidence counts;
+- `outputs/kubernetes-coverage.json` - rendered Kubernetes workload, service, ingress, RBAC, and artifact-match coverage;
+- `outputs/source-coverage.json` - source files and package-manager manifests scanned, skipped files, evidence states, dependency-graph evidence, manifest evidence, and external evidence counts;
 - `outputs/mapping.json` - SBOM, source-root, and Terraform workload mapping.
 
 
@@ -45,7 +47,7 @@ PY
 
 Use this report first when a finding looks wrong. It shows the artifact candidates, source root status, Terraform match methods, match scores, and warnings.
 
-## 4. Inspect Terraform coverage
+## 4. Inspect deployment coverage
 
 ```bash
 python - <<'PY'
@@ -53,10 +55,12 @@ import json
 from pathlib import Path
 coverage = json.loads(Path('outputs/terraform-coverage.json').read_text())
 print(json.dumps(coverage['summary'], indent=2))
+k8s = json.loads(Path('outputs/kubernetes-coverage.json').read_text())
+print(json.dumps(k8s['summary'], indent=2))
 PY
 ```
 
-The sample plan has full resource accounting, full semantic classification coverage, and full artifact matching across AWS, Azure, GCP, and Kubernetes resources.
+The sample plan has full resource accounting, full semantic classification coverage, and full artifact matching across AWS, Azure, GCP, and Kubernetes resources. The rendered manifest sample shows direct public service exposure and Kubernetes RBAC impact for matched workloads.
 
 ## 5. Explain one finding
 
@@ -76,24 +80,29 @@ reachability-advisor scan \
   --vulns samples/vulnerabilities.json \
   --terraform-plan samples/tfplan-multicloud.json \
   --terraform-coverage-out outputs/terraform-coverage.json \
+  --kubernetes-manifest samples/kubernetes-manifest.yaml \
+  --kubernetes-coverage-out outputs/kubernetes-coverage.json \
   --source-coverage-out outputs/source-coverage.json \
   --mapping-out outputs/mapping.json \
   --source-root payments-api=samples/source/payments-api \
   --sarif-out outputs/findings.sarif \
   --html-out outputs/reachability-graph.html \
+  --baseline-out outputs/reachability-baseline.json \
   --fail-on-tier high \
   --no-table
 ```
 
-## 7. Compare base and pull request findings
+## 7. Compare a pull request with the default-branch baseline
 
 ```bash
 reachability-advisor compare \
-  --base-findings main.findings.json \
+  --baseline reachability-baseline.json \
   --head-findings pr.findings.json \
   --markdown-out reachability-delta.md \
   --fail-on-new-tier high
 ```
+
+The baseline file is written by `scan --baseline-out` on the default branch. With `--baseline`, the delta report contains only new and worsened findings.
 
 ## 8. Run Terraform fixture packs
 

@@ -1,0 +1,45 @@
+{
+  "schema_version": "3.0",
+  "id": "kubernetes-private-service-mesh",
+  "name": "Kubernetes private service-mesh fixture",
+  "provider": "kubernetes",
+  "module_reference": {
+    "name": "Private service mesh workload fixture",
+    "source": "kubernetes provider plus service-mesh manifest wrappers",
+    "upstream_note": "The fixture models internal-only service mesh deployments that still carry useful workload, service, and RBAC evidence."
+  },
+  "fixture_kind": "sanitized module-shaped terraform-show-json plan",
+  "terraform_plan": "tfplan.json",
+  "sboms": ["sboms/mesh-worker.cdx.json"],
+  "vulnerabilities": "../../common/vulnerabilities.json",
+  "source_roots": {
+    "mesh-worker": "source/mesh-worker"
+  },
+  "expected": {
+    "resource_accounting_coverage": 1.0,
+    "semantic_classification_coverage": 1.0,
+    "artifact_match_coverage": 1.0,
+    "min_findings": 1,
+    "must_match_artifacts": ["mesh-worker"],
+    "required_resource_types": [
+      "kubernetes_deployment",
+      "kubernetes_service",
+      "kubernetes_service_account",
+      "kubernetes_role_binding",
+      "helm_release",
+      "kubectl_manifest"
+    ],
+    "min_tier_by_finding": [
+      {
+        "artifact": "mesh-worker",
+        "component": "requests",
+        "vulnerability": "CVE-2023-32681",
+        "tier": "low"
+      }
+    ]
+  },
+  "notes": [
+    "Models an internal-only workload behind a ClusterIP service and service-mesh wrappers.",
+    "The fixture should not become public unless rendered ingress or public service evidence is added."
+  ]
+}

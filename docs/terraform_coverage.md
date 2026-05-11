@@ -83,7 +83,7 @@ terraform show -json tfplan.binary > tfplan.json
 
 - Missing Terraform context is `unknown`; it is not isolation evidence.
 - Unsupported resource types become visibility gaps.
-- Helm and kubectl manifest wrappers are semantically classified as Kubernetes support resources, but still emit `opaque_manifest_wrapper` gaps because rendered child workloads are not inspected.
+- Helm and kubectl manifest wrappers are semantically classified as Kubernetes support resources, but still emit `opaque_manifest_wrapper` gaps because Terraform does not expose the rendered child workload graph. Pass rendered YAML/JSON through `--kubernetes-manifest` to analyze workload, Service, Ingress, and RBAC context.
 - Public exposure is only raised when a supported resource provides a clear public signal linked to the matched workload. A public resource elsewhere in the same provider plan does not create provider-wide public context.
 - Restricted external exposure is represented separately from public exposure when ingress is limited to specific public CIDRs or equivalent external-source signals.
 - Internal lateral exposure is raised from bounded graph paths such as security-group hops, private load balancer/application gateway forwarding, Kubernetes ClusterIP service matches, and provider bridge resources such as VPC/VNet peering, VPN, transit gateway, ExpressRoute, and Interconnect.
@@ -114,7 +114,7 @@ PYTHONPATH=src python -m reachability_advisor fixtures run \
   --output-dir outputs/fixtures
 ```
 
-The current packs cover AWS ECS/Fargate service module shapes, Azure Container Apps, GCP Cloud Run, and Kubernetes ingress workloads. They are sanitized, module-shaped plans. They model common Terraform resource graphs without vendoring third-party module source code.
+The current packs cover AWS ECS/Fargate, AWS Lambda function URLs, Azure Container Apps, Azure App Service, GCP Cloud Run, GKE plus Kubernetes workloads, Kubernetes ingress workloads, Helm-heavy deployments, and private service-mesh workloads. They are sanitized, module-shaped plans. They model common Terraform resource graphs without vendoring third-party module source code.
 
 ## Adding provider/module coverage
 

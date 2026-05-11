@@ -13,6 +13,8 @@ PYTHONPATH=src python -m reachability_advisor scan \
   --vulns samples/vulnerabilities.json \
   --terraform-plan samples/tfplan-multicloud.json \
   --terraform-coverage-out outputs/terraform-coverage.json \
+  --kubernetes-manifest samples/kubernetes-manifest.yaml \
+  --kubernetes-coverage-out outputs/kubernetes-coverage.json \
   --source-coverage-out outputs/source-coverage.json \
   --mapping-out outputs/mapping.json \
   --source-root payments-api=samples/source/payments-api \
@@ -23,6 +25,7 @@ PYTHONPATH=src python -m reachability_advisor scan \
   --source-root batch-worker=samples/source/batch-worker \
   --source-root reports-api=samples/source/reports-api \
   --out outputs/findings.json \
+  --baseline-out outputs/reachability-baseline.json \
   --sarif-out outputs/findings.sarif \
   --diagnostics-out outputs/diagnostics.json \
   --markdown-out outputs/pr-summary.md \

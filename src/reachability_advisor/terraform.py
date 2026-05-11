@@ -16,442 +16,59 @@ Design guarantees:
 from __future__ import annotations
 
 import json
-import ipaddress
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
-from .artifacts import artifact_candidates, artifact_match_evidence, clean_image_reference
+from .artifacts import artifact_match_evidence
 from .models import Artifact, Confidence, ContextEvidence
+from .terraform_exposure import (
+    INTERNAL_TOKEN_VALUES,
+    PUBLIC_TOKEN_VALUES,
+    exposure_rank,
+    max_exposure,
+)
+from .terraform_exposure import (
+    cap_exposure as _cap_exposure,
+)
+from .terraform_exposure import (
+    network_source_exposure as _network_source_exposure,
+)
+from .terraform_iam import (
+    CRITICAL_IAM_IMPACTS,
+    NETWORK_PIVOT_IAM_IMPACTS,
+    IamGrant,
+    classify_policy,
+    classify_role_text,
+    iam_grant_for_resource,
+    privilege_for_resource,
+)
+from .terraform_images import find_image_references, image_matches, workload_name_matches
+from .terraform_manifest import (
+    OPAQUE_MANIFEST_WRAPPER_TYPES,
+    SENSITIVE_RESOURCE_TYPES,
+    SUPPORTED_TYPE_TO_CLASS,
+    TERRAFORM_COVERAGE_MANIFEST,
+    ResourceSupport,
+    azapi_arm_category,
+    classification_for_resource,
+    manifest_report,
+    normalized_arm_type,
+    provider_for_type,
+    resource_type_supported,
+)
+from .terraform_values import (
+    listify as _listify,
+)
+from .terraform_values import (
+    value_reference_candidates as _value_reference_candidates,
+)
 
 
 class TerraformContextError(ValueError):
     """Raised when Terraform JSON cannot be parsed."""
 
 
-@dataclass(frozen=True)
-class ResourceSupport:
-    provider: str
-    category: str
-    types: tuple[str, ...]
-    description: str
-
-
-TERRAFORM_COVERAGE_MANIFEST: tuple[ResourceSupport, ...] = (
-    ResourceSupport(
-        provider="aws",
-        category="workload",
-        types=(
-            "aws_ecs_cluster",
-            "aws_ecs_service",
-            "aws_ecs_task_definition",
-            "aws_lambda_function",
-            "aws_apprunner_service",
-            "aws_batch_job_definition",
-            "aws_instance",
-            "aws_launch_template",
-            "aws_eks_cluster",
-        ),
-        description="Container, serverless, batch, VM, and Kubernetes control-plane workload hints.",
-    ),
-    ResourceSupport(
-        provider="aws",
-        category="exposure",
-        types=(
-            "aws_security_group",
-            "aws_security_group_rule",
-            "aws_alb",
-            "aws_alb_listener",
-            "aws_alb_listener_rule",
-            "aws_lb",
-            "aws_lb_listener",
-            "aws_lb_listener_rule",
-            "aws_api_gateway_rest_api",
-            "aws_api_gateway_method",
-            "aws_apigatewayv2_api",
-            "aws_apigatewayv2_route",
-            "aws_lambda_function_url",
-            "aws_cloudfront_distribution",
-        ),
-        description="Internet-facing network, load balancer, API, function URL, and CDN exposure hints.",
-    ),
-    ResourceSupport(
-        provider="aws",
-        category="identity",
-        types=(
-            "aws_iam_role",
-            "aws_iam_policy",
-            "aws_iam_role_policy",
-            "aws_iam_role_policy_attachment",
-            "aws_iam_user_policy",
-            "aws_iam_group_policy",
-            "aws_iam_instance_profile",
-        ),
-        description="IAM policy and role hints used for blast-radius scoring.",
-    ),
-    ResourceSupport(
-        provider="aws",
-        category="sensitive_data",
-        types=(
-            "aws_secretsmanager_secret",
-            "aws_secretsmanager_secret_version",
-            "aws_ssm_parameter",
-            "aws_db_instance",
-            "aws_rds_cluster",
-            "aws_dynamodb_table",
-            "aws_s3_bucket",
-            "aws_kms_key",
-            "aws_mq_broker",
-        ),
-        description="Sensitive data and secret-adjacent resources used as blast-radius hints.",
-    ),
-    ResourceSupport(
-        provider="aws",
-        category="supporting",
-        types=(
-            "aws_cloudwatch_log_group",
-            "aws_cloudwatch_log_resource_policy",
-            "aws_cloudwatch_metric_alarm",
-            "aws_cloudwatch_event_rule",
-            "aws_cloudwatch_event_target",
-            "aws_appautoscaling_target",
-            "aws_appautoscaling_policy",
-            "aws_codebuild_project",
-            "aws_codecommit_repository",
-            "aws_codedeploy_app",
-            "aws_codedeploy_deployment_group",
-            "aws_codepipeline",
-            "aws_ecr_repository",
-            "aws_network_interface",
-            "aws_lb_target_group",
-            "aws_lb_target_group_attachment",
-            "aws_alb_target_group",
-            "aws_alb_target_group_attachment",
-            "aws_vpc",
-            "aws_vpc_peering_connection",
-            "aws_subnet",
-            "aws_internet_gateway",
-            "aws_nat_gateway",
-            "aws_eip",
-            "aws_customer_gateway",
-            "aws_vpn_gateway",
-            "aws_vpn_connection",
-            "aws_ec2_transit_gateway",
-            "aws_ec2_transit_gateway_vpc_attachment",
-            "aws_ec2_transit_gateway_peering_attachment",
-            "aws_route",
-            "aws_route_table",
-            "aws_default_route_table",
-            "aws_route_table_association",
-            "aws_db_subnet_group",
-            "aws_eks_addon",
-            "aws_apprunner_vpc_connector",
-            "aws_apprunner_vpc_ingress_connection",
-            "aws_service_discovery_private_dns_namespace",
-            "aws_sns_topic",
-        ),
-        description="Common supporting resources emitted by ECS/Fargate and container platform modules.",
-    ),
-    ResourceSupport(
-        provider="azure",
-        category="workload",
-        types=(
-            "azurerm_linux_web_app",
-            "azurerm_windows_web_app",
-            "azurerm_app_service",
-            "azurerm_function_app",
-            "azurerm_linux_function_app",
-            "azurerm_windows_function_app",
-            "azurerm_container_app",
-            "azurerm_container_app_environment",
-            "azurerm_container_group",
-            "azurerm_kubernetes_cluster",
-            "azurerm_linux_virtual_machine",
-            "azurerm_windows_virtual_machine",
-            "azurerm_virtual_machine",
-        ),
-        description="App Service, Functions, Container Apps, ACI, AKS, and VM workload hints.",
-    ),
-    ResourceSupport(
-        provider="azure",
-        category="exposure",
-        types=(
-            "azurerm_public_ip",
-            "azurerm_application_gateway",
-            "azurerm_lb",
-            "azurerm_network_security_group",
-            "azurerm_network_security_rule",
-            "azurerm_frontdoor_endpoint",
-            "azurerm_cdn_frontdoor_endpoint",
-        ),
-        description="Public IP, gateway, load balancer, NSG, Front Door, and CDN exposure hints.",
-    ),
-    ResourceSupport(
-        provider="azure",
-        category="identity",
-        types=(
-            "azurerm_role_assignment",
-            "azurerm_user_assigned_identity",
-            "azurerm_key_vault_access_policy",
-            "azuread_application",
-            "azuread_service_principal",
-        ),
-        description="Role assignment, managed identity, and key-vault access-policy hints.",
-    ),
-    ResourceSupport(
-        provider="azure",
-        category="sensitive_data",
-        types=(
-            "azurerm_key_vault",
-            "azurerm_key_vault_secret",
-            "azurerm_key_vault_key",
-            "azurerm_storage_account",
-            "azurerm_storage_container",
-            "azurerm_storage_account_customer_managed_key",
-            "azurerm_mssql_server",
-            "azurerm_mssql_database",
-            "azurerm_postgresql_flexible_server",
-            "azurerm_mysql_flexible_server",
-            "azurerm_cosmosdb_account",
-            "azurerm_cognitive_account",
-            "azurerm_cognitive_deployment",
-            "azurerm_container_registry_token_password",
-        ),
-        description="Key Vault, storage, database, and Cosmos DB blast-radius hints.",
-    ),
-    ResourceSupport(
-        provider="azure",
-        category="supporting",
-        types=(
-            "azurerm_resource_group",
-            "azurerm_log_analytics_workspace",
-            "azurerm_container_registry",
-            "azurerm_container_registry_token",
-            "azurerm_private_endpoint",
-            "azurerm_private_dns_zone",
-            "azurerm_private_dns_zone_virtual_network_link",
-            "azurerm_private_dns_a_record",
-            "azurerm_virtual_network",
-            "azurerm_virtual_network_peering",
-            "azurerm_virtual_network_gateway",
-            "azurerm_virtual_network_gateway_connection",
-            "azurerm_express_route_circuit",
-            "azurerm_express_route_connection",
-            "azurerm_subnet",
-            "azurerm_network_interface",
-            "azurerm_network_interface_backend_address_pool_association",
-            "azurerm_network_interface_application_gateway_backend_address_pool_association",
-            "azurerm_container_app_environment_dapr_component",
-            "azurerm_container_app_environment_storage",
-            "azurerm_log_analytics_solution",
-            "azurerm_log_analytics_storage_insights",
-            "azurerm_application_insights",
-            "azurerm_monitor_diagnostic_setting",
-        ),
-        description="Common supporting resources emitted by Azure Container Apps and App Service modules.",
-    ),
-    ResourceSupport(
-        provider="gcp",
-        category="workload",
-        types=(
-            "google_cloud_run_service",
-            "google_cloud_run_v2_service",
-            "google_cloud_run_v2_job",
-            "google_cloudfunctions_function",
-            "google_cloudfunctions2_function",
-            "google_container_cluster",
-            "google_compute_instance",
-            "google_compute_instance_template",
-        ),
-        description="Cloud Run, Cloud Functions, GKE, and Compute Engine workload hints.",
-    ),
-    ResourceSupport(
-        provider="gcp",
-        category="exposure",
-        types=(
-            "google_compute_firewall",
-            "google_cloud_run_service_iam_member",
-            "google_cloud_run_service_iam_binding",
-            "google_cloud_run_v2_service_iam_member",
-            "google_cloud_run_v2_service_iam_binding",
-            "google_cloudfunctions_function_iam_member",
-            "google_cloudfunctions2_function_iam_member",
-            "google_compute_forwarding_rule",
-            "google_compute_global_forwarding_rule",
-            "google_compute_backend_service",
-            "google_cloud_run_domain_mapping",
-        ),
-        description="Firewall, allUsers invoker grants, forwarding rules, backend-service, and Cloud Run domain exposure hints.",
-    ),
-    ResourceSupport(
-        provider="gcp",
-        category="identity",
-        types=(
-            "google_project_iam_member",
-            "google_project_iam_binding",
-            "google_organization_iam_member",
-            "google_folder_iam_member",
-            "google_billing_account_iam_member",
-            "google_service_account",
-            "google_service_account_iam_member",
-            "google_service_account_iam_binding",
-            "google_kms_crypto_key_iam_member",
-            "google_kms_crypto_key_iam_binding",
-            "google_artifact_registry_repository_iam_member",
-            "google_secret_manager_secret_iam_member",
-            "google_iap_web_cloud_run_service_iam_member",
-            "google_project_service_identity",
-        ),
-        description="IAM grants and service-account/KMS permission hints.",
-    ),
-    ResourceSupport(
-        provider="gcp",
-        category="sensitive_data",
-        types=(
-            "google_secret_manager_secret",
-            "google_storage_bucket",
-            "google_sql_database_instance",
-            "google_bigquery_dataset",
-            "google_kms_crypto_key",
-            "google_service_account_key",
-        ),
-        description="Secret Manager, Cloud Storage, Cloud SQL, BigQuery, and KMS blast-radius hints.",
-    ),
-    ResourceSupport(
-        provider="gcp",
-        category="supporting",
-        types=(
-            "google_project_service",
-            "google_artifact_registry_repository",
-            "google_project",
-            "google_folder",
-            "google_compute_network",
-            "google_compute_network_peering",
-            "google_compute_subnetwork",
-            "google_compute_global_address",
-            "google_compute_region_network_endpoint_group",
-            "google_compute_security_policy",
-            "google_compute_shared_vpc_service_project",
-            "google_compute_vpn_gateway",
-            "google_compute_ha_vpn_gateway",
-            "google_compute_vpn_tunnel",
-            "google_compute_interconnect_attachment",
-            "google_compute_router",
-            "google_compute_router_peer",
-            "google_compute_router_nat",
-            "google_dns_policy",
-            "google_gke_hub_feature",
-            "google_gke_hub_membership",
-            "google_vpc_access_connector",
-            "google_access_context_manager_access_policy",
-            "google_access_context_manager_service_perimeter_resource",
-        ),
-        description="Common supporting resources emitted by Cloud Run and GKE module fixtures.",
-    ),
-    ResourceSupport(
-        provider="kubernetes",
-        category="workload",
-        types=(
-            "kubernetes_deployment",
-            "kubernetes_stateful_set",
-            "kubernetes_daemon_set",
-            "kubernetes_job",
-            "kubernetes_cron_job",
-            "kubernetes_pod",
-            "kubernetes_manifest",
-        ),
-        description="Kubernetes-provider workload and manifest image hints.",
-    ),
-    ResourceSupport(
-        provider="kubernetes",
-        category="exposure",
-        types=("kubernetes_service", "kubernetes_ingress", "kubernetes_ingress_v1"),
-        description="Kubernetes Service and Ingress exposure hints.",
-    ),
-    ResourceSupport(
-        provider="kubernetes",
-        category="identity",
-        types=(
-            "kubernetes_service_account",
-            "kubernetes_role_binding",
-            "kubernetes_cluster_role_binding",
-            "kubernetes_role_v1",
-            "kubernetes_role_binding_v1",
-            "kubernetes_cluster_role_v1",
-            "kubernetes_cluster_role_binding_v1",
-        ),
-        description="Kubernetes service-account and role-binding hints, including IRSA annotations.",
-    ),
-    ResourceSupport(
-        provider="kubernetes",
-        category="supporting",
-        types=(
-            "kubernetes_namespace",
-            "kubernetes_namespace_v1",
-            "kubernetes_config_map",
-            "kubernetes_secret",
-            "helm_release",
-            "kubectl_manifest",
-        ),
-        description="Common supporting Kubernetes-provider resources and opaque Helm/Kubectl manifest wrappers included in community fixture packs.",
-    ),
-    ResourceSupport(
-        provider="terraform",
-        category="supporting",
-        types=(
-            "random_string",
-            "random_id",
-            "random_integer",
-            "random_password",
-            "random_pet",
-            "null_resource",
-            "time_sleep",
-            "local_file",
-            "template_file",
-            "terraform_data",
-            "terracurl_request",
-        ),
-        description="Terraform helper resources that affect provisioning but do not provide direct workload, exposure, identity, or data context.",
-    ),
-    ResourceSupport(
-        provider="docker",
-        category="supporting",
-        types=("docker_image", "docker_tag"),
-        description="Local Docker provider resources used by examples to build or tag container images.",
-    ),
-)
-
-SUPPORTED_TYPE_TO_CLASS: dict[str, tuple[str, str]] = {
-    rtype: (support.provider, support.category)
-    for support in TERRAFORM_COVERAGE_MANIFEST
-    for rtype in support.types
-}
-
-SENSITIVE_RESOURCE_TYPES = {
-    rtype
-    for support in TERRAFORM_COVERAGE_MANIFEST
-    if support.category == "sensitive_data"
-    for rtype in support.types
-}
-
-OPAQUE_MANIFEST_WRAPPER_TYPES = {"helm_release", "kubectl_manifest"}
-
-PUBLIC_TOKEN_VALUES = {"0.0.0.0/0", "::/0", "*", "internet", "all", "allusers", "allauthenticatedusers"}
-INTERNAL_TOKEN_VALUES = {
-    "10.0.0.0/8",
-    "172.16.0.0/12",
-    "192.168.0.0/16",
-    "virtualnetwork",
-    "vnet",
-    "vpc",
-    "private",
-    "privatelink",
-    "azureloadbalancer",
-    "vpn",
-    "onprem",
-    "on-prem",
-}
 NETWORK_BRIDGE_RESOURCE_TYPES = {
     "aws_vpc_peering_connection",
     "aws_customer_gateway",
@@ -484,71 +101,6 @@ PRIVATE_NETWORK_RESOURCE_TYPES = {
     "google_compute_network",
     "google_compute_subnetwork",
     "google_vpc_access_connector",
-}
-CRITICAL_IAM_IMPACTS = {"admin_control", "iam_escalation", "network_control", "compute_control", "data_access"}
-NETWORK_PIVOT_IAM_IMPACTS = {"admin_control", "iam_escalation", "network_control"}
-ADMIN_ROLE_TOKENS = (
-    "administratoraccess",
-    "owner",
-    "contributor",
-    "roles/owner",
-    "roles/editor",
-    "roles/iam.serviceaccounttokencreator",
-    "roles/iam.serviceaccountadmin",
-    "roles/resourcemanager.projectiambindingadmin",
-    "role_definition_id=owner",
-    "cluster-admin",
-)
-SENSITIVE_ROLE_TOKENS = (
-    "secret",
-    "key vault",
-    "keyvault",
-    "kms",
-    "decrypt",
-    "sql",
-    "database",
-    "cloudsql",
-    "bigquery",
-    "storage.admin",
-    "storage.objectadmin",
-    "storage.objectviewer",
-    "roles/secretmanager.secretaccessor",
-    "roles/cloudsql.admin",
-    "roles/bigquery.admin",
-    "roles/storage.admin",
-)
-
-AZAPI_ARM_TYPE_TO_CATEGORY = {
-    "microsoft.app/containerapps": "workload",
-    "microsoft.app/jobs": "workload",
-    "microsoft.app/managedenvironments": "workload",
-    "microsoft.app/managedenvironments/daprcomponents": "supporting",
-    "microsoft.app/managedenvironments/storages": "supporting",
-    "microsoft.insights/components": "supporting",
-    "microsoft.insights/diagnosticsettings": "supporting",
-    "microsoft.operationalinsights/workspaces": "supporting",
-    "microsoft.network/applicationgateways": "exposure",
-    "microsoft.network/frontdoors": "exposure",
-    "microsoft.network/loadbalancers": "exposure",
-    "microsoft.network/publicipaddresses": "exposure",
-    "microsoft.network/privateendpoints": "supporting",
-    "microsoft.network/privatednszones": "supporting",
-    "microsoft.network/virtualnetworks": "supporting",
-    "microsoft.network/virtualnetworks/subnets": "supporting",
-    "microsoft.containerregistry/registries": "supporting",
-    "microsoft.managedidentity/userassignedidentities": "identity",
-    "microsoft.authorization/roleassignments": "identity",
-    "microsoft.keyvault/vaults": "sensitive_data",
-    "microsoft.keyvault/vaults/secrets": "sensitive_data",
-    "microsoft.keyvault/vaults/keys": "sensitive_data",
-    "microsoft.storage/storageaccounts": "sensitive_data",
-    "microsoft.storage/storageaccounts/blobservices/containers": "sensitive_data",
-    "microsoft.cognitiveservices/accounts": "sensitive_data",
-    "microsoft.cognitiveservices/accounts/deployments": "sensitive_data",
-    "microsoft.sql/servers": "sensitive_data",
-    "microsoft.sql/servers/databases": "sensitive_data",
-    "microsoft.dbforpostgresql/flexibleservers": "sensitive_data",
-    "microsoft.documentdb/databaseaccounts": "sensitive_data",
 }
 
 
@@ -624,14 +176,6 @@ class ArtifactContextAccumulator:
 class TerraformAnalysis:
     contexts: dict[str, ContextEvidence]
     coverage: dict[str, Any]
-
-
-@dataclass(frozen=True)
-class IamGrant:
-    privilege: str
-    impacts: tuple[str, ...] = ()
-    resource_refs: tuple[str, ...] = ()
-    evidence: str = ""
 
 
 @dataclass(frozen=True)
@@ -746,6 +290,8 @@ class TerraformNetworkGraph:
                 self._add_aws_listener(resource)
             elif resource.type in {"aws_lb_target_group_attachment", "aws_alb_target_group_attachment"}:
                 self._add_aws_target_group_attachment(resource)
+            elif resource.type == "aws_lambda_function_url":
+                self._add_aws_lambda_function_url(resource)
             elif resource.type in {
                 "azurerm_network_interface_backend_address_pool_association",
                 "azurerm_network_interface_application_gateway_backend_address_pool_association",
@@ -829,6 +375,18 @@ class TerraformNetworkGraph:
         for target_group_ref in target_group_refs:
             for target_ref in target_refs:
                 self._add_edge(self._target_group_node(target_group_ref), self._ref_node(target_ref), f"{resource.address} attaches target {target_ref}")
+
+    def _add_aws_lambda_function_url(self, resource: TerraformResource) -> None:
+        exposure = exposure_for_resource(resource)
+        node = self._resource_node(resource)
+        if exposure in {"public", "external", "internal"}:
+            self._seed(node, exposure, f"{resource.address} {exposure} function URL")
+        function_refs = _value_reference_candidates(resource.values.get("function_name"))
+        function_refs.update(_value_reference_candidates(resource.values.get("function_arn")))
+        if not function_refs:
+            function_refs.update(_value_reference_candidates(resource.values.get("qualifier")))
+        for function_ref in function_refs:
+            self._add_edge(node, self._ref_node(function_ref), f"{resource.address} invokes {function_ref}")
 
     def _add_azure_backend_pool_association(self, resource: TerraformResource) -> None:
         pool_refs = _value_reference_candidates(resource.values.get("backend_address_pool_id"))
@@ -1017,8 +575,8 @@ class TerraformAnalyzer:
         self._public_ecs_task_definitions = self._public_ecs_task_definition_refs()
         self._ecs_task_definition_exposure = self._ecs_task_definition_exposure_refs()
         self._public_functions = self._public_function_names()
-        self._public_cloud_run_services = self._public_cloud_run_services()
-        self._kubernetes_workload_exposure = self._kubernetes_workload_exposure()
+        self._public_cloud_run_service_refs = self._public_cloud_run_services()
+        self._kubernetes_workload_exposure_by_name = self._kubernetes_workload_exposure()
         self._network_paths = TerraformNetworkGraph(self.resources).analyze()
 
     def analyze(self) -> TerraformAnalysis:
@@ -1052,7 +610,7 @@ class TerraformAnalyzer:
                     resource,
                     self._global_exposure_by_provider,
                     self._public_functions,
-                    self._public_cloud_run_services,
+                    self._public_cloud_run_service_refs,
                     self._public_security_groups,
                     self._external_security_groups,
                     self._internal_security_groups,
@@ -1060,7 +618,7 @@ class TerraformAnalyzer:
                     self._internal_target_groups,
                     self._public_ecs_task_definitions,
                     self._ecs_task_definition_exposure,
-                    self._kubernetes_workload_exposure,
+                    self._kubernetes_workload_exposure_by_name,
                 )
                 path_exposure = self._network_paths.exposure_by_address.get(resource.address, "unknown")
                 exposure = max_exposure(exposure, path_exposure)
@@ -1298,7 +856,8 @@ def extract_resources(plan: dict[str, Any]) -> list[TerraformResource]:
         if not rtype:
             return
         address = str(raw.get("address") or f"{rtype}.{raw.get('name') or len(resources)}")
-        values = raw.get("values") if isinstance(raw.get("values"), dict) else {}
+        raw_values = raw.get("values")
+        values: dict[str, Any] = raw_values if isinstance(raw_values, dict) else {}
         resources[address] = TerraformResource(address=address, type=rtype, name=str(raw.get("name") or ""), values=values)
 
     root = plan.get("planned_values", {}).get("root_module", {}) if isinstance(plan.get("planned_values"), dict) else {}
@@ -1321,148 +880,6 @@ def extract_resources(plan: dict[str, Any]) -> list[TerraformResource]:
             add({"address": change.get("address"), "type": change.get("type"), "name": change.get("name"), "values": after})
 
     return list(resources.values())
-
-
-def _normalized_arm_type(value: Any) -> str | None:
-    if not value:
-        return None
-    text = str(value).strip().strip('"').strip("'")
-    if not text:
-        return None
-    return text.split("@", 1)[0].lower()
-
-
-def azapi_arm_category(value: Any) -> str | None:
-    """Return a semantic category for an AzAPI ARM resource type."""
-
-    arm_type = _normalized_arm_type(value)
-    if not arm_type:
-        return None
-    if arm_type in AZAPI_ARM_TYPE_TO_CATEGORY:
-        return AZAPI_ARM_TYPE_TO_CATEGORY[arm_type]
-    # Child resources often add one or more path segments. Prefer the most
-    # specific parent that is explicitly declared above.
-    parts = arm_type.split("/")
-    while len(parts) > 2:
-        parts.pop()
-        parent = "/".join(parts)
-        if parent in AZAPI_ARM_TYPE_TO_CATEGORY:
-            return AZAPI_ARM_TYPE_TO_CATEGORY[parent]
-    return None
-
-
-def classification_for_resource(resource_type: str, values: dict[str, Any] | None = None) -> tuple[str, str]:
-    if resource_type.startswith("azapi_"):
-        return "azure", azapi_arm_category((values or {}).get("type")) or "unclassified"
-    if resource_type in SUPPORTED_TYPE_TO_CLASS:
-        return SUPPORTED_TYPE_TO_CLASS[resource_type]
-    return provider_for_type(resource_type), "unclassified"
-
-
-def resource_type_supported(resource_type: str, values: dict[str, Any] | None = None) -> bool:
-    if resource_type.startswith("azapi_"):
-        return azapi_arm_category((values or {}).get("type")) is not None
-    return resource_type in SUPPORTED_TYPE_TO_CLASS
-
-
-def provider_for_type(resource_type: str) -> str:
-    if resource_type.startswith("aws_"):
-        return "aws"
-    if resource_type.startswith("azurerm_") or resource_type.startswith("azuread_") or resource_type.startswith("azapi_"):
-        return "azure"
-    if resource_type.startswith("google_"):
-        return "gcp"
-    if resource_type.startswith("kubernetes_") or resource_type.startswith("kubectl_") or resource_type.startswith("helm_"):
-        return "kubernetes"
-    if resource_type.startswith("random_") or resource_type.startswith("time_") or resource_type in {"null_resource", "local_file", "template_file", "terraform_data", "terracurl_request"}:
-        return "terraform"
-    if resource_type.startswith("docker_"):
-        return "docker"
-    return "unknown"
-
-
-def find_image_references(values: Any) -> list[str]:
-    """Find likely container image strings across provider-specific shapes."""
-
-    found: list[str] = []
-
-    def add(value: Any) -> None:
-        if isinstance(value, str):
-            cleaned = _clean_image_value(value)
-            if cleaned and _looks_like_image_reference(cleaned):
-                found.append(cleaned)
-
-    def walk(value: Any, key_hint: str = "") -> None:
-        if isinstance(value, dict):
-            for key, item in value.items():
-                key_l = str(key).lower()
-                if key_l in {"image", "image_uri", "image_identifier", "container_image", "docker_image", "docker_image_name", "repository_url"}:
-                    add(item)
-                    if isinstance(item, (list, dict)):
-                        walk(item, key_l)
-                elif key_l == "linux_fx_version":
-                    add(item)
-                    if isinstance(item, (list, dict)):
-                        walk(item, key_l)
-                elif key_l in {"container_definitions", "task_container_properties"} and isinstance(item, str):
-                    try:
-                        decoded = json.loads(item)
-                    except json.JSONDecodeError:
-                        add(item)
-                    else:
-                        walk(decoded, key_l)
-                else:
-                    walk(item, key_l)
-        elif isinstance(value, list):
-            for item in value:
-                walk(item, key_hint)
-        elif isinstance(value, str) and key_hint in {"image", "image_uri", "image_identifier", "docker_image", "linux_fx_version"}:
-            add(value)
-
-    walk(values)
-    return list(dict.fromkeys(found))
-
-
-def _clean_image_value(value: str) -> str | None:
-    return clean_image_reference(value)
-
-
-def _looks_like_image_reference(value: str) -> bool:
-    if "${" in value:
-        return True
-    if ":" in value or "/" in value or "@sha256:" in value:
-        return True
-    return bool(re.fullmatch(r"[A-Za-z0-9_.-]+", value))
-
-
-def image_matches(artifact: Artifact, image: str | None) -> bool:
-    return artifact_match_evidence(artifact, image).matched
-
-
-def candidate_artifact_references(artifact: Artifact) -> set[str]:
-    return artifact_candidates(artifact)
-
-
-def _strip_image_version(value: str) -> str:
-    value = value.split("@sha256:", 1)[0]
-    if ":" in value.rsplit("/", 1)[-1]:
-        return value.rsplit(":", 1)[0]
-    return value
-
-
-def workload_name_matches(artifact: Artifact, resource: TerraformResource) -> bool:
-    values = resource.values
-    names = {
-        str(resource.name or ""),
-        str(values.get("name") or ""),
-        str(values.get("function_name") or ""),
-        str(values.get("service_name") or ""),
-        str(values.get("app_name") or ""),
-        str(values.get("family") or ""),
-        str(values.get("container_name") or ""),
-    }
-    artifact_name = artifact.name.lower()
-    return any(name and (artifact_name == name.lower() or artifact_name in name.lower()) for name in names)
 
 
 def exposure_for_matched_workload(
@@ -1525,7 +942,7 @@ def exposure_for_matched_workload(
         if _azure_container_app_has_ingress(values):
             return "internal"
         return _workload_network_exposure(values, provider_fallback)
-    if resource.type.startswith("azapi_") and _normalized_arm_type(values.get("type")) == "microsoft.app/containerapps":
+    if resource.type.startswith("azapi_") and normalized_arm_type(values.get("type")) == "microsoft.app/containerapps":
         if _azure_container_app_external_ingress(values):
             return "public"
         if _azure_container_app_has_ingress(values):
@@ -1597,7 +1014,7 @@ def exposure_for_resource(resource: TerraformResource) -> str:
     if rtype in {"google_compute_forwarding_rule", "google_compute_global_forwarding_rule"} and str(values.get("load_balancing_scheme") or "").lower().startswith("internal"):
         return "internal"
     if rtype in {"kubernetes_service", "kubernetes_ingress", "kubernetes_ingress_v1"}:
-        return _kubernetes_exposure_level(values)
+        return _kubernetes_exposure_level(values, rtype)
     if rtype in PRIVATE_NETWORK_RESOURCE_TYPES or _has_private_network_attachment(values):
         return "private"
     return "unknown"
@@ -1611,9 +1028,7 @@ def is_public_exposure(resource: TerraformResource) -> bool:
             return False
         if rtype in {"azurerm_application_gateway", "azurerm_lb"} and _azure_has_private_frontend_only(values):
             return False
-        if rtype in {"google_compute_forwarding_rule", "google_compute_global_forwarding_rule"} and str(values.get("load_balancing_scheme") or "").lower().startswith("internal"):
-            return False
-        return True
+        return not (rtype in {"google_compute_forwarding_rule", "google_compute_global_forwarding_rule"} and str(values.get("load_balancing_scheme") or "").lower().startswith("internal"))
     if rtype in {"aws_security_group", "aws_security_group_rule"}:
         return _aws_security_group_is_public(values)
     if rtype in {"azurerm_network_security_group", "azurerm_network_security_rule"}:
@@ -1627,10 +1042,8 @@ def is_public_exposure(resource: TerraformResource) -> bool:
     if rtype.startswith("azapi_") and resource.category == "exposure":
         return True
     if rtype in {"kubernetes_service", "kubernetes_ingress", "kubernetes_ingress_v1"}:
-        return _kubernetes_exposure_is_public(values)
-    if rtype in {"aws_apigatewayv2_api", "aws_api_gateway_rest_api", "aws_cloudfront_distribution", "google_cloud_run_domain_mapping"}:
-        return True
-    return False
+        return _kubernetes_exposure_is_public(values, rtype)
+    return rtype in {"aws_apigatewayv2_api", "aws_api_gateway_rest_api", "aws_cloudfront_distribution", "google_cloud_run_domain_mapping"}
 
 
 def _aws_security_group_is_public(values: dict[str, Any]) -> bool:
@@ -1718,22 +1131,65 @@ def _iam_member_is_public_invoker(values: dict[str, Any]) -> bool:
     return "invoker" in role and any(str(member).lower() in {"allusers", "allauthenticatedusers"} for member in members)
 
 
-def _kubernetes_exposure_is_public(values: dict[str, Any]) -> bool:
-    return _kubernetes_exposure_level(values) == "public"
+def _kubernetes_exposure_is_public(values: dict[str, Any], resource_type: str = "") -> bool:
+    return _kubernetes_exposure_level(values, resource_type) == "public"
 
 
-def _kubernetes_exposure_level(values: dict[str, Any]) -> str:
-    service_type = str(values.get("type") or "").lower()
+def _kubernetes_exposure_level(values: dict[str, Any], resource_type: str = "") -> str:
+    rtype = resource_type.lower()
+    service_type = _kubernetes_service_type(values)
     if service_type == "loadbalancer":
         return "public"
     if service_type in {"clusterip", "nodeport"}:
         return "internal"
-    annotations = values.get("annotations") if isinstance(values.get("annotations"), dict) else {}
+    annotations = _kubernetes_annotations(values)
     if any("ingress" in str(key).lower() for key in annotations):
         return "public"
-    if values.get("rules") or values.get("spec"):
+    if rtype == "kubernetes_service":
+        if values.get("spec") or values.get("selector") or values.get("port") or values.get("ports"):
+            return "internal"
+        return "unknown"
+    if rtype in {"kubernetes_ingress", "kubernetes_ingress_v1"}:
+        if values.get("rules") or values.get("rule") or values.get("spec") or values.get("default_backend"):
+            return "public"
+        return "unknown"
+    if values.get("rules") or values.get("rule") or values.get("spec"):
         return "public"
     return "unknown"
+
+
+def _kubernetes_service_type(values: dict[str, Any]) -> str:
+    candidates: list[Any] = [values.get("type")]
+    spec = values.get("spec")
+    if isinstance(spec, dict):
+        candidates.append(spec.get("type"))
+    elif isinstance(spec, list):
+        for item in spec:
+            if isinstance(item, dict):
+                candidates.append(item.get("type"))
+    for candidate in candidates:
+        text = str(candidate or "").strip().lower()
+        if text:
+            return text
+    return ""
+
+
+def _kubernetes_annotations(values: dict[str, Any]) -> dict[str, Any]:
+    annotations: dict[str, Any] = {}
+
+    def merge(value: Any) -> None:
+        if isinstance(value, dict):
+            annotations.update({str(key): item for key, item in value.items()})
+
+    merge(values.get("annotations"))
+    metadata = values.get("metadata")
+    if isinstance(metadata, dict):
+        merge(metadata.get("annotations"))
+    elif isinstance(metadata, list):
+        for item in metadata:
+            if isinstance(item, dict):
+                merge(item.get("annotations"))
+    return annotations
 
 
 def _ecs_service_is_public(values: dict[str, Any], public_security_groups: set[str], public_target_groups: set[str]) -> bool:
@@ -1772,12 +1228,6 @@ def _workload_network_exposure(values: dict[str, Any], provider_fallback: str) -
     if _has_private_network_attachment(values):
         return max_exposure("private", provider_fallback)
     return "unknown"
-
-
-def _cap_exposure(value: str, cap: str | None) -> str:
-    if not cap or exposure_rank(value) <= exposure_rank(cap):
-        return value
-    return cap
 
 
 def _exposure_backend_refs(values: Any) -> set[str]:
@@ -1993,25 +1443,6 @@ def _has_private_network_attachment(values: Any) -> bool:
     return False
 
 
-def _network_source_exposure(value: Any) -> str:
-    if value is None:
-        return "unknown"
-    text = str(value).strip().strip('"').strip("'").lower()
-    if not text:
-        return "unknown"
-    if text in PUBLIC_TOKEN_VALUES:
-        return "public"
-    if text in INTERNAL_TOKEN_VALUES or text.startswith("sg-"):
-        return "internal"
-    try:
-        network = ipaddress.ip_network(text, strict=False)
-    except ValueError:
-        return "unknown"
-    if network.version in {4, 6} and network.is_global:
-        return "external"
-    return "internal"
-
-
 def _resource_identifiers(resource: TerraformResource) -> set[str]:
     identifiers = {
         resource.address,
@@ -2044,43 +1475,6 @@ def _references_any(values: Any, references: set[str]) -> bool:
             if reference and (candidate == reference or reference in candidate or candidate in reference):
                 return True
     return False
-
-
-def _value_reference_candidates(values: Any) -> set[str]:
-    candidates: set[str] = set()
-
-    def add(value: Any) -> None:
-        if value is None:
-            return
-        text = str(value).strip().strip('"').strip("'")
-        if not text:
-            return
-        lower = text.lower()
-        candidates.add(lower)
-        path_parts = [part for part in re.split(r"[/\\]", lower) if part]
-        cloud_path_markers = (
-            "/backendaddresspools/",
-            "/networkinterfaces/",
-            "/targetgroup/",
-            "/services/",
-            "/locations/",
-            "/regions/",
-            "/zones/",
-        )
-        if len(path_parts) > 1 and any(marker in lower for marker in cloud_path_markers):
-            candidates.add(path_parts[-1])
-        for token in re.findall(r"[A-Za-z0-9_:\-/]+(?:\.[A-Za-z0-9_\-]+)+|sg-[A-Za-z0-9]+|arn:[^\s,\]\}]+", text):
-            candidates.add(token.strip().strip('"').strip("'").lower())
-
-    if isinstance(values, dict):
-        for value in values.values():
-            candidates.update(_value_reference_candidates(value))
-    elif isinstance(values, (list, tuple, set)):
-        for value in values:
-            candidates.update(_value_reference_candidates(value))
-    else:
-        add(values)
-    return {candidate for candidate in candidates if candidate}
 
 
 def _security_group_refs(values: dict[str, Any]) -> set[str]:
@@ -2179,203 +1573,6 @@ def _kubernetes_names_and_selectors(resource: TerraformResource) -> set[str]:
     return {name for name in names if name}
 
 
-def privilege_for_resource(resource: TerraformResource) -> str:
-    return iam_grant_for_resource(resource).privilege
-
-
-def iam_grant_for_resource(resource: TerraformResource) -> IamGrant:
-    values = resource.values
-    rtype = resource.type
-    if rtype in {"aws_iam_policy", "aws_iam_role_policy", "aws_iam_user_policy", "aws_iam_group_policy"}:
-        privilege, impacts, resource_refs = classify_policy_details(values.get("policy"))
-        return IamGrant(privilege=privilege, impacts=tuple(sorted(impacts)), resource_refs=tuple(sorted(resource_refs)), evidence=_iam_grant_evidence(resource, privilege, impacts))
-    if rtype == "aws_iam_role_policy_attachment":
-        privilege, impacts = classify_role_text_details(values.get("policy_arn") or values.get("policy"))
-        return IamGrant(privilege=privilege, impacts=tuple(sorted(impacts)), evidence=_iam_grant_evidence(resource, privilege, impacts))
-    if rtype == "aws_iam_role":
-        if values.get("managed_policy_arns"):
-            privilege, impacts = classify_role_text_details(values.get("managed_policy_arns"))
-            return IamGrant(privilege=privilege, impacts=tuple(sorted(impacts)), evidence=_iam_grant_evidence(resource, privilege, impacts))
-        privilege, impacts, resource_refs = _embedded_policy_details(values.get("inline_policy") or values.get("inline_policies"))
-        return IamGrant(privilege=privilege, impacts=tuple(sorted(impacts)), resource_refs=tuple(sorted(resource_refs)), evidence=_iam_grant_evidence(resource, privilege, impacts))
-    if rtype == "azurerm_role_assignment":
-        privilege, impacts = classify_role_text_details(values.get("role_definition_name") or values.get("role_definition_id"))
-        return IamGrant(privilege=privilege, impacts=tuple(sorted(impacts)), evidence=_iam_grant_evidence(resource, privilege, impacts))
-    if rtype == "azurerm_key_vault_access_policy":
-        privilege, impacts = _azure_key_vault_privilege_details(values)
-        return IamGrant(privilege=privilege, impacts=tuple(sorted(impacts)), resource_refs=tuple(sorted(_value_reference_candidates(values.get("key_vault_id")))), evidence=_iam_grant_evidence(resource, privilege, impacts))
-    if rtype in {
-        "google_project_iam_member",
-        "google_project_iam_binding",
-        "google_organization_iam_member",
-        "google_folder_iam_member",
-        "google_billing_account_iam_member",
-        "google_service_account_iam_member",
-        "google_service_account_iam_binding",
-        "google_kms_crypto_key_iam_member",
-        "google_kms_crypto_key_iam_binding",
-        "google_artifact_registry_repository_iam_member",
-        "google_secret_manager_secret_iam_member",
-        "google_iap_web_cloud_run_service_iam_member",
-    }:
-        privilege, impacts = classify_role_text_details(values.get("role"))
-        resource_refs = _value_reference_candidates(values.get("project")) | _value_reference_candidates(values.get("secret_id")) | _value_reference_candidates(values.get("resource")) | _value_reference_candidates(values.get("name"))
-        return IamGrant(privilege=privilege, impacts=tuple(sorted(impacts)), resource_refs=tuple(sorted(resource_refs)), evidence=_iam_grant_evidence(resource, privilege, impacts))
-    if rtype in {"kubernetes_role_binding", "kubernetes_cluster_role_binding", "kubernetes_role_binding_v1", "kubernetes_cluster_role_binding_v1", "kubernetes_role_v1", "kubernetes_cluster_role_v1"}:
-        privilege, impacts = classify_role_text_details(values.get("role_ref") or values.get("metadata"))
-        return IamGrant(privilege=privilege, impacts=tuple(sorted(impacts)), evidence=_iam_grant_evidence(resource, privilege, impacts))
-    return IamGrant(privilege="unknown", evidence=f"unknown IAM on {resource.address}")
-
-
-def _iam_grant_evidence(resource: TerraformResource, privilege: str, impacts: set[str]) -> str:
-    impact_text = ",".join(sorted(impacts)) if impacts else "none"
-    return f"{privilege} IAM on {resource.address} impact={impact_text}"
-
-
-def classify_policy(policy: Any) -> str:
-    return classify_policy_details(policy)[0]
-
-
-def classify_policy_details(policy: Any) -> tuple[str, set[str], set[str]]:
-    if not policy:
-        return "unknown", set(), set()
-    if isinstance(policy, str):
-        try:
-            policy = json.loads(policy)
-        except json.JSONDecodeError:
-            privilege, impacts = classify_role_text_details(policy)
-            return privilege, impacts, set()
-    statements = policy.get("Statement", []) if isinstance(policy, dict) else []
-    if isinstance(statements, dict):
-        statements = [statements]
-    best = "unknown"
-    impacts: set[str] = set()
-    resource_refs: set[str] = set()
-    for statement in statements:
-        if not isinstance(statement, dict) or str(statement.get("Effect", "Allow")).lower() != "allow":
-            continue
-        resource_refs.update(_value_reference_candidates(statement.get("Resource")))
-        resource_refs.update(_value_reference_candidates(statement.get("NotResource")))
-        if "NotAction" in statement:
-            best = max_privilege(best, "admin")
-            impacts.add("admin_control")
-            continue
-        actions = [str(action).lower() for action in _listify(statement.get("Action"))]
-        if "*" in actions or any(action.endswith(":*") for action in actions):
-            best = max_privilege(best, "admin")
-            impacts.add("admin_control")
-            for action in actions:
-                impacts.update(_iam_action_impacts(action))
-        else:
-            for action in actions:
-                impacts.update(_iam_action_impacts(action))
-        if impacts & CRITICAL_IAM_IMPACTS and best != "admin":
-            best = max_privilege(best, "sensitive")
-        elif actions:
-            best = max_privilege(best, "limited")
-    return best, impacts, resource_refs
-
-
-def _embedded_policy_details(value: Any) -> tuple[str, set[str], set[str]]:
-    best = "unknown"
-    impacts: set[str] = set()
-    resource_refs: set[str] = set()
-    for item in _listify(value):
-        policy = item.get("policy") if isinstance(item, dict) else item
-        privilege, policy_impacts, policy_refs = classify_policy_details(policy)
-        best = max_privilege(best, privilege)
-        impacts.update(policy_impacts)
-        resource_refs.update(policy_refs)
-    return best, impacts, resource_refs
-
-
-def classify_role_text(value: Any) -> str:
-    return classify_role_text_details(value)[0]
-
-
-def classify_role_text_details(value: Any) -> tuple[str, set[str]]:
-    text = json.dumps(value, sort_keys=True).lower() if isinstance(value, (dict, list)) else str(value or "").lower()
-    if not text:
-        return "unknown", set()
-    impacts = _iam_text_impacts(text)
-    if any(token in text for token in ADMIN_ROLE_TOKENS):
-        impacts.add("admin_control")
-        return "admin", impacts
-    if any(token in text for token in SENSITIVE_ROLE_TOKENS) or impacts & CRITICAL_IAM_IMPACTS:
-        return "sensitive", impacts
-    if "role" in text or "policy" in text or ":" in text:
-        return "limited", impacts
-    return "unknown", impacts
-
-
-def _iam_action_impacts(action: str) -> set[str]:
-    action = action.lower()
-    impacts: set[str] = set()
-    if action in {"*", "*:*"}:
-        impacts.add("admin_control")
-        return impacts
-    if _is_sensitive_action(action):
-        impacts.add("data_access")
-    if action.startswith("iam:") or action.startswith("sts:"):
-        if any(token in action for token in ("passrole", "assumerole", "attach", "putrolepolicy", "createpolicyversion", "setdefaultpolicyversion", "updateassumerolepolicy", "createaccesskey", "serviceaccount")):
-            impacts.add("iam_escalation")
-    if action.startswith(("ec2:", "elasticloadbalancing:", "route53:")):
-        if any(token in action for token in ("securitygroup", "authorize", "revoke", "route", "vpc", "subnet", "transitgateway", "vpn", "peering", "networkinterface", "loadbalancer", "listener", "targetgroup", "*")):
-            impacts.add("network_control")
-    if action.startswith(("lambda:", "ecs:", "eks:", "ssm:", "apprunner:", "run.", "cloudfunctions.", "container.")):
-        if any(token in action for token in ("update", "create", "run", "execute", "sendcommand", "invoke", "admin", "*")):
-            impacts.add("compute_control")
-    if action.startswith(("compute.firewalls", "compute.routes", "compute.networks", "compute.subnetworks", "compute.vpn", "compute.interconnect", "networkmanagement.")):
-        impacts.add("network_control")
-    if action.startswith(("microsoft.network/", "network.")) or "/network/" in action:
-        impacts.add("network_control")
-    if "serviceaccounts.actas" in action or "iam.serviceaccounts" in action:
-        impacts.add("iam_escalation")
-    return impacts
-
-
-def _iam_text_impacts(text: str) -> set[str]:
-    impacts: set[str] = set()
-    if any(token in text for token in ("network contributor", "networkadmin", "compute.networkadmin", "securityadmin", "firewall", "route", "vpc", "vnet", "load balancer", "application gateway")):
-        impacts.add("network_control")
-    if any(token in text for token in ("user access administrator", "serviceaccounttokencreator", "serviceaccountuser", "iam.serviceaccount", "iam.serviceaccountadmin", "projectiambindingadmin", "passrole")):
-        impacts.add("iam_escalation")
-    if any(token in text for token in ("secret", "key vault", "keyvault", "kms", "decrypt", "sql", "database", "cloudsql", "bigquery", "storage", "s3", "dynamodb")):
-        impacts.add("data_access")
-    if any(token in text for token in ("run.admin", "cloudfunctions.admin", "container.admin", "lambda", "ecs", "eks", "compute.admin", "virtual machine contributor", "vm contributor")):
-        impacts.add("compute_control")
-    return impacts
-
-
-def _is_sensitive_action(action: str) -> bool:
-    sensitive_prefixes = (
-        "secretsmanager:",
-        "ssm:getparameter",
-        "kms:decrypt",
-        "rds:",
-        "dynamodb:",
-        "s3:getobject",
-        "s3:putobject",
-        "sql",
-        "bigquery",
-        "storage",
-    )
-    return any(action.startswith(prefix) or prefix in action for prefix in sensitive_prefixes)
-
-
-def _azure_key_vault_privilege(values: dict[str, Any]) -> str:
-    return _azure_key_vault_privilege_details(values)[0]
-
-
-def _azure_key_vault_privilege_details(values: dict[str, Any]) -> tuple[str, set[str]]:
-    permissions = json.dumps(values.get("secret_permissions") or values.get("key_permissions") or values.get("certificate_permissions") or [], sort_keys=True).lower()
-    if any(word in permissions for word in ("all", "purge", "delete", "set")):
-        return "admin", {"admin_control", "data_access"}
-    if any(word in permissions for word in ("get", "list", "decrypt")):
-        return "sensitive", {"data_access"}
-    return "unknown", set()
-
-
 def _network_iam_criticality(exposure: str, privilege: str, impacts: set[str]) -> str:
     critical_impacts = impacts & CRITICAL_IAM_IMPACTS
     if privilege == "admin":
@@ -2405,14 +1602,6 @@ def privilege_rank(value: str) -> int:
     return {"unknown": 0, "none": 1, "limited": 2, "sensitive": 3, "admin": 4}.get(value, 0)
 
 
-def max_exposure(left: str, right: str) -> str:
-    return left if exposure_rank(left) >= exposure_rank(right) else right
-
-
-def exposure_rank(value: str) -> int:
-    return {"unknown": 0, "none": 1, "private": 2, "internal": 3, "external": 4, "public": 5}.get(value, 0)
-
-
 def max_confidence(left: Confidence, right: Confidence) -> Confidence:
     rank = {Confidence.LOW: 1, Confidence.MEDIUM: 2, Confidence.HIGH: 3}
     return left if rank[left] >= rank[right] else right
@@ -2432,14 +1621,6 @@ def tag_or_label(values: dict[str, Any], key: str, fallback: str | None = None) 
             if str(candidate_key).lower() in {key_l, f"app.{key_l}", f"app.kubernetes.io/{key_l}", f"reachability/{key_l}", "team" if key_l == "owner" else key_l}:
                 return str(candidate_value).lower()
     return fallback
-
-
-def _listify(value: Any) -> list[Any]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return value
-    return [value]
 
 
 def coverage_report(resources: list[TerraformResource], artifacts: list[Artifact], matches: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2542,38 +1723,34 @@ def empty_coverage_report() -> dict[str, Any]:
     }
 
 
-def manifest_report() -> dict[str, Any]:
-    providers: dict[str, dict[str, Any]] = {}
-    for support in TERRAFORM_COVERAGE_MANIFEST:
-        provider = providers.setdefault(support.provider, {"categories": {}, "resource_type_count": 0})
-        provider["categories"][support.category] = {"types": list(support.types), "description": support.description}
-        provider["resource_type_count"] += len(support.types)
-    return {
-        "supported_providers": sorted(providers),
-        "provider_count": len(providers),
-        "resource_type_count": sum(len(support.types) for support in TERRAFORM_COVERAGE_MANIFEST),
-        "providers": providers,
-    }
-
-
 __all__ = [
     "TERRAFORM_COVERAGE_MANIFEST",
+    "INTERNAL_TOKEN_VALUES",
     "OPAQUE_MANIFEST_WRAPPER_TYPES",
+    "PUBLIC_TOKEN_VALUES",
+    "ResourceSupport",
+    "SENSITIVE_RESOURCE_TYPES",
     "SUPPORTED_TYPE_TO_CLASS",
     "TerraformAnalysis",
     "TerraformAnalyzer",
     "TerraformContextError",
     "analyze_terraform_plan",
+    "azapi_arm_category",
     "classify_policy",
     "classify_role_text",
+    "classification_for_resource",
     "coverage_report",
     "empty_coverage_report",
+    "exposure_rank",
     "exposure_for_resource",
     "extract_resources",
     "find_image_references",
     "image_matches",
     "is_public_exposure",
     "manifest_report",
+    "max_exposure",
+    "normalized_arm_type",
     "privilege_for_resource",
     "provider_for_type",
+    "resource_type_supported",
 ]

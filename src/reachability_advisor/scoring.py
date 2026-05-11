@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
 
 from .models import (
     Component,
@@ -16,7 +19,14 @@ from .models import (
     VulnerabilityRecord,
     finding_key,
 )
-from .source import ExternalSourceEvidenceStore, ReachabilityRule, analyze_component_source, build_source_index, merge_source_evidence, source_coverage_report
+from .source import (
+    ExternalSourceEvidenceStore,
+    ReachabilityRule,
+    analyze_component_source,
+    build_source_index,
+    merge_source_evidence,
+    source_coverage_report,
+)
 from .vulnerability import matching_vulnerabilities
 
 
@@ -106,19 +116,13 @@ def tier_for_score(score: float, policy: ScorePolicy = DEFAULT_POLICY) -> Tier:
 
 
 def _confidence(source: SourceEvidence, context: ContextEvidence) -> Confidence:
-    if source.confidence == Confidence.HIGH and context.confidence in {Confidence.MEDIUM, Confidence.HIGH}:
-        return Confidence.HIGH
     if source.confidence == Confidence.HIGH:
-        return Confidence.MEDIUM
+        return Confidence.HIGH if context.confidence in {Confidence.MEDIUM, Confidence.HIGH} else Confidence.MEDIUM
     if context.confidence == Confidence.HIGH and source.confidence == Confidence.MEDIUM:
         return Confidence.HIGH
     if context.confidence == Confidence.HIGH:
         return Confidence.MEDIUM
-    if source.confidence == Confidence.MEDIUM and context.confidence in {Confidence.MEDIUM, Confidence.HIGH}:
-        return Confidence.HIGH if context.confidence == Confidence.HIGH else Confidence.MEDIUM
-    if source.confidence == Confidence.MEDIUM:
-        return Confidence.MEDIUM
-    if context.confidence == Confidence.MEDIUM:
+    if source.confidence == Confidence.MEDIUM or context.confidence == Confidence.MEDIUM:
         return Confidence.MEDIUM
     return Confidence.LOW
 
@@ -173,9 +177,7 @@ def _urgent_gate_satisfied(vulnerability: VulnerabilityRecord, source: SourceEvi
         return True
     if source.reachability == Reachability.ATTACKER_CONTROLLED and _has_critical_context(context):
         return True
-    if source.reachability == Reachability.FUNCTION_REACHABLE and exposure in {"public", "external"} and _has_critical_context(context):
-        return True
-    return False
+    return source.reachability == Reachability.FUNCTION_REACHABLE and exposure in {"public", "external"} and _has_critical_context(context)
 
 
 def _private_no_ingress_cap_applies(vulnerability: VulnerabilityRecord, source: SourceEvidence, context: ContextEvidence) -> bool:
@@ -299,7 +301,7 @@ def score_finding(
 def generate_findings(
     sboms: list[SbomDocument],
     vulnerabilities: list[VulnerabilityRecord],
-    source_roots: dict[str, object],
+    source_roots: Mapping[str, Path],
     contexts: dict[str, ContextEvidence],
     policy: ScorePolicy = DEFAULT_POLICY,
     reachability_rules: tuple[ReachabilityRule, ...] = (),
@@ -320,12 +322,12 @@ def generate_findings(
 def generate_findings_with_source_report(
     sboms: list[SbomDocument],
     vulnerabilities: list[VulnerabilityRecord],
-    source_roots: dict[str, object],
+    source_roots: Mapping[str, Path],
     contexts: dict[str, ContextEvidence],
     policy: ScorePolicy = DEFAULT_POLICY,
     reachability_rules: tuple[ReachabilityRule, ...] = (),
     external_source_evidence: ExternalSourceEvidenceStore | None = None,
-) -> tuple[list[Finding], dict[str, object]]:
+) -> tuple[list[Finding], dict[str, Any]]:
     findings: list[Finding] = []
     source_indexes = {artifact: build_source_index(root) for artifact, root in source_roots.items()}
     for sbom in sboms:
@@ -337,10 +339,10 @@ def generate_findings_with_source_report(
             if not matches:
                 continue
             for vulnerability in matches:
-                source = analyze_component_source(component, root, vulnerability=vulnerability, custom_rules=reachability_rules, source_index=source_index, sbom=sbom)  # type: ignore[arg-type]
+                source = analyze_component_source(component, root, vulnerability=vulnerability, custom_rules=reachability_rules, source_index=source_index, sbom=sbom)
                 if external_source_evidence:
                     source = merge_source_evidence(source, external_source_evidence.best_for(sbom.artifact.name, component, vulnerability))
                 findings.append(score_finding(sbom, component, vulnerability, source, context, policy))
     sorted_findings = sorted(findings, key=lambda finding: finding.score, reverse=True)
-    report = source_coverage_report(sboms, source_roots, source_indexes, sorted_findings, external_source_evidence)  # type: ignore[arg-type]
+    report = source_coverage_report(sboms, source_roots, source_indexes, sorted_findings, external_source_evidence)
     return sorted_findings, report

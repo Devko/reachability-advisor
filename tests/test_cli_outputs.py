@@ -8,10 +8,10 @@ from pathlib import Path
 
 from reachability_advisor.cli import main
 from reachability_advisor.compare import compare_findings, delta_fails
-from reachability_advisor.outputs import explain_finding, load_findings_json
-from reachability_advisor.policy import ExceptionRule, RuntimePolicy, apply_exceptions
-from reachability_advisor.scoring import ScorePolicy
 from reachability_advisor.models import Tier
+from reachability_advisor.outputs import explain_finding, load_findings_json
+from reachability_advisor.policy import ExceptionRule, RuntimePolicy
+from reachability_advisor.scoring import ScorePolicy
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -211,6 +211,32 @@ class CliTests(unittest.TestCase):
             self.assertEqual(code, 10)
             data = json.loads(delta.read_text(encoding="utf-8"))
             self.assertGreater(data["summary"]["new"], 0)
+
+    def test_scan_writes_baseline_and_compare_consumes_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline = Path(tmp) / "baseline.json"
+            head = Path(tmp) / "head.json"
+            delta = Path(tmp) / "delta.json"
+            markdown = Path(tmp) / "delta.md"
+            scan_code = main([
+                "scan",
+                "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"),
+                "--vulns", str(ROOT / "samples/vulnerabilities.json"),
+                "--context", str(ROOT / "samples/context.json"),
+                "--source-root", f"payments-api={ROOT / 'samples/source/payments-api'}",
+                "--out", str(head),
+                "--baseline-out", str(baseline),
+                "--no-table",
+            ])
+            self.assertEqual(scan_code, 0)
+            baseline_data = json.loads(baseline.read_text(encoding="utf-8"))
+            self.assertEqual(baseline_data["kind"], "reachability-advisor-baseline")
+            compare_code = main(["compare", "--baseline", str(baseline), "--head-findings", str(head), "--out", str(delta), "--markdown-out", str(markdown), "--fail-on-new-tier", "high"])
+            self.assertEqual(compare_code, 0)
+            data = json.loads(delta.read_text(encoding="utf-8"))
+            self.assertEqual(data["mode"], "new-or-worsened")
+            self.assertEqual(data["summary"]["total"], 0)
+            self.assertIn("Worsened findings", markdown.read_text(encoding="utf-8"))
 
 
 class OutputAndCompareTests(unittest.TestCase):

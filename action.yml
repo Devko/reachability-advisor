@@ -1,6 +1,6 @@
 name: Reachability Advisor
 summary: Dependency vulnerability prioritization with source, Terraform, network, and IAM context
-description: Runs Reachability Advisor and emits JSON, SARIF, diagnostics, Markdown, HTML, GitHub annotations, mapping, source coverage, and Terraform coverage.
+description: Runs Reachability Advisor and emits findings, baseline, PR delta, SARIF, diagnostics, Markdown, HTML, annotations, mapping, source coverage, and deployment coverage.
 inputs:
   sbom:
     description: One or more CycloneDX SBOM paths. Use newline-separated paths for multiple artifacts.
@@ -28,6 +28,14 @@ inputs:
     description: Terraform source directory or .tf file for conservative static HCL fallback when no plan is available.
     required: false
     default: ""
+  kubernetes-manifest:
+    description: Newline-separated rendered Kubernetes YAML/JSON manifest files or directories.
+    required: false
+    default: ""
+  kubernetes-infer-lateral:
+    description: Set to true to treat internal Kubernetes services as laterally reachable when a public entrypoint is present.
+    required: false
+    default: "false"
   reachability-rules:
     description: Custom reachability rules JSON path.
     required: false
@@ -44,8 +52,16 @@ inputs:
     description: Directory for generated Reachability Advisor outputs.
     required: false
     default: outputs/reachability-advisor
+  baseline:
+    description: Default-branch Reachability Advisor baseline artifact. When set, the action writes a PR delta with only new or worsened findings.
+    required: false
+    default: ""
   fail-on-tier:
     description: Tier threshold: urgent, high, medium, low, informational.
+    required: false
+    default: ""
+  fail-on-new-tier:
+    description: PR delta threshold for new or worsened findings when baseline is set.
     required: false
     default: ""
 outputs:
@@ -73,9 +89,21 @@ outputs:
   terraform_coverage:
     description: Terraform coverage JSON output path.
     value: ${{ steps.scan.outputs.terraform_coverage }}
+  kubernetes_coverage:
+    description: Kubernetes manifest coverage JSON output path.
+    value: ${{ steps.scan.outputs.kubernetes_coverage }}
   source_coverage:
     description: Source-analysis coverage JSON output path.
     value: ${{ steps.scan.outputs.source_coverage }}
+  baseline:
+    description: Stable baseline artifact output path.
+    value: ${{ steps.scan.outputs.baseline }}
+  delta:
+    description: PR delta JSON output path when a baseline is supplied.
+    value: ${{ steps.scan.outputs.delta }}
+  delta_markdown:
+    description: PR delta Markdown output path when a baseline is supplied.
+    value: ${{ steps.scan.outputs.delta_markdown }}
 runs:
   using: composite
   steps:
@@ -122,20 +150,27 @@ runs:
         annotations="$output_dir/reachability-annotations.txt"
         mapping="$output_dir/reachability-mapping.json"
         terraform_coverage="$output_dir/terraform-coverage.json"
+        kubernetes_coverage="$output_dir/kubernetes-coverage.json"
         source_coverage="$output_dir/source-coverage.json"
+        baseline_out="$output_dir/reachability-baseline.json"
+        delta="$output_dir/reachability-delta.json"
+        delta_markdown="$output_dir/reachability-delta.md"
 
-        args=(scan --vulns "${{ inputs.vulns }}" --out "$findings" --sarif-out "$sarif" --diagnostics-out "$diagnostics" --markdown-out "$markdown" --html-out "$html" --annotations-out "$annotations" --mapping-out "$mapping" --source-coverage-out "$source_coverage" --no-table)
+        args=(scan --vulns "${{ inputs.vulns }}" --out "$findings" --baseline-out "$baseline_out" --sarif-out "$sarif" --diagnostics-out "$diagnostics" --markdown-out "$markdown" --html-out "$html" --annotations-out "$annotations" --mapping-out "$mapping" --source-coverage-out "$source_coverage" --no-table)
 
         add_repeated_args "--sbom" "${{ inputs.sbom }}"
         add_repeated_args "--source-root" "${{ inputs.source-root }}"
         add_repeated_args "--artifact-alias" "${{ inputs.artifact-alias }}"
         add_repeated_args "--source-evidence-in" "${{ inputs.source-evidence-in }}"
+        add_repeated_args "--kubernetes-manifest" "${{ inputs.kubernetes-manifest }}"
 
         if [[ -n "${{ inputs.context }}" ]]; then args+=(--context "${{ inputs.context }}"); fi
         if [[ -n "${{ inputs.reachability-rules }}" ]]; then args+=(--reachability-rules "${{ inputs.reachability-rules }}"); fi
         if [[ -n "${{ inputs.policy }}" ]]; then args+=(--policy "${{ inputs.policy }}"); fi
         if [[ -n "${{ inputs.terraform-plan }}" ]]; then args+=(--terraform-plan "${{ inputs.terraform-plan }}" --terraform-coverage-out "$terraform_coverage"); fi
         if [[ -n "${{ inputs.terraform-source }}" ]]; then args+=(--terraform-source "${{ inputs.terraform-source }}" --terraform-coverage-out "$terraform_coverage"); fi
+        if [[ -n "${{ inputs.kubernetes-manifest }}" ]]; then args+=(--kubernetes-coverage-out "$kubernetes_coverage"); fi
+        if [[ "${{ inputs.kubernetes-infer-lateral }}" == "true" ]]; then args+=(--kubernetes-infer-lateral); fi
         if [[ -n "${{ inputs.fail-on-tier }}" ]]; then args+=(--fail-on-tier "${{ inputs.fail-on-tier }}"); fi
 
         set +e
@@ -143,9 +178,25 @@ runs:
         scan_code=$?
         set -e
 
+        delta_code=0
+        if [[ -n "${{ inputs.baseline }}" ]]; then
+          delta_args=(compare --baseline "${{ inputs.baseline }}" --head-findings "$findings" --out "$delta" --markdown-out "$delta_markdown")
+          if [[ -n "${{ inputs.fail-on-new-tier }}" ]]; then delta_args+=(--fail-on-new-tier "${{ inputs.fail-on-new-tier }}"); fi
+          set +e
+          reachability-advisor "${delta_args[@]}"
+          delta_code=$?
+          set -e
+        fi
+
         test ! -f "$annotations" || cat "$annotations"
         if [[ -n "${GITHUB_STEP_SUMMARY:-}" && -f "$markdown" ]]; then
           cat "$markdown" >> "$GITHUB_STEP_SUMMARY"
+        fi
+        if [[ -n "${GITHUB_STEP_SUMMARY:-}" && -f "$delta_markdown" ]]; then
+          {
+            echo ""
+            cat "$delta_markdown"
+          } >> "$GITHUB_STEP_SUMMARY"
         fi
 
         if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
@@ -158,8 +209,15 @@ runs:
             echo "annotations=$annotations"
             echo "mapping=$mapping"
             echo "terraform_coverage=$terraform_coverage"
+            echo "kubernetes_coverage=$kubernetes_coverage"
             echo "source_coverage=$source_coverage"
+            echo "baseline=$baseline_out"
+            echo "delta=$delta"
+            echo "delta_markdown=$delta_markdown"
           } >> "$GITHUB_OUTPUT"
         fi
 
+        if [[ "$scan_code" -eq 0 && "$delta_code" -ne 0 ]]; then
+          exit "$delta_code"
+        fi
         exit "$scan_code"

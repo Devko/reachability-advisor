@@ -7,17 +7,36 @@ from datetime import date
 from pathlib import Path
 
 from reachability_advisor.cli import main
-from reachability_advisor.context import ContextError, _classify_policy, infer_context_from_terraform, load_context_file
-from reachability_advisor.models import Artifact, Component, Confidence, ContextEvidence, Finding, Reachability, SourceEvidence, Tier, VulnerabilityRecord
 from reachability_advisor.compare import write_delta, write_delta_markdown
-from reachability_advisor.policy import ExceptionRule, load_runtime_policy, apply_exceptions
+from reachability_advisor.context import (
+    ContextError,
+    _classify_policy,
+    infer_context_from_terraform,
+    load_context_file,
+)
+from reachability_advisor.models import (
+    Artifact,
+    Component,
+    Confidence,
+    ContextEvidence,
+    Finding,
+    Reachability,
+    SourceEvidence,
+    Tier,
+    VulnerabilityRecord,
+)
+from reachability_advisor.policy import ExceptionRule, apply_exceptions, load_runtime_policy
 from reachability_advisor.purl import parse_purl
 from reachability_advisor.remediation import build_remediation_groups
 from reachability_advisor.sbom import SbomError, load_sbom
 from reachability_advisor.scoring import ScorePolicy, fix_commands, score_finding
 from reachability_advisor.source import analyze_component_source
 from reachability_advisor.validators import issues_report, validate_paths
-from reachability_advisor.vulnerability import VulnerabilityError, load_vulnerabilities, matching_vulnerabilities
+from reachability_advisor.vulnerability import (
+    VulnerabilityError,
+    load_vulnerabilities,
+    matching_vulnerabilities,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -139,7 +158,9 @@ class ContextEdgeTests(unittest.TestCase):
 class ParserEdgeTests(unittest.TestCase):
     def test_parse_purl_without_slash(self) -> None:
         purl = parse_purl("pkg:npm")
-        self.assertEqual(purl.ptype, "npm")  # type: ignore[union-attr]
+        self.assertIsNotNone(purl)
+        assert purl is not None
+        self.assertEqual(purl.ptype, "npm")
 
     def test_sbom_invalid_json_and_non_object(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -372,7 +393,9 @@ class ValidatorEdgeTests(unittest.TestCase):
             empty.write_text("", encoding="utf-8")
             issues = validate_paths([str(empty), tmp], None, source_roots=[f"app={empty}"])
             report = issues_report(issues)
-            self.assertGreaterEqual(report["summary"]["error"], 2)  # type: ignore[index]
+            summary = report["summary"]
+            self.assertIsInstance(summary, dict)
+            self.assertGreaterEqual(summary["error"], 2)
 
 
 class CliEdgeTests(unittest.TestCase):

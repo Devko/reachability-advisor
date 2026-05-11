@@ -6,9 +6,19 @@ import unittest
 from pathlib import Path
 
 from reachability_advisor.cli import main
-from reachability_advisor.hcl_static import HclAuditError, analyze_terraform_source, audit_hcl_project, hcl_blocks_to_plan, render_hcl_audit_markdown
+from reachability_advisor.hcl_static import (
+    HclAuditError,
+    analyze_terraform_source,
+    audit_hcl_project,
+    hcl_blocks_to_plan,
+    render_hcl_audit_markdown,
+)
 from reachability_advisor.models import Artifact
-from reachability_advisor.terraform import extract_resources, find_image_references, is_public_exposure
+from reachability_advisor.terraform import (
+    extract_resources,
+    find_image_references,
+    is_public_exposure,
+)
 
 
 class HclStaticAuditTests(unittest.TestCase):
@@ -137,9 +147,8 @@ class HclStaticAuditTests(unittest.TestCase):
             self.assertIn("Terraform HCL Static Audit", md.read_text(encoding="utf-8"))
 
     def test_hcl_audit_errors_without_tf_files(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaises(HclAuditError):
-                audit_hcl_project(tmp)
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaises(HclAuditError):
+            audit_hcl_project(tmp)
 
     def test_render_markdown_includes_visibility_gap(self) -> None:
         report = {

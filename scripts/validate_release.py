@@ -162,8 +162,12 @@ def check_action_metadata() -> None:
         "--diagnostics-out",
         "--html-out",
         "terraform-source",
+        "kubernetes-manifest",
         "reachability-rules",
         "artifact-alias",
+        "baseline",
+        "fail-on-new-tier",
+        "--baseline-out",
         "output-dir",
         "scan_code=$?",
         "outputs:",
@@ -247,8 +251,10 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
     check("generated HCL audit", hcl_audit, "hcl-audit-report.schema.json")
 
     findings = out_dir / "findings.json"
+    baseline = out_dir / "baseline.json"
     html = out_dir / "graph.html"
     terraform_coverage = out_dir / "terraform-coverage.json"
+    kubernetes_coverage = out_dir / "kubernetes-coverage.json"
     source_coverage = out_dir / "source-coverage.json"
     mapping = out_dir / "mapping.json"
     run_cli(
@@ -274,6 +280,10 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
             str(ROOT / "samples" / "tfplan-multicloud.json"),
             "--terraform-coverage-out",
             str(terraform_coverage),
+            "--kubernetes-manifest",
+            str(ROOT / "samples" / "kubernetes-manifest.yaml"),
+            "--kubernetes-coverage-out",
+            str(kubernetes_coverage),
             "--source-coverage-out",
             str(source_coverage),
             "--mapping-out",
@@ -294,16 +304,24 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
             f"reports-api={ROOT / 'samples' / 'source' / 'reports-api'}",
             "--out",
             str(findings),
+            "--baseline-out",
+            str(baseline),
             "--html-out",
             str(html),
             "--no-table",
         ]
     )
     check("generated findings", findings, "findings.schema.json")
+    check("generated baseline", baseline, "baseline.schema.json")
+    delta = out_dir / "delta.json"
+    delta_md = out_dir / "delta.md"
+    run_cli(["compare", "--baseline", str(baseline), "--head-findings", str(findings), "--out", str(delta), "--markdown-out", str(delta_md), "--fail-on-new-tier", "high"])
+    checks.append({"name": "generated PR baseline delta", "status": "passed", "document": str(delta)})
     if not html.exists() or "report-data" not in html.read_text(encoding="utf-8"):
         raise ReleaseCheckError("generated HTML graph report is missing report data")
     checks.append({"name": "generated HTML graph report", "status": "passed", "document": str(html)})
     check("generated Terraform coverage", terraform_coverage, "terraform-coverage.schema.json")
+    check("generated Kubernetes coverage", kubernetes_coverage, "kubernetes-coverage.schema.json")
     check("generated source coverage", source_coverage, "source-coverage.schema.json")
     check("generated mapping report", mapping, "mapping-report.schema.json")
 

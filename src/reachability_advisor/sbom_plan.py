@@ -9,9 +9,9 @@ generate an SBOM for a deployable artifact.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, asdict
+from collections.abc import Iterable
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable
 
 
 @dataclass(frozen=True)

@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .models import Tier
+from .models import Finding, Tier
 from .sbom import load_sboms
 from .scoring import generate_findings_with_source_report
 from .source import parse_source_roots
@@ -115,7 +115,8 @@ def load_fixture_pack(path_or_dir: str | Path) -> FixturePack:
     if not isinstance(source_roots_raw, dict):
         raise FixtureError(f"{manifest_path}: source_roots must be an object")
     source_roots = {str(artifact): _resolve_pack_path(root, raw) for artifact, raw in source_roots_raw.items()}
-    expected = data.get("expected") if isinstance(data.get("expected"), dict) else {}
+    raw_expected = data.get("expected")
+    expected: dict[str, Any] = raw_expected if isinstance(raw_expected, dict) else {}
     return FixturePack(
         id=pack_id,
         name=name,
@@ -230,7 +231,7 @@ def run_fixture_packs(root: str | Path | None = None, output_dir: str | Path | N
     }
 
 
-def evaluate_fixture_expectations(pack: FixturePack, findings: list[Any], coverage: dict[str, Any]) -> dict[str, Any]:
+def evaluate_fixture_expectations(pack: FixturePack, findings: list[Finding], coverage: dict[str, Any]) -> dict[str, Any]:
     """Evaluate pack-level expected assertions."""
 
     expected = pack.expected
@@ -252,13 +253,13 @@ def evaluate_fixture_expectations(pack: FixturePack, findings: list[Any], covera
         required = int(expected["min_findings"])
         check("min_findings", actual >= required, {"required": required, "actual": actual})
     if "must_match_artifacts" in expected:
-        actual = set(coverage.get("matched_artifacts", [])) if isinstance(coverage, dict) else set()
-        required = {str(item) for item in expected.get("must_match_artifacts", [])}
-        check("must_match_artifacts", required.issubset(actual), {"required": sorted(required), "actual": sorted(actual)})
+        actual_artifacts = set(coverage.get("matched_artifacts", []))
+        required_artifacts = {str(item) for item in expected.get("must_match_artifacts", [])}
+        check("must_match_artifacts", required_artifacts.issubset(actual_artifacts), {"required": sorted(required_artifacts), "actual": sorted(actual_artifacts)})
     if "required_resource_types" in expected:
-        actual = set(coverage.get("resource_types_seen", [])) if isinstance(coverage, dict) else set()
-        required = {str(item) for item in expected.get("required_resource_types", [])}
-        check("required_resource_types", required.issubset(actual), {"required": sorted(required), "actual": sorted(actual)})
+        actual_resource_types = set(coverage.get("resource_types_seen", []))
+        required_resource_types = {str(item) for item in expected.get("required_resource_types", [])}
+        check("required_resource_types", required_resource_types.issubset(actual_resource_types), {"required": sorted(required_resource_types), "actual": sorted(actual_resource_types)})
     for item in expected.get("min_tier_by_finding", []) or []:
         if not isinstance(item, dict):
             continue
@@ -276,7 +277,7 @@ def evaluate_fixture_expectations(pack: FixturePack, findings: list[Any], covera
     return {"passed": passed, "failed": failed}
 
 
-def _find_tier(findings: list[Any], artifact: str, component: str, vulnerability: str) -> str | None:
+def _find_tier(findings: list[Finding], artifact: str, component: str, vulnerability: str) -> str | None:
     for finding in findings:
         if finding.artifact.name == artifact and finding.component.name == component and finding.vulnerability.id == vulnerability:
             return finding.tier.value

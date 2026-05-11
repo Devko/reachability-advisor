@@ -1,6 +1,6 @@
 # Reachability Mapping
 
-This document describes how Reachability Advisor maps an SBOM vulnerability to source evidence and Terraform deployment context.
+This document describes how Reachability Advisor maps an SBOM vulnerability to source evidence and deployment context from Terraform plans, Terraform source fallback, rendered Kubernetes manifests, or explicit context JSON.
 
 The short version:
 
@@ -10,7 +10,7 @@ SBOM artifact
   -> vulnerability intelligence
   -> source reachability evidence
   -> artifact identity candidates
-  -> Terraform workload match
+  -> Terraform/Kubernetes workload match
   -> exposure / identity / data context
   -> score, tier, and outputs
 ```
@@ -55,16 +55,16 @@ States:
 | `absent` | Reserved for explicit evidence that a package is not present in analyzed source or runtime scope. |
 | `unknown_due_to_no_rule` | Package is in the SBOM, but no package-specific source rule exists and generic import usage was not observed. |
 | `package_present` | Package is in the SBOM; no stronger source evidence was observed. |
-| `dependency_reachable` | CycloneDX dependency graph links the package to an imported parent dependency. |
+| `dependency_reachable` | CycloneDX dependency graph links the package to an imported parent dependency, or a package-manager manifest declares the package. |
 | `imported` | A matching import/require/use statement was observed. |
 | `function_reachable` | Import plus risky function/class usage was observed. |
 | `attacker_controlled` | Risky usage and input/entrypoint evidence appear in the same function, or a bounded static call path links an attacker-controlled handler to a sink function. |
 
-Reports show these as human labels: `absent from scanned source`, `no source rule`, `SBOM only`, `reachable through dependency graph`, `import observed`, `reachable vulnerable API`, and `request-controlled path`.
+Reports show these as human labels: `absent from scanned source`, `no source rule`, `SBOM only`, `dependency evidence`, `import observed`, `reachable vulnerable API`, and `request-controlled path`.
 
 Same-function attacker control is the baseline. The analyzer also builds one source index per artifact and can promote bounded handler-to-sink call paths, including cross-file calls such as a route handler calling a service function that calls a vulnerable sink wrapper. Unlinked handlers remain `function_reachable` with explicit rationale.
 
-Use `--source-coverage-out` to review files scanned, skipped files, state counts, dependency-graph evidence, and imported external evidence. Use `--source-evidence-in` to import stronger Semgrep, SARIF, govulncheck, or native evidence.
+Use `--source-coverage-out` to review source files and package-manager manifests scanned, skipped files, state counts, dependency-graph evidence, manifest evidence, and imported external evidence. Use `--source-evidence-in` to import stronger Semgrep, SARIF, govulncheck, or native evidence.
 
 Supported built-in rule families:
 
@@ -122,6 +122,8 @@ Artifact-to-workload matching uses conservative evidence scores:
 Low-confidence matches remain visible and do not become high-confidence evidence.
 
 Terraform context also combines network reachability and IAM. The analyzer links workload identities to IAM policies where the plan exposes task roles, instance profiles, service accounts, managed identities, or role assignments. It records impact classes such as `data_access`, `network_control`, `iam_escalation`, and `compute_control`. Those impacts raise context criticality only after considering whether the workload is public, external, internal, or private.
+
+Rendered Kubernetes manifests supplied through `--kubernetes-manifest` add direct workload, Service, Ingress, and RBAC evidence. They are useful when Terraform contains only a Helm release or kubectl wrapper and cannot expose the rendered child resources. The Kubernetes analyzer emits a separate `--kubernetes-coverage-out` report.
 
 ## Step 6: mapping report
 

@@ -168,9 +168,12 @@ Supported imported formats:
 
 - native Reachability Advisor evidence JSON;
 - Reachability Advisor findings JSON;
-- Semgrep JSON with `extra.metadata.reachability_advisor`;
+- Semgrep JSON with `extra.metadata.reachability_advisor`, plain selector metadata such as `package` or `purl`, and native `extra.dataflow_trace` taint paths;
 - SARIF with matching selectors in `result.properties`;
+- CodeQL SARIF path-problem output with `codeFlows` and selectors in `result.properties`, `driver.rules[].properties`, or nested `reachability_advisor` metadata;
 - govulncheck JSONL for Go call-stack evidence.
+
+For CodeQL, generic query ids such as `js/request-forgery` are kept as matched symbols, not treated as vulnerability selectors. Rule ids are used as vulnerability selectors only when they look like vulnerability ids such as `CVE-*`, `GHSA-*`, `GO-*`, `OSV-*`, or `PYSEC-*`.
 
 ## Source coverage JSON
 
@@ -183,7 +186,10 @@ Generated with `--source-coverage-out`.
     "artifact_count": 1,
     "artifacts_with_source_root": 1,
     "files_scanned": 42,
+    "manifest_files_scanned": 6,
     "findings_analyzed": 12,
+    "findings_with_dependency_graph_path": 3,
+    "findings_with_manifest_evidence": 2,
     "source_evidence_coverage": 0.75,
     "external_evidence_records": 3,
     "states": {
@@ -283,6 +289,40 @@ Generated with `--terraform-coverage-out`.
 
 Schema draft: `schemas/terraform-coverage.schema.json`.
 
+## Kubernetes coverage JSON
+
+Generated with `--kubernetes-coverage-out` when `--kubernetes-manifest` is supplied.
+
+```json
+{
+  "schema_version": "1.0",
+  "summary": {
+    "manifest_files_scanned": 1,
+    "total_resources": 7,
+    "workload_resources": 2,
+    "service_resources": 2,
+    "ingress_resources": 0,
+    "rbac_resources": 3,
+    "artifacts_requested": 2,
+    "artifacts_matched": 2,
+    "artifact_match_coverage": 1.0,
+    "contexts_generated": 2,
+    "exposure_counts": {
+      "internal": 1,
+      "public": 1
+    },
+    "privilege_counts": {
+      "admin": 1,
+      "limited": 1
+    }
+  },
+  "resources": [],
+  "unmatched_artifacts": []
+}
+```
+
+Schema draft: `schemas/kubernetes-coverage.schema.json`.
+
 ## Mapping report JSON
 
 Generated with `--mapping-out`.
@@ -359,9 +399,41 @@ The canonical output is:
 
 `remediations[]` groups findings by artifact and dependency. Each finding still includes artifact, component, vulnerability, source reachability, context, score, tier, confidence, rationale, fix commands, and policy status.
 
-`source_reachability.state` is one of `absent`, `unknown_due_to_no_rule`, `package_present`, `dependency_reachable`, `imported`, `function_reachable`, or `attacker_controlled`. `source_reachability.label` is the human-facing version used by reports: `absent from scanned source`, `no source rule`, `SBOM only`, `reachable through dependency graph`, `import observed`, `reachable vulnerable API`, or `request-controlled path`. The `unknown_due_to_no_rule` state is a coverage warning: the vulnerable package is present, but no package-specific source rule exists and generic import evidence was not observed.
+`source_reachability.state` is one of `absent`, `unknown_due_to_no_rule`, `package_present`, `dependency_reachable`, `imported`, `function_reachable`, or `attacker_controlled`. `source_reachability.label` is the human-facing version used by reports: `absent from scanned source`, `no source rule`, `SBOM only`, `dependency evidence`, `import observed`, `reachable vulnerable API`, or `request-controlled path`. The `unknown_due_to_no_rule` state is a coverage warning: the vulnerable package is present, but no package-specific source rule exists and generic import evidence was not observed.
 
 Schema draft: `schemas/findings.schema.json`.
+
+## Baseline artifact JSON
+
+Generated with `--baseline-out`.
+
+The baseline artifact is the stable default-branch input for pull-request gates. It keeps only comparison fields and removes volatile evidence such as file paths, source snippets, rationale text, and raw network evidence.
+
+```json
+{
+  "schema_version": "1.0",
+  "kind": "reachability-advisor-baseline",
+  "metadata": {
+    "finding_count": 12,
+    "active_finding_count": 10,
+    "tier_counts": {"urgent": 1, "high": 3, "medium": 6, "low": 2, "informational": 0},
+    "policy_status_counts": {"active": 10, "excepted": 2}
+  },
+  "findings": []
+}
+```
+
+Use it in pull requests:
+
+```bash
+reachability-advisor compare \
+  --baseline reachability-baseline.json \
+  --head-findings reachability-findings.json \
+  --markdown-out reachability-delta.md \
+  --fail-on-new-tier high
+```
+
+When `--baseline` is used, `compare` emits only new and worsened findings. Schema draft: `schemas/baseline.schema.json`.
 
 ## Visual HTML report
 
@@ -373,7 +445,7 @@ It visualizes:
 
 - attacker entry and ingress/path cards derived from Terraform network-path evidence, such as Internet -> public security group/load balancer/application gateway -> workload;
 - deployable asset cards with network, IAM, code exposure, source, environment, owner, and criticality context;
-- vulnerability cards linked to the affected asset, including a plain code-exposure label such as `request-controlled path`, `reachable vulnerable API`, `reachable through dependency graph`, `SBOM only`, or `no source rule`;
+- vulnerability cards linked to the affected asset, including a plain code-exposure label such as `request-controlled path`, `reachable vulnerable API`, `dependency evidence`, `SBOM only`, or `no source rule`;
 - colors that emphasize the highest tier/criticality on each asset and vulnerability;
 - a searchable, filterable findings list with click-through details.
 

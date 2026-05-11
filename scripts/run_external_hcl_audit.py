@@ -16,13 +16,15 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from reachability_advisor.hcl_static import audit_hcl_project, render_hcl_audit_markdown  # noqa: E402
+from reachability_advisor.hcl_static import (  # noqa: E402
+    audit_hcl_project,
+    render_hcl_audit_markdown,
+)
 
 
 def _default_corpus() -> Path:

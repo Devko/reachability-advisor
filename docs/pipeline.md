@@ -5,7 +5,7 @@ Reachability Advisor runs after SBOM and vulnerability generation. A production 
 1. CycloneDX SBOM.
 2. Grype JSON generated from that SBOM.
 3. Source root for code reachability.
-4. Terraform plan JSON for workload, network, and IAM context.
+4. Terraform plan JSON and/or rendered Kubernetes manifests for workload, network, and IAM context.
 
 The scanner itself does not call external services. Keep Syft, Grype, Terraform, and artifact upload steps in the pipeline so teams can pin versions, cache databases, and control credentials.
 
@@ -67,14 +67,24 @@ jobs:
           terraform -chdir=infra plan -refresh=false -out=tfplan.binary
           terraform -chdir=infra show -json tfplan.binary > reachability/tfplan.json
 
+      - name: Render Kubernetes manifests
+        run: |
+          # Replace this with `helm template`, `kustomize build`, or the checked-in rendered YAML path used by your repository.
+          test ! -d k8s || cp k8s/*.yaml reachability/ || true
+
       - name: Run reachability prioritization
         run: |
+          k8s_args=()
+          if compgen -G "reachability/*.yaml" > /dev/null; then
+            k8s_args+=(--kubernetes-manifest reachability --kubernetes-coverage-out reachability/kubernetes-coverage.json)
+          fi
           reachability-advisor scan \
             --sbom sboms/app.cdx.json \
             --vulns vulns/app.grype.json \
             --source-root app=. \
             --terraform-plan reachability/tfplan.json \
             --terraform-coverage-out reachability/terraform-coverage.json \
+            "${k8s_args[@]}" \
             --source-coverage-out reachability/source-coverage.json \
             --mapping-out reachability/mapping.json \
             --out reachability/findings.json \
@@ -119,7 +129,7 @@ python -m pip install -e .
 
 ## Composite Action Variant
 
-When you want the scanner installed directly from this repository, use the composite action. It accepts newline-separated SBOMs, source roots, and artifact aliases, then exposes stable output paths for SARIF/artifact upload steps.
+When you want the scanner installed directly from this repository, use the composite action. It accepts newline-separated SBOMs, source roots, artifact aliases, rendered Kubernetes manifests, and an optional default-branch baseline, then exposes stable output paths for SARIF/artifact upload steps.
 
 ```yaml
       - name: Run Reachability Advisor
@@ -132,8 +142,11 @@ When you want the scanner installed directly from this repository, use the compo
           source-root: |
             app=.
           terraform-source: infra
+          kubernetes-manifest: |
+            k8s/rendered.yaml
           policy: configs/policy.example.json
-          fail-on-tier: high
+          baseline: reachability-baseline.json
+          fail-on-new-tier: high
 
       - name: Upload SARIF
         if: always()
@@ -150,6 +163,10 @@ When you want the scanner installed directly from this repository, use the compo
             ${{ steps.reachability.outputs.findings }}
             ${{ steps.reachability.outputs.mapping }}
             ${{ steps.reachability.outputs.terraform_coverage }}
+            ${{ steps.reachability.outputs.kubernetes_coverage }}
+            ${{ steps.reachability.outputs.baseline }}
+            ${{ steps.reachability.outputs.delta }}
+            ${{ steps.reachability.outputs.delta_markdown }}
             ${{ steps.reachability.outputs.markdown }}
             ${{ steps.reachability.outputs.html }}
 ```
@@ -185,6 +202,8 @@ For release branches and deployment gates, scan the built artifact instead of th
             --artifact-alias app=local/app:${{ github.sha }} \
             --terraform-plan reachability/tfplan.json \
             --terraform-coverage-out reachability/terraform-coverage.json \
+            --kubernetes-manifest k8s/rendered.yaml \
+            --kubernetes-coverage-out reachability/kubernetes-coverage.json \
             --source-coverage-out reachability/source-coverage.json \
             --mapping-out reachability/mapping.json \
             --out reachability/findings.json \
@@ -203,11 +222,12 @@ Use `--terraform-source infra` only when a plan cannot be generated in the job. 
 2. Generate Grype JSON from the same SBOM.
 3. Pass the matching source checkout with `--source-root name=path`.
 4. Pass Terraform plan JSON for release gates.
-5. Write `--mapping-out`, `--source-coverage-out`, and `--terraform-coverage-out` on every run.
-6. Upload SARIF to GitHub code scanning and upload JSON/Markdown/HTML artifacts for audit.
-7. Fail on `--fail-on-tier high` only when the team is ready to enforce the prioritized queue.
+5. Pass rendered Kubernetes YAML/JSON when workloads are deployed through Kubernetes, Helm, or Kustomize.
+6. Write `--mapping-out`, `--source-coverage-out`, `--terraform-coverage-out`, and `--kubernetes-coverage-out` when the related inputs are present.
+7. Upload SARIF to GitHub code scanning and upload JSON/Markdown/HTML artifacts for audit.
+8. Fail on `--fail-on-tier high` only when the team is ready to enforce the prioritized queue.
 
-Terraform plan JSON can include sensitive values. Prefer not to upload it. Upload `terraform-coverage.json`, `source-coverage.json`, and `mapping.json` instead.
+Terraform plan JSON can include sensitive values. Prefer not to upload it. Upload `terraform-coverage.json`, `kubernetes-coverage.json`, `source-coverage.json`, and `mapping.json` instead.
 
 ## Fallback Without a Plan
 
@@ -250,16 +270,25 @@ reachability-advisor scan \
   --out reachability/findings.json
 ```
 
+For CodeQL, pass SARIF output as `--source-evidence-in`. CodeQL `codeFlows` are imported as high-confidence data-flow evidence when the result or rule metadata includes a package, package URL, or vulnerability selector. Generic CodeQL query ids are retained as symbols and are not treated as vulnerability ids unless they look like CVE/GHSA/OSV-style ids.
+
 For Go services, pass `govulncheck -json` output as `--source-evidence-in`. Imported evidence must match a component/package, package URL, or vulnerability before it can upgrade a finding. Artifact is a narrowing selector, not a match by itself.
 
 ## PR Delta Gate
 
-For mature repositories, compare the pull request result against a baseline from the default branch so historical findings do not block every PR:
+For mature repositories, publish `reachability-baseline.json` from the default branch and compare pull requests against that artifact. The PR report contains only new and worsened findings, so historical backlog does not block every PR:
 
 ```bash
+reachability-advisor scan \
+  --sbom sboms/app.cdx.json \
+  --vulns vulns/app.grype.json \
+  --source-root app=. \
+  --out reachability/findings.json \
+  --baseline-out reachability/reachability-baseline.json
+
 reachability-advisor compare \
-  --base-findings main.findings.json \
-  --head-findings pr.findings.json \
+  --baseline main.reachability-baseline.json \
+  --head-findings reachability/findings.json \
   --markdown-out reachability-delta.md \
   --fail-on-new-tier high
 ```

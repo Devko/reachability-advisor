@@ -212,6 +212,41 @@ class TerraformExposureTests(unittest.TestCase):
         self.assertFalse(is_public_exposure(r))
         self.assertEqual(exposure_for_resource(r), "internal")
 
+    def test_kubernetes_cluster_ip_inside_spec_internal(self) -> None:
+        r = self._tf_resource("kubernetes_service", {"metadata": [{"name": "api"}], "spec": [{"type": "ClusterIP", "selector": {"app": "api"}}]})
+        self.assertFalse(is_public_exposure(r))
+        self.assertEqual(exposure_for_resource(r), "internal")
+
+    def test_kubernetes_service_spec_dict_load_balancer_public(self) -> None:
+        r = self._tf_resource("kubernetes_service", {"metadata": [{"name": "api"}], "spec": {"type": "LoadBalancer", "selector": {"app": "api"}}})
+        self.assertTrue(is_public_exposure(r))
+        self.assertEqual(exposure_for_resource(r), "public")
+
+    def test_kubernetes_service_defaults_to_internal_when_selector_exists(self) -> None:
+        r = self._tf_resource("kubernetes_service", {"metadata": [{"name": "api"}], "selector": {"app": "api"}})
+        self.assertFalse(is_public_exposure(r))
+        self.assertEqual(exposure_for_resource(r), "internal")
+
+    def test_empty_kubernetes_service_is_unknown(self) -> None:
+        r = self._tf_resource("kubernetes_service", {"metadata": [{"name": "api"}]})
+        self.assertFalse(is_public_exposure(r))
+        self.assertEqual(exposure_for_resource(r), "unknown")
+
+    def test_empty_kubernetes_ingress_is_unknown(self) -> None:
+        r = self._tf_resource("kubernetes_ingress_v1", {"metadata": [{"name": "api"}]})
+        self.assertFalse(is_public_exposure(r))
+        self.assertEqual(exposure_for_resource(r), "unknown")
+
+    def test_kubernetes_ingress_annotation_is_public_from_metadata_dict(self) -> None:
+        r = self._tf_resource("kubernetes_ingress_v1", {"metadata": {"name": "api", "annotations": {"kubernetes.io/ingress.class": "nginx"}}})
+        self.assertTrue(is_public_exposure(r))
+        self.assertEqual(exposure_for_resource(r), "public")
+
+    def test_kubernetes_ingress_annotation_is_public_from_metadata_list(self) -> None:
+        r = self._tf_resource("kubernetes_ingress_v1", {"metadata": [{"name": "api", "annotations": {"kubernetes.io/ingress.class": "nginx"}}]})
+        self.assertTrue(is_public_exposure(r))
+        self.assertEqual(exposure_for_resource(r), "public")
+
 
 class TerraformPrivilegeTests(unittest.TestCase):
     def _tf_resource(self, rtype: str, values: dict) -> object:
@@ -471,6 +506,7 @@ class TerraformBranchCoverageTests(unittest.TestCase):
         ])
         analysis = TerraformAnalyzer(data, [Artifact(name="app", reference="repo/app:1")]).analyze()
         self.assertEqual(analysis.contexts["app"].exposure, "public")
+        self.assertTrue(any("aws_lambda_function_url.app" in item for item in analysis.contexts["app"].evidence))
 
     def test_kubernetes_selector_path_does_not_expose_same_named_cloud_workload(self) -> None:
         data = plan([

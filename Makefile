@@ -1,18 +1,27 @@
 PYTHON ?= python
 PYTHONPATH ?= src
 COVERAGE_FAIL_UNDER ?= 93
+MYPY_TARGETS ?= src
 
-.PHONY: test coverage compile sample hcl-sample fixtures external-complex release-check package clean
+.PHONY: test coverage compile lint type-check quality sample hcl-sample fixtures external-complex release-check package clean
 
 test:
-	PYTHONPATH=$(PYTHONPATH) $(PYTHON) -m unittest discover -s tests -v
+	PYTHONPATH=$(PYTHONPATH) $(PYTHON) scripts/run_tests.py
 
 coverage:
-	PYTHONPATH=$(PYTHONPATH) $(PYTHON) -m coverage run --source=src/reachability_advisor -m unittest discover -s tests
+	PYTHONPATH=$(PYTHONPATH) $(PYTHON) -m coverage run --source=src/reachability_advisor scripts/run_tests.py
 	PYTHONPATH=$(PYTHONPATH) $(PYTHON) -m coverage report -m --fail-under=$(COVERAGE_FAIL_UNDER)
 
 compile:
-	$(PYTHON) -m compileall -q src tests
+	$(PYTHON) -m compileall -q src scripts tests
+
+lint:
+	PYTHONPATH=$(PYTHONPATH) $(PYTHON) -m ruff check src tests scripts
+
+type-check:
+	PYTHONPATH=$(PYTHONPATH) $(PYTHON) -m mypy $(MYPY_TARGETS)
+
+quality: compile test coverage lint type-check release-check package
 
 hcl-sample:
 	mkdir -p outputs
@@ -31,7 +40,7 @@ release-check:
 	PYTHONPATH=$(PYTHONPATH) $(PYTHON) scripts/validate_release.py
 
 package:
-	$(PYTHON) -m build
+	$(PYTHON) -m build --no-isolation
 
 sample:
 	mkdir -p outputs
@@ -54,6 +63,7 @@ sample:
 		--source-root batch-worker=samples/source/batch-worker \
 		--source-root reports-api=samples/source/reports-api \
 		--out outputs/findings.json \
+		--baseline-out outputs/reachability-baseline.json \
 		--sarif-out outputs/findings.sarif \
 		--diagnostics-out outputs/diagnostics.json \
 		--markdown-out outputs/pr-summary.md \

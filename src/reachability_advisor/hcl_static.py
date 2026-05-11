@@ -22,14 +22,20 @@ for stronger evidence?"
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from .models import Artifact
-from .terraform import TerraformAnalysis, TerraformAnalyzer, TerraformResource, coverage_report, extract_resources, provider_for_type
+from .terraform import (
+    TerraformAnalysis,
+    TerraformAnalyzer,
+    TerraformResource,
+    coverage_report,
+    extract_resources,
+    provider_for_type,
+)
 
 
 class HclAuditError(ValueError):
@@ -131,6 +137,7 @@ def audit_hcl_project(path: str | Path, artifacts: list[Artifact] | None = None)
     root = Path(path)
     if not root.exists():
         raise HclAuditError(f"Terraform source path does not exist: {root}")
+    files: tuple[Path, ...]
     if root.is_file():
         files = (root,)
         root_dir = root.parent

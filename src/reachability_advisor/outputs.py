@@ -13,7 +13,7 @@ from .remediation import build_remediation_groups
 
 
 def _metadata(extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    data = {
+    data: dict[str, Any] = {
         "tool": "reachability-advisor",
         "version": __version__,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -43,7 +43,10 @@ def write_json_findings(findings: list[Finding], path: str | Path, metadata: dic
 
 
 def load_findings_json(path: str | Path) -> dict[str, Any]:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: expected a JSON object")
+    return data
 
 
 def _primary_location(finding: Finding) -> SourceLocation | None:
@@ -306,10 +309,9 @@ def explain_finding(data: dict[str, Any], key: str | None = None, artifact: str 
         if key and finding.get("key") == key:
             selected = finding
             break
-        if artifact and vulnerability and component:
-            if finding.get("artifact", {}).get("name") == artifact and finding.get("vulnerability", {}).get("id") == vulnerability and finding.get("component", {}).get("name") == component:
-                selected = finding
-                break
+        if artifact and vulnerability and component and finding.get("artifact", {}).get("name") == artifact and finding.get("vulnerability", {}).get("id") == vulnerability and finding.get("component", {}).get("name") == component:
+            selected = finding
+            break
     if selected is None:
         raise ValueError("finding not found")
     lines = [

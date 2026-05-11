@@ -14,11 +14,31 @@ from reachability_advisor.artifacts import (
 )
 from reachability_advisor.cli import main
 from reachability_advisor.mapping import build_mapping_report
-from reachability_advisor.models import Artifact, Component, Reachability, SbomDocument, VulnerabilityRecord
+from reachability_advisor.models import (
+    Artifact,
+    Component,
+    Confidence,
+    Reachability,
+    SbomDocument,
+    VulnerabilityRecord,
+)
 from reachability_advisor.sbom import load_sbom
-from reachability_advisor.sbom_plan import recommend_sbom_commands, render_sbom_plan_markdown, write_sbom_plan_json
-from reachability_advisor.source import analyze_component_source, load_external_source_evidence, load_reachability_rules
-from reachability_advisor.terraform import TerraformAnalyzer, coverage_report, extract_resources, image_matches
+from reachability_advisor.sbom_plan import (
+    recommend_sbom_commands,
+    render_sbom_plan_markdown,
+    write_sbom_plan_json,
+)
+from reachability_advisor.source import (
+    analyze_component_source,
+    load_external_source_evidence,
+    load_reachability_rules,
+)
+from reachability_advisor.terraform import (
+    TerraformAnalyzer,
+    coverage_report,
+    extract_resources,
+    image_matches,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -364,6 +384,76 @@ class SourceReachabilityV4Tests(unittest.TestCase):
         self.assertEqual(evidence.reachability, Reachability.DEPENDENCY_REACHABLE)
         self.assertEqual(evidence.dependency_path, ["app", "parentpkg", "childlib"])
 
+    def test_package_manager_manifests_add_weak_dependency_evidence(self) -> None:
+        cases = [
+            (
+                Component(name="left-pad", purl="pkg:npm/left-pad@1.0.0"),
+                "pnpm-lock.yaml",
+                "lockfileVersion: '9.0'\npackages:\n  left-pad@1.0.0:\n    resolution: {}\n",
+                "pnpm-lock.yaml",
+            ),
+            (
+                Component(name="react", purl="pkg:npm/react@18.2.0"),
+                "yarn.lock",
+                '"react@npm:^18.2.0":\n  version: 18.2.0\n',
+                "yarn.lock",
+            ),
+            (
+                Component(name="requests", purl="pkg:pypi/requests@2.31.0"),
+                "pyproject.toml",
+                '[tool.poetry.dependencies]\npython = "^3.11"\nrequests = "^2.31.0"\n',
+                "pyproject.toml",
+            ),
+            (
+                Component(name="httpx", purl="pkg:pypi/httpx@0.27.0"),
+                "pyproject.toml",
+                '[project]\ndependencies = ["httpx>=0.27.0"]\n',
+                "pyproject.toml",
+            ),
+            (
+                Component(name="urllib3", purl="pkg:pypi/urllib3@2.2.0"),
+                "poetry.lock",
+                '[[package]]\nname = "urllib3"\nversion = "2.2.0"\n',
+                "poetry.lock",
+            ),
+            (
+                Component(name="log4j-core", group="org.apache.logging.log4j", purl="pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1"),
+                "build.gradle",
+                'dependencies { implementation("org.apache.logging.log4j:log4j-core:2.14.1") }\n',
+                "build.gradle",
+            ),
+            (
+                Component(name="gin", purl="pkg:golang/github.com/gin-gonic/gin@1.9.0"),
+                "go.mod",
+                "module example.com/app\n\nrequire github.com/gin-gonic/gin v1.9.0\n",
+                "go.mod",
+            ),
+        ]
+        for component, filename, contents, expected_manifest in cases:
+            with self.subTest(filename=filename):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    (root / filename).write_text(contents, encoding="utf-8")
+                    evidence = analyze_component_source(component, root)
+                self.assertEqual(evidence.reachability, Reachability.DEPENDENCY_REACHABLE)
+                self.assertEqual(evidence.confidence.value, "low")
+                self.assertIn("package-manager manifest", evidence.reason)
+                self.assertTrue(any(symbol.startswith(f"manifest:{expected_manifest}:") for symbol in evidence.matched_symbols))
+                self.assertEqual(evidence.locations[0].path.name, expected_manifest)
+
+    def test_manifest_matching_avoids_cross_ecosystem_and_project_name_false_positives(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "package.json").write_text('{"dependencies": {"requests": "2.31.0"}}\n', encoding="utf-8")
+            evidence = analyze_component_source(Component(name="requests", purl="pkg:pypi/requests@2.31.0"), root)
+        self.assertEqual(evidence.reachability, Reachability.PACKAGE_PRESENT)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "pyproject.toml").write_text('[project]\nname = "requests"\nversion = "0.1.0"\n', encoding="utf-8")
+            evidence = analyze_component_source(Component(name="requests", purl="pkg:pypi/requests@2.31.0"), root)
+        self.assertEqual(evidence.reachability, Reachability.PACKAGE_PRESENT)
+
     def test_custom_rule_file_can_define_vulnerability_specific_sink(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -569,6 +659,269 @@ class MappingAndSbomPlanTests(unittest.TestCase):
         self.assertIsNotNone(evidence)
         assert evidence is not None
         self.assertEqual(evidence.evidence_source, "semgrep")
+
+    def test_semgrep_dataflow_trace_becomes_attacker_controlled_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "semgrep-trace.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "results": [
+                            {
+                                "check_id": "reachability.npm.axios.attacker_controlled",
+                                "path": "src/app.js",
+                                "start": {"line": 7, "col": 3},
+                                "extra": {
+                                    "message": "tainted URL reaches axios.get",
+                                    "metadata": {
+                                        "package": "axios",
+                                        "vulnerability": "GHSA-axios",
+                                    },
+                                    "metavars": {"$URL": {"abstract_content": "req.query.url"}},
+                                    "dataflow_trace": {
+                                        "taint_source": [
+                                            {
+                                                "location": {"path": "src/app.js", "start": {"line": 3, "col": 15}},
+                                                "content": "req.query.url",
+                                            }
+                                        ],
+                                        "taint_sink": [
+                                            {
+                                                "location": {"path": "src/app.js", "start": {"line": 7, "col": 3}},
+                                                "content": "axios.get(url)",
+                                            }
+                                        ],
+                                    },
+                                },
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            store = load_external_source_evidence([path])
+
+        evidence = store.best_for("web", Component(name="axios"), VulnerabilityRecord(id="GHSA-axios", package_name="axios"))
+        self.assertIsNotNone(evidence)
+        assert evidence is not None
+        self.assertEqual(evidence.reachability, Reachability.ATTACKER_CONTROLLED)
+        self.assertEqual(evidence.confidence, Confidence.HIGH)
+        self.assertEqual(evidence.language, "javascript")
+        self.assertEqual(evidence.evidence_source, "semgrep")
+        self.assertIn("Semgrep dataflow trace", evidence.reason)
+        self.assertEqual([location.line for location in evidence.locations], [3, 7])
+        self.assertIn("$URL:req.query.url", evidence.matched_symbols)
+
+    def test_codeql_codeflow_uses_package_selector_without_rule_id_vulnerability_match(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "codeql.sarif"
+            path.write_text(
+                json.dumps(
+                    {
+                        "version": "2.1.0",
+                        "runs": [
+                            {
+                                "tool": {
+                                    "driver": {
+                                        "name": "CodeQL",
+                                        "rules": [
+                                            {
+                                                "id": "js/request-forgery",
+                                                "properties": {
+                                                    "reachability_advisor": {
+                                                        "package": "axios",
+                                                        "language": "javascript",
+                                                    },
+                                                    "precision": "high",
+                                                },
+                                            }
+                                        ],
+                                    }
+                                },
+                                "results": [
+                                    {
+                                        "ruleId": "js/request-forgery",
+                                        "message": {"text": "request URL reaches HTTP client"},
+                                        "locations": [
+                                            {
+                                                "physicalLocation": {
+                                                    "artifactLocation": {"uri": "src/app.js"},
+                                                    "region": {"startLine": 12, "startColumn": 9},
+                                                }
+                                            }
+                                        ],
+                                        "codeFlows": [
+                                            {
+                                                "threadFlows": [
+                                                    {
+                                                        "locations": [
+                                                            {
+                                                                "location": {
+                                                                    "message": {"text": "user controlled URL"},
+                                                                    "physicalLocation": {
+                                                                        "artifactLocation": {"uri": "src/app.js"},
+                                                                        "region": {"startLine": 4, "startColumn": 19},
+                                                                    },
+                                                                }
+                                                            },
+                                                            {
+                                                                "location": {
+                                                                    "message": {"text": "HTTP sink"},
+                                                                    "physicalLocation": {
+                                                                        "artifactLocation": {"uri": "src/client.js"},
+                                                                        "region": {"startLine": 8, "startColumn": 5},
+                                                                    },
+                                                                }
+                                                            },
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ],
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            store = load_external_source_evidence([path])
+
+        evidence = store.best_for("web", Component(name="axios"), VulnerabilityRecord(id="GHSA-other", package_name="axios"))
+        self.assertIsNotNone(evidence)
+        assert evidence is not None
+        self.assertEqual(evidence.reachability, Reachability.ATTACKER_CONTROLLED)
+        self.assertEqual(evidence.confidence, Confidence.HIGH)
+        self.assertEqual(evidence.evidence_source, "CodeQL")
+        self.assertIn("CodeQL data-flow path", evidence.reason)
+        self.assertEqual(evidence.locations[0].path, Path("src/app.js"))
+        self.assertEqual(evidence.locations[-1].path, Path("src/client.js"))
+        self.assertEqual([location.line for location in evidence.locations], [12, 4, 8])
+        self.assertIn("js/request-forgery", evidence.matched_symbols)
+
+    def test_semgrep_adapter_handles_rule_package_and_direct_trace_locations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "semgrep-native.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "results": [
+                            {
+                                "check_id": "reachability.npm.lodash.function_reachable",
+                                "path": "src/util.ts",
+                                "start": {"line": 2, "col": 4},
+                                "extra": {"message": "lodash usage"},
+                            },
+                            {
+                                "check_id": "custom.requests.trace",
+                                "path": "app.py",
+                                "start": {"line": 6, "col": 1},
+                                "extra": {
+                                    "metadata": {"purl": "pkg:pypi/requests@2.19.0"},
+                                    "dataflow_trace": {
+                                        "taint_source": [
+                                            {"path": "app.py", "start": {"line": 1, "column": 2}, "message": "request arg"},
+                                            {"location": {"start": {"line": 2}}},
+                                        ],
+                                        "taint_sink": [{"path": "app.py", "line": 6, "column": 1, "content": "requests.get(url)"}],
+                                    },
+                                },
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            store = load_external_source_evidence([path])
+
+        lodash = store.best_for("web", Component(name="lodash"), VulnerabilityRecord(id="GHSA-lodash", package_name="lodash"))
+        self.assertIsNotNone(lodash)
+        assert lodash is not None
+        self.assertEqual(lodash.reachability, Reachability.FUNCTION_REACHABLE)
+        self.assertEqual(lodash.confidence, Confidence.MEDIUM)
+        self.assertEqual(lodash.language, "javascript")
+        self.assertNotIn("dataflow trace", lodash.reason)
+
+        requests = store.best_for(
+            "api",
+            Component(name="requests", purl="pkg:pypi/requests@2.19.0"),
+            VulnerabilityRecord(id="GHSA-requests", package_name="requests"),
+        )
+        self.assertIsNotNone(requests)
+        assert requests is not None
+        self.assertEqual(requests.reachability, Reachability.ATTACKER_CONTROLLED)
+        self.assertEqual([location.line for location in requests.locations], [1, 6])
+
+    def test_sarif_adapter_handles_related_locations_and_vulnerability_rule_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "generic.sarif"
+            path.write_text(
+                json.dumps(
+                    {
+                        "runs": [
+                            {
+                                "tool": {
+                                    "driver": {
+                                        "name": "custom-sarif",
+                                        "rules": [
+                                            "bad",
+                                            {
+                                                "id": "GHSA-custom",
+                                                "properties": {
+                                                    "queryName": "custom-query",
+                                                    "source_symbol": "req.query",
+                                                    "sink_symbol": "leftPad",
+                                                },
+                                            },
+                                        ],
+                                    }
+                                },
+                                "results": [
+                                    {
+                                        "ruleId": "GHSA-custom",
+                                        "message": {"text": "left-pad is reachable"},
+                                        "properties": {"package": "left-pad"},
+                                        "locations": [
+                                            "bad",
+                                            {
+                                                "message": {"text": "primary"},
+                                                "physicalLocation": {
+                                                    "artifactLocation": {"uri": "src/index.js"},
+                                                    "region": {"startLine": 10, "startColumn": 3},
+                                                },
+                                            },
+                                        ],
+                                        "relatedLocations": [
+                                            "bad",
+                                            {"physicalLocation": {"region": {"startLine": 1}}},
+                                            {
+                                                "message": {"text": "helper"},
+                                                "physicalLocation": {
+                                                    "artifactLocation": {"uri": "src/helper.js"},
+                                                    "region": {"startLine": 2, "startColumn": 1},
+                                                },
+                                            },
+                                        ],
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            store = load_external_source_evidence([path])
+
+        evidence = store.best_for("web", Component(name="left-pad"), VulnerabilityRecord(id="GHSA-custom", package_name="left-pad"))
+        self.assertIsNotNone(evidence)
+        assert evidence is not None
+        self.assertEqual(evidence.reachability, Reachability.FUNCTION_REACHABLE)
+        self.assertEqual(evidence.confidence, Confidence.MEDIUM)
+        self.assertEqual(evidence.evidence_source, "custom-sarif")
+        self.assertEqual([location.path for location in evidence.locations], [Path("src/index.js"), Path("src/helper.js")])
+        self.assertIn("queryName:custom-query", evidence.matched_symbols)
+        self.assertIn("source_symbol:req.query", evidence.matched_symbols)
 
     def test_external_source_evidence_imports_supported_formats(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

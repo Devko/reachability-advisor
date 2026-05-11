@@ -20,6 +20,7 @@ def validate_paths(
     terraform_plan: str | None = None,
     source_roots: list[str] | None = None,
     terraform_source: str | None = None,
+    kubernetes_manifests: list[str] | None = None,
     policy: str | None = None,
     reachability_rules: str | None = None,
     source_evidence: list[str] | None = None,
@@ -33,6 +34,14 @@ def validate_paths(
         _validate_file(context, "context", issues)
     if terraform_plan:
         _validate_file(terraform_plan, "terraform-plan", issues)
+    for manifest in kubernetes_manifests or []:
+        manifest_path = Path(manifest)
+        if not manifest_path.exists():
+            issues.append(ValidationIssue("error", "kubernetes-manifest", f"path does not exist: {manifest}"))
+        elif manifest_path.is_file() and manifest_path.suffix.lower() not in {".yaml", ".yml", ".json"}:
+            issues.append(ValidationIssue("error", "kubernetes-manifest", f"file is not a YAML or JSON manifest: {manifest}"))
+        elif manifest_path.is_dir() and not any(item.suffix.lower() in {".yaml", ".yml", ".json"} for item in manifest_path.rglob("*") if item.is_file()):
+            issues.append(ValidationIssue("warning", "kubernetes-manifest", f"directory contains no YAML or JSON manifests: {manifest}"))
     if policy:
         _validate_file(policy, "policy", issues)
     if reachability_rules:
@@ -54,10 +63,10 @@ def validate_paths(
         artifact, raw_path = source_root.split("=", 1)
         if not artifact.strip():
             issues.append(ValidationIssue("error", source_root, "source root artifact name is empty"))
-        path = Path(raw_path)
-        if not path.exists():
+        root_path = Path(raw_path)
+        if not root_path.exists():
             issues.append(ValidationIssue("warning", source_root, "source root does not exist; reachability will be package_present only"))
-        elif not path.is_dir():
+        elif not root_path.is_dir():
             issues.append(ValidationIssue("error", source_root, "source root is not a directory"))
     return issues
 

@@ -11,9 +11,14 @@ Fixture packs let maintainers test common Terraform outputs locally without clou
 | Pack | Provider | Main resources exercised |
 |---|---|---|
 | `aws-ecs-fargate-service` | AWS | `aws_ecs_task_definition`, `aws_ecs_service`, `aws_lb`, `aws_security_group`, IAM role policies, Secrets Manager, supporting ECS resources. |
+| `aws-lambda-function-url` | AWS | `aws_lambda_function`, `aws_lambda_function_url`, IAM role policy, Secrets Manager. |
 | `azure-container-apps` | Azure | `azurerm_container_app`, Container Apps environment, managed identity, role assignment, Key Vault, supporting resource group/log analytics resources. |
+| `azure-app-service` | Azure | `azurerm_linux_web_app`, managed identity, role assignment, Key Vault. |
 | `gcp-cloud-run` | GCP | `google_cloud_run_v2_service`, public invoker IAM, service account, project IAM, Secret Manager, domain mapping, supporting project service/artifact registry resources. |
+| `gcp-gke-workload` | GCP/Kubernetes | `google_container_cluster`, GCP IAM, Kubernetes Deployment, Service, ServiceAccount. |
 | `kubernetes-ingress-workload` | Kubernetes | Deployment, Service, Ingress, ServiceAccount, ClusterRoleBinding, Namespace. |
+| `helm-heavy-kubernetes` | Kubernetes | `helm_release`, rendered Deployment, Service, Ingress, ClusterRoleBinding. |
+| `kubernetes-private-service-mesh` | Kubernetes | Internal Service, Deployment, RoleBinding, `helm_release`, `kubectl_manifest`. |
 
 ## Commands
 

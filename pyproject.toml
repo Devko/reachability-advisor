@@ -39,12 +39,20 @@ classifiers = [
 reachability-advisor = "reachability_advisor.cli:main"
 ra = "reachability_advisor.cli:main"
 
+[project.optional-dependencies]
+dev = [
+  "build>=1.2",
+  "coverage[toml]>=7",
+  "mypy>=1.10",
+  "ruff>=0.6",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.ruff]
 line-length = 100
-src = ["src", "tests"]
+src = ["src", "tests", "scripts"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "C4", "SIM"]

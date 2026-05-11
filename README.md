@@ -7,9 +7,9 @@ The normal input set is:
 - one CycloneDX SBOM per deployable artifact;
 - Grype JSON or normalized local vulnerability data from the same artifact;
 - source roots for code reachability;
-- Terraform plan JSON for workload, network, and IAM context.
+- Terraform plan JSON and/or rendered Kubernetes manifests for workload, network, and IAM context.
 
-The scanner can run without Terraform, but that is a degraded mode. Without Terraform it cannot prove public exposure, lateral network paths, private isolation, workload IAM, or artifact-to-infrastructure mapping.
+The scanner can run without Terraform or Kubernetes manifests, but that is a degraded mode. Without deployment context it cannot prove public exposure, lateral network paths, private isolation, workload IAM/RBAC, or artifact-to-infrastructure mapping.
 
 Outputs:
 
@@ -24,6 +24,7 @@ Outputs:
 - single-finding explanations;
 - source-analysis coverage reports;
 - Terraform multi-cloud coverage reports;
+- rendered Kubernetes manifest coverage reports;
 - SBOM/source/Terraform mapping reports.
 
 Package status: **stable v1.0.0**.
@@ -33,11 +34,12 @@ License: **GNU GPL v3.0 or later**.
 
 1. The scanner is local. It does not upload SBOMs, source, Terraform plans, or vulnerability data.
 2. Terraform plan analysis is the primary deployment-context path.
-3. Source-only or HCL-static analysis is for early feedback, not release confidence.
-4. Weak evidence never suppresses a vulnerability or marks it `not_affected`.
-5. Every score includes rationale and every artifact match is visible in `--mapping-out`.
-6. Every Terraform resource in a valid plan is represented in `--terraform-coverage-out`; unsupported resources are reported as visibility gaps.
-7. This project does not provide live cloud inventory, posture management, ticketing, dashboards, secrets scanning, malware scanning, or DSPM.
+3. Rendered Kubernetes manifests add workload, Service, Ingress, and RBAC context for Kubernetes deployments.
+4. Source-only or HCL-static analysis is for early feedback, not release confidence.
+5. Weak evidence never suppresses a vulnerability or marks it `not_affected`.
+6. Every score includes rationale and every artifact match is visible in `--mapping-out`.
+7. Every Terraform resource in a valid plan is represented in `--terraform-coverage-out`; unsupported resources are reported as visibility gaps.
+8. This project does not provide live cloud inventory, posture management, ticketing, dashboards, secrets scanning, malware scanning, or DSPM.
 
 ## Install
 
@@ -116,6 +118,8 @@ PYTHONPATH=src python -m reachability_advisor scan \
   --vulns samples/vulnerabilities.json \
   --terraform-plan samples/tfplan-multicloud.json \
   --terraform-coverage-out outputs/terraform-coverage.json \
+  --kubernetes-manifest samples/kubernetes-manifest.yaml \
+  --kubernetes-coverage-out outputs/kubernetes-coverage.json \
   --source-coverage-out outputs/source-coverage.json \
   --mapping-out outputs/mapping.json \
   --source-root payments-api=samples/source/payments-api \
@@ -282,9 +286,14 @@ The `fixtures/terraform` directory contains executable fixture packs for common 
 | Fixture | Provider | Purpose |
 |---|---|---|
 | `aws-ecs-fargate-service` | AWS | ECS/Fargate service shape with task definition, ALB, security group, IAM, and secrets. |
+| `aws-lambda-function-url` | AWS | Lambda container-image function exposed through a public function URL with secret-read IAM. |
 | `azure-container-apps` | Azure | Container Apps shape with external ingress, managed identity, role assignment, and Key Vault. |
+| `azure-app-service` | Azure | Linux App Service container with public web access, managed identity, and Key Vault access. |
 | `gcp-cloud-run` | GCP | Cloud Run shape with public invoker IAM, service account, domain mapping, and Secret Manager. |
+| `gcp-gke-workload` | GCP/Kubernetes | GKE cluster context plus Kubernetes Deployment, Service, and workload identity resources. |
 | `kubernetes-ingress-workload` | Kubernetes | Deployment, Service, Ingress, ServiceAccount, and RBAC shape. |
+| `helm-heavy-kubernetes` | Kubernetes | Helm wrapper plus rendered Deployment, Service, Ingress, and cluster RBAC. |
+| `kubernetes-private-service-mesh` | Kubernetes | Internal ClusterIP workload with service-mesh wrappers and limited RoleBinding. |
 
 Run the fixture harness locally:
 
@@ -346,7 +355,7 @@ Current local snapshots:
 
 ## GitHub Actions pipeline
 
-See [docs/pipeline.md](docs/pipeline.md) for a complete GitHub Actions example using GitHub-hosted runners. The workflow generates CycloneDX SBOMs and Grype vulnerability JSON, runs Reachability Advisor, uploads SARIF, stores mapping/source-coverage/Terraform/HTML artifacts, and publishes a Markdown summary to the job page.
+See [docs/pipeline.md](docs/pipeline.md) for a complete GitHub Actions example using GitHub-hosted runners. The workflow generates CycloneDX SBOMs and Grype vulnerability JSON, runs Reachability Advisor, uploads SARIF, stores mapping/source-coverage/Terraform/Kubernetes/HTML artifacts, and publishes a Markdown summary to the job page.
 
 For repositories that want to consume the published action directly:
 
@@ -356,6 +365,7 @@ For repositories that want to consume the published action directly:
     sbom: sboms/app.cdx.json
     vulns: vulns/app.grype.json
     source-root: app=.
+    kubernetes-manifest: k8s/rendered.yaml
     fail-on-tier: high
 ```
 
@@ -367,25 +377,30 @@ reachability-advisor scan \
   --vulns vulnerabilities.json \
   --terraform-plan tfplan.json \
   --terraform-coverage-out terraform-coverage.json \
+  --kubernetes-manifest k8s/rendered.yaml \
+  --kubernetes-coverage-out kubernetes-coverage.json \
   --source-coverage-out source-coverage.json \
   --mapping-out mapping.json \
   --source-root app=. \
   --sarif-out reachability.sarif \
+  --baseline-out reachability-baseline.json \
   --markdown-out reachability-pr-summary.md \
   --fail-on-tier high
 ```
 
 ## PR delta gate
 
-Use this to block only new or regressed high-risk findings instead of failing on the existing backlog.
+Use this to block only new or worsened high-risk findings instead of failing on the existing backlog.
 
 ```bash
 reachability-advisor compare \
-  --base-findings main.findings.json \
-  --head-findings pr.findings.json \
+  --baseline reachability-baseline.json \
+  --head-findings reachability-findings.json \
   --markdown-out reachability-delta.md \
   --fail-on-new-tier high
 ```
+
+`--baseline` reads the stable artifact written by `scan --baseline-out`. The PR delta JSON and Markdown include only new and worsened findings.
 
 ## IDE integration
 
@@ -402,8 +417,9 @@ The `ide/vscode` directory contains a minimal VS Code extension skeleton. It inv
 | Custom source rules | `--reachability-rules` JSON and `export-semgrep-rules` starter YAML |
 | External source evidence | `--source-evidence-in` for Reachability Advisor JSON, Semgrep JSON, SARIF, and govulncheck JSONL |
 | Terraform context | Primary deployment context. AWS, Azure, GCP, and Kubernetes plan/source support with coverage reporting, artifact matching, network graphing, and IAM impact classification |
+| Kubernetes manifests | Rendered YAML/JSON workload, Service, Ingress, and RBAC context with artifact matching and coverage reporting |
 | Context JSON | Explicit override/enrichment keyed by artifact name |
-| Outputs | JSON with remediation groups and raw findings, SARIF, diagnostics JSON, Markdown, interactive HTML, annotations, Terraform coverage JSON, source coverage JSON, mapping JSON |
+| Outputs | JSON with remediation groups and raw findings, baseline JSON, PR delta JSON/Markdown, SARIF, diagnostics JSON, Markdown, interactive HTML, annotations, Terraform coverage JSON, Kubernetes coverage JSON, source coverage JSON, mapping JSON |
 
 ## Run quality gates
 

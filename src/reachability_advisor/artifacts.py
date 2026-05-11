@@ -10,8 +10,8 @@ and are surfaced in reports.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
-from typing import Iterable
+from collections.abc import Iterable
+from dataclasses import dataclass
 
 from .models import Artifact
 

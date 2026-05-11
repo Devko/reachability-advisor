@@ -19,9 +19,17 @@ class SbomError(ValueError):
     """Raised when an SBOM cannot be parsed as a supported CycloneDX document."""
 
 
-def _properties(items: list[dict[str, Any]] | None) -> dict[str, str]:
+def _as_object(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _as_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _properties(items: Any) -> dict[str, str]:
     result: dict[str, str] = {}
-    for item in items or []:
+    for item in _as_list(items):
         if not isinstance(item, dict):
             continue
         name = str(item.get("name", "")).strip()
@@ -32,7 +40,7 @@ def _properties(items: list[dict[str, Any]] | None) -> dict[str, str]:
     return result
 
 
-def _external_reference_properties(items: list[dict[str, Any]] | None) -> dict[str, str]:
+def _external_reference_properties(items: Any) -> dict[str, str]:
     """Flatten CycloneDX external references into searchable properties.
 
     CycloneDX allows external references on the BOM and component objects.  The
@@ -41,7 +49,7 @@ def _external_reference_properties(items: list[dict[str, Any]] | None) -> dict[s
     """
 
     result: dict[str, str] = {}
-    for index, item in enumerate(items or []):
+    for index, item in enumerate(_as_list(items)):
         if not isinstance(item, dict):
             continue
         ref_type = str(item.get("type") or f"ref-{index}").strip().lower()
@@ -74,8 +82,8 @@ def _component_scope(component: dict[str, Any]) -> str:
 
 
 def _artifact_from_metadata(path: Path, data: dict[str, Any]) -> Artifact:
-    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
-    component = metadata.get("component") if isinstance(metadata.get("component"), dict) else {}
+    metadata = _as_object(data.get("metadata"))
+    component = _as_object(metadata.get("component"))
     props = _merge_properties(
         _properties(data.get("properties")),
         _external_reference_properties(data.get("externalReferences")),
@@ -104,14 +112,14 @@ def _artifact_from_metadata(path: Path, data: dict[str, Any]) -> Artifact:
 
 def _dependencies(data: dict[str, Any]) -> dict[str, list[str]]:
     graph: dict[str, list[str]] = {}
-    for item in data.get("dependencies", []) or []:
+    for item in _as_list(data.get("dependencies")):
         if not isinstance(item, dict):
             continue
         ref = str(item.get("ref") or "").strip()
         if not ref:
             continue
         depends_on = []
-        for dependency in item.get("dependsOn", []) or []:
+        for dependency in _as_list(item.get("dependsOn")):
             if dependency is None:
                 continue
             dependency_ref = str(dependency).strip()
@@ -134,7 +142,7 @@ def load_sbom(path: str | Path) -> SbomDocument:
         raise SbomError(f"{sbom_path}: expected CycloneDX bomFormat, got {data.get('bomFormat')!r}")
     artifact = _artifact_from_metadata(sbom_path, data)
     components: list[Component] = []
-    for raw_component in data.get("components", []):
+    for raw_component in _as_list(data.get("components")):
         if not isinstance(raw_component, dict):
             continue
         name = raw_component.get("name")

@@ -8,6 +8,7 @@ and findings.
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -34,7 +35,7 @@ REACHABILITY_LABELS: dict[Reachability, str] = {
     Reachability.ABSENT: "absent from scanned source",
     Reachability.UNKNOWN_DUE_TO_NO_RULE: "no source rule",
     Reachability.PACKAGE_PRESENT: "SBOM only",
-    Reachability.DEPENDENCY_REACHABLE: "reachable through dependency graph",
+    Reachability.DEPENDENCY_REACHABLE: "dependency evidence",
     Reachability.IMPORTED: "import observed",
     Reachability.FUNCTION_REACHABLE: "reachable vulnerable API",
     Reachability.ATTACKER_CONTROLLED: "request-controlled path",
@@ -142,10 +143,8 @@ class SourceLocation:
     def to_json(self, root: Path | None = None) -> dict[str, Any]:
         path = self.path
         if root:
-            try:
+            with suppress(ValueError):
                 path = path.relative_to(root)
-            except ValueError:
-                pass
         return {"path": str(path), "line": self.line, "column": self.column, "snippet": self.snippet}
 
 

@@ -1,0 +1,72 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.8.0",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "module.lambda.aws_lambda_function.this[0]",
+          "mode": "managed",
+          "type": "aws_lambda_function",
+          "name": "this",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "values": {
+            "function_name": "lambda-orders",
+            "package_type": "Image",
+            "image_uri": "public.ecr.aws/acme/lambda-orders:1.0.0",
+            "role": "lambda-orders-role",
+            "tags": {
+              "environment": "prod",
+              "owner": "orders"
+            }
+          }
+        },
+        {
+          "address": "module.lambda.aws_lambda_function_url.this[0]",
+          "mode": "managed",
+          "type": "aws_lambda_function_url",
+          "name": "this",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "values": {
+            "function_name": "lambda-orders",
+            "authorization_type": "NONE"
+          }
+        },
+        {
+          "address": "module.lambda.aws_iam_role.this[0]",
+          "mode": "managed",
+          "type": "aws_iam_role",
+          "name": "this",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "values": {
+            "name": "lambda-orders-role",
+            "managed_policy_arns": [
+              "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+            ]
+          }
+        },
+        {
+          "address": "module.lambda.aws_iam_role_policy.secrets[0]",
+          "mode": "managed",
+          "type": "aws_iam_role_policy",
+          "name": "secrets",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "values": {
+            "role": "lambda-orders-role",
+            "policy": "{\"Statement\": [{\"Effect\": \"Allow\", \"Action\": [\"secretsmanager:GetSecretValue\"], \"Resource\": \"arn:aws:secretsmanager:eu-central-1:123456789012:secret:orders-api-key\"}]}"
+          }
+        },
+        {
+          "address": "aws_secretsmanager_secret.orders_api_key",
+          "mode": "managed",
+          "type": "aws_secretsmanager_secret",
+          "name": "orders_api_key",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "values": {
+            "name": "orders-api-key"
+          }
+        }
+      ]
+    }
+  }
+}

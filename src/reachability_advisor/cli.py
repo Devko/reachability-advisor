@@ -9,11 +9,33 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .compare import compare_findings, delta_fails, write_delta, write_delta_markdown
+from .baseline import (
+    baseline_as_findings_json,
+    create_baseline_from_findings,
+    load_baseline,
+    write_baseline,
+)
+from .compare import compare_findings, delta_fails, pr_delta, write_delta, write_delta_markdown
 from .context import ContextError, load_context_file
-from .fixtures import FixtureError, discover_fixture_packs, load_fixture_pack, run_fixture_packs, validate_fixture_pack
-from .hcl_static import HclAuditError, analyze_terraform_source, audit_hcl_project, render_hcl_audit_markdown
-from .terraform import TerraformContextError, analyze_terraform_plan, empty_coverage_report
+from .fixtures import (
+    FixtureError,
+    discover_fixture_packs,
+    load_fixture_pack,
+    run_fixture_packs,
+    validate_fixture_pack,
+)
+from .hcl_static import (
+    HclAuditError,
+    analyze_terraform_source,
+    audit_hcl_project,
+    render_hcl_audit_markdown,
+)
+from .kubernetes import (
+    KubernetesManifestError,
+    analyze_kubernetes_manifests,
+    empty_kubernetes_coverage_report,
+    merge_context_maps,
+)
 from .mapping import build_mapping_report
 from .models import ContextEvidence, Tier
 from .outputs import (
@@ -28,9 +50,16 @@ from .outputs import (
 )
 from .policy import apply_exceptions, load_runtime_policy
 from .sbom import SbomError, load_sboms
-from .scoring import generate_findings_with_source_report
 from .sbom_plan import recommend_sbom_commands, render_sbom_plan_markdown, write_sbom_plan_json
-from .source import BUILTIN_RULES, load_external_source_evidence, load_reachability_rules, parse_source_roots, semgrep_rules_yaml
+from .scoring import generate_findings_with_source_report
+from .source import (
+    BUILTIN_RULES,
+    load_external_source_evidence,
+    load_reachability_rules,
+    parse_source_roots,
+    semgrep_rules_yaml,
+)
+from .terraform import TerraformContextError, analyze_terraform_plan, empty_coverage_report
 from .validators import has_errors, issues_report, validate_paths
 from .visual import write_html_report
 from .vulnerability import VulnerabilityError, load_vulnerabilities
@@ -54,6 +83,9 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--terraform-plan", help="Terraform plan JSON for AWS/Azure/GCP/Kubernetes deployment context.")
     scan.add_argument("--terraform-source", help="Terraform .tf source directory for conservative static HCL fallback when no plan is available.")
     scan.add_argument("--terraform-coverage-out", help="Write Terraform coverage/accounting report JSON.")
+    scan.add_argument("--kubernetes-manifest", action="append", default=[], help="Rendered Kubernetes YAML/JSON manifest file or directory. Repeat for multiple paths.")
+    scan.add_argument("--kubernetes-infer-lateral", action="store_true", help="Treat internal services as laterally reachable when a public Kubernetes entrypoint is present.")
+    scan.add_argument("--kubernetes-coverage-out", help="Write Kubernetes manifest coverage/context report JSON.")
     scan.add_argument("--mapping-out", help="Write SBOM/source/Terraform mapping verification report JSON.")
     scan.add_argument("--source-coverage-out", help="Write source-analysis coverage and evidence report JSON.")
     scan.add_argument("--artifact-alias", action="append", default=[], help="Add artifact mapping alias: artifact=reference. Repeatable; use when SBOM metadata lacks image refs.")
@@ -61,6 +93,7 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--source-evidence-in", action="append", default=[], help="External source evidence JSON, Semgrep JSON, SARIF, or govulncheck JSONL. Repeatable.")
     scan.add_argument("--policy", help="Policy JSON with exceptions and fail tier.")
     scan.add_argument("--out", help="Findings JSON output path.")
+    scan.add_argument("--baseline-out", help="Write a stable baseline artifact for future PR delta gates.")
     scan.add_argument("--sarif-out", help="SARIF 2.1.0 output path.")
     scan.add_argument("--diagnostics-out", help="IDE diagnostics JSON output path.")
     scan.add_argument("--markdown-out", help="Developer PR summary Markdown output path.")
@@ -78,6 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--context")
     validate.add_argument("--terraform-plan")
     validate.add_argument("--terraform-source")
+    validate.add_argument("--kubernetes-manifest", action="append", default=[])
     validate.add_argument("--policy")
     validate.add_argument("--reachability-rules")
     validate.add_argument("--source-evidence-in", action="append", default=[])
@@ -92,11 +126,14 @@ def build_parser() -> argparse.ArgumentParser:
     explain.add_argument("--out")
 
     compare = sub.add_parser("compare", help="Compare base and head findings for pull-request workflows.")
-    compare.add_argument("--base-findings", required=True)
+    compare_base = compare.add_mutually_exclusive_group(required=True)
+    compare_base.add_argument("--base-findings", help="Base findings JSON from the default branch.")
+    compare_base.add_argument("--baseline", help="Stable baseline artifact from the default branch.")
     compare.add_argument("--head-findings", required=True)
     compare.add_argument("--score-delta", type=float, default=5.0)
     compare.add_argument("--out")
     compare.add_argument("--markdown-out")
+    compare.add_argument("--only-new-or-worsened", action="store_true", help="Emit only new and worsened findings in JSON and Markdown output.")
     compare.add_argument("--fail-on-new-tier", choices=[tier.value for tier in Tier])
 
     init_policy = sub.add_parser("init-policy", help="Write an example runtime policy JSON.")
@@ -229,6 +266,7 @@ def run_scan(args: argparse.Namespace) -> int:
             args.terraform_plan,
             args.source_root,
             args.terraform_source,
+            args.kubernetes_manifest,
             args.policy,
             args.reachability_rules,
             args.source_evidence_in,
@@ -244,8 +282,9 @@ def run_scan(args: argparse.Namespace) -> int:
     source_roots = parse_source_roots(args.source_root)
     reachability_rules = load_reachability_rules(args.reachability_rules)
     contexts: dict[str, ContextEvidence] = {}
-    contexts.update(load_context_file(args.context))
+    merge_context_maps(contexts, load_context_file(args.context))
     terraform_coverage = empty_coverage_report()
+    kubernetes_coverage = empty_kubernetes_coverage_report()
     if args.terraform_plan and args.terraform_source:
         raise UserFacingError("use either --terraform-plan or --terraform-source, not both", 2)
     if args.terraform_plan:
@@ -253,15 +292,23 @@ def run_scan(args: argparse.Namespace) -> int:
             terraform_analysis = analyze_terraform_plan(args.terraform_plan, [sbom.artifact for sbom in sboms])
         except TerraformContextError as exc:
             raise ContextError(str(exc)) from exc
-        contexts.update(terraform_analysis.contexts)
+        merge_context_maps(contexts, terraform_analysis.contexts)
         terraform_coverage = terraform_analysis.coverage
     elif args.terraform_source:
         try:
             terraform_analysis = analyze_terraform_source(args.terraform_source, [sbom.artifact for sbom in sboms])
         except HclAuditError as exc:
             raise ContextError(str(exc)) from exc
-        contexts.update(terraform_analysis.contexts)
+        merge_context_maps(contexts, terraform_analysis.contexts)
         terraform_coverage = terraform_analysis.coverage
+    if args.kubernetes_manifest:
+        kubernetes_analysis = analyze_kubernetes_manifests(
+            args.kubernetes_manifest,
+            [sbom.artifact for sbom in sboms],
+            infer_lateral_from_public_entry=args.kubernetes_infer_lateral,
+        )
+        merge_context_maps(contexts, kubernetes_analysis.contexts)
+        kubernetes_coverage = kubernetes_analysis.coverage
     external_source_evidence = load_external_source_evidence(args.source_evidence_in)
     findings, source_coverage = generate_findings_with_source_report(
         sboms,
@@ -278,11 +325,14 @@ def run_scan(args: argparse.Namespace) -> int:
         "vulnerability_records": len(vulnerabilities),
         "context_artifacts": len(contexts),
         "terraform_resources": terraform_coverage.get("summary", {}).get("total_resources", 0),
+        "kubernetes_resources": kubernetes_coverage.get("summary", {}).get("total_resources", 0),
         "source_files": source_coverage.get("summary", {}).get("files_scanned", 0),
         "external_source_evidence_records": source_coverage.get("summary", {}).get("external_evidence_records", 0),
     }
     if args.out:
         write_json_findings(findings, args.out, metadata=metadata)
+    if args.baseline_out:
+        write_baseline(create_baseline_from_findings(findings, metadata=metadata), args.baseline_out)
     if args.sarif_out:
         write_sarif(findings, args.sarif_out)
     if args.diagnostics_out:
@@ -297,6 +347,10 @@ def run_scan(args: argparse.Namespace) -> int:
         out = Path(args.terraform_coverage_out)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(terraform_coverage, indent=2), encoding="utf-8")
+    if args.kubernetes_coverage_out:
+        out = Path(args.kubernetes_coverage_out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(kubernetes_coverage, indent=2), encoding="utf-8")
     if args.source_coverage_out:
         out = Path(args.source_coverage_out)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -328,6 +382,7 @@ def run_validate(args: argparse.Namespace) -> int:
         args.terraform_plan,
         args.source_root,
         args.terraform_source,
+        args.kubernetes_manifest,
         args.policy,
         args.reachability_rules,
         args.source_evidence_in,
@@ -353,17 +408,21 @@ def run_explain(args: argparse.Namespace) -> int:
 
 
 def run_compare(args: argparse.Namespace) -> int:
-    base = load_findings_json(args.base_findings)
+    if args.baseline:
+        base = baseline_as_findings_json(load_baseline(args.baseline))
+    else:
+        base = load_findings_json(args.base_findings)
     head = load_findings_json(args.head_findings)
     delta = compare_findings(base, head, score_delta=args.score_delta)
+    output_delta = pr_delta(delta) if args.only_new_or_worsened or args.baseline else delta
     if args.out:
-        write_delta(delta, args.out)
+        write_delta(output_delta, args.out)
     else:
-        print(json.dumps(delta, indent=2))
+        print(json.dumps(output_delta, indent=2))
     if args.markdown_out:
-        write_delta_markdown(delta, args.markdown_out)
-    if args.fail_on_new_tier and delta_fails(delta, args.fail_on_new_tier):
-        print(f"Reachability Advisor PR delta failed: new/regressed finding reached {args.fail_on_new_tier}.", file=sys.stderr)
+        write_delta_markdown(output_delta, args.markdown_out)
+    if args.fail_on_new_tier and delta_fails(output_delta, args.fail_on_new_tier):
+        print(f"Reachability Advisor PR delta failed: new/worsened finding reached {args.fail_on_new_tier}.", file=sys.stderr)
         return 10
     return 0
 
@@ -464,7 +523,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         parser.error("unknown command")
         return 2
-    except (UserFacingError, SbomError, VulnerabilityError, ContextError, FixtureError, HclAuditError, ValueError) as exc:
+    except (UserFacingError, SbomError, VulnerabilityError, ContextError, FixtureError, HclAuditError, KubernetesManifestError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return exc.exit_code if isinstance(exc, UserFacingError) else 2
 

@@ -1,0 +1,45 @@
+{
+  "schema_version": "3.0",
+  "id": "helm-heavy-kubernetes",
+  "name": "Helm-heavy Kubernetes fixture",
+  "provider": "kubernetes",
+  "module_reference": {
+    "name": "Helm release with rendered Kubernetes workload",
+    "source": "helm_release plus rendered Kubernetes provider resources",
+    "upstream_note": "The fixture models pipelines that keep Helm release metadata and rendered Kubernetes resources in the plan."
+  },
+  "fixture_kind": "sanitized module-shaped terraform-show-json plan",
+  "terraform_plan": "tfplan.json",
+  "sboms": ["sboms/helm-dashboard.cdx.json"],
+  "vulnerabilities": "../../common/vulnerabilities.json",
+  "source_roots": {
+    "helm-dashboard": "source/helm-dashboard"
+  },
+  "expected": {
+    "resource_accounting_coverage": 1.0,
+    "semantic_classification_coverage": 1.0,
+    "artifact_match_coverage": 1.0,
+    "min_findings": 1,
+    "must_match_artifacts": ["helm-dashboard"],
+    "required_resource_types": [
+      "helm_release",
+      "kubernetes_namespace",
+      "kubernetes_deployment",
+      "kubernetes_service",
+      "kubernetes_ingress_v1",
+      "kubernetes_cluster_role_binding"
+    ],
+    "min_tier_by_finding": [
+      {
+        "artifact": "helm-dashboard",
+        "component": "log4j-core",
+        "vulnerability": "CVE-2021-44228",
+        "tier": "urgent"
+      }
+    ]
+  },
+  "notes": [
+    "Includes an opaque helm_release resource and rendered child resources.",
+    "The rendered Deployment, Service, Ingress, and RBAC resources keep artifact matching and exposure testable."
+  ]
+}

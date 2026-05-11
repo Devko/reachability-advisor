@@ -28,6 +28,8 @@ jobs:
             --vulns samples/vulnerabilities.json \
             --terraform-plan samples/tfplan-multicloud.json \
             --terraform-coverage-out outputs/terraform-coverage.json \
+            --kubernetes-manifest samples/kubernetes-manifest.yaml \
+            --kubernetes-coverage-out outputs/kubernetes-coverage.json \
             --source-coverage-out outputs/source-coverage.json \
             --source-root payments-api=samples/source/payments-api \
             --source-root notifier=samples/source/notifier \

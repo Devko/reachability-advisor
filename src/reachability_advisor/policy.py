@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -28,20 +28,14 @@ class ExceptionRule:
             return False
         if self.artifact and self.artifact != finding.artifact.name:
             return False
-        if self.component and self.component != finding.component.name:
-            return False
-        return True
+        return not (self.component and self.component != finding.component.name)
 
 
 @dataclass
 class RuntimePolicy:
     score_policy: ScorePolicy
     fail_on_tier: Tier = Tier.HIGH
-    exceptions: list[ExceptionRule] = None  # type: ignore[assignment]
-
-    def __post_init__(self) -> None:
-        if self.exceptions is None:
-            self.exceptions = []
+    exceptions: list[ExceptionRule] = field(default_factory=list)
 
 
 def _tier(value: Any, default: Tier) -> Tier:

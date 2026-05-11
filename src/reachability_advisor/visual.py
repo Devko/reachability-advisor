@@ -10,13 +10,15 @@ from typing import Any
 
 from . import __version__
 from .models import Finding, reachability_label
+from .numeric import safe_float
 from .remediation import build_remediation_groups
-
+from .visual_graph import visual_graph_model
 
 TIER_RANK = {"informational": 0, "low": 1, "medium": 2, "high": 3, "urgent": 4}
 EXPOSURE_RANK = {"unknown": 0, "isolated": 1, "private": 1, "internal": 2, "external": 3, "public": 4}
 NETWORK_PATH_RE = re.compile(r"^(?:terraform|context|kubernetes) network path: (?P<exposure>[a-z_]+) via (?P<path>.+)$")
 EXPOSURE_INFERENCE_RE = re.compile(r"^(?:terraform|context|kubernetes) exposure inference: (?P<exposure>[a-z_]+) via (?P<target>.+)$")
+_visual_graph_model = visual_graph_model
 
 
 def write_html_report(findings: list[Finding], path: str | Path, metadata: dict[str, Any] | None = None) -> None:
@@ -75,7 +77,7 @@ def _visual_payload(findings: list[Finding], metadata: dict[str, Any] | None = N
             "findingKey": finding["key"],
             "label": str(vulnerability.get("id") or "unknown-vulnerability"),
             "tier": finding.get("tier") or "informational",
-            "score": float(finding.get("score") or 0),
+            "score": safe_float(finding.get("score")),
             "component": str(component.get("display_name") or component.get("name") or "unknown-component"),
             "componentVersion": component.get("version") or "unknown",
             "severity": vulnerability.get("severity") or "unknown",
@@ -107,9 +109,9 @@ def _visual_payload(findings: list[Finding], metadata: dict[str, Any] | None = N
             }
         )
 
-    ordered_assets = sorted(assets.values(), key=lambda asset: (-TIER_RANK.get(asset["tier"], 0), -float(asset["score"]), asset["name"]))
+    ordered_assets = sorted(assets.values(), key=lambda asset: (-TIER_RANK.get(asset["tier"], 0), -safe_float(asset["score"]), asset["name"]))
     network_paths = _finalize_network_paths(ordered_assets)
-    vulnerabilities.sort(key=lambda item: (item["assetId"], -TIER_RANK.get(item["tier"], 0), -float(item["score"]), item["label"]))
+    vulnerabilities.sort(key=lambda item: (item["assetId"], -TIER_RANK.get(item["tier"], 0), -safe_float(item["score"]), item["label"]))
     return {
         "metadata": {
             "tool": "reachability-advisor",
@@ -133,7 +135,7 @@ def _raise_asset(asset: dict[str, Any], finding: dict[str, Any]) -> None:
     key = finding["key"]
     if key not in asset["findingKeys"]:
         asset["findingKeys"].append(key)
-    asset["score"] = max(float(asset["score"]), float(finding.get("score") or 0))
+    asset["score"] = max(safe_float(asset["score"]), safe_float(finding.get("score")))
     if TIER_RANK.get(finding.get("tier", "informational"), 0) > TIER_RANK.get(asset["tier"], 0):
         asset["tier"] = finding.get("tier") or "informational"
     if context.get("owner") and not asset.get("owner"):
@@ -169,7 +171,7 @@ def _network_path_from_evidence(asset_id: str, finding: dict[str, Any], item: st
             "entrySubtitle": _entry_subtitle_for_kind(entry_kind),
             "exposure": exposure,
             "tier": finding.get("tier") or "informational",
-            "score": float(finding.get("score") or 0),
+            "score": safe_float(finding.get("score")),
             "label": _path_label(steps, exposure),
             "summary": _path_summary(steps, exposure),
             "steps": steps,
@@ -190,7 +192,7 @@ def _network_path_from_evidence(asset_id: str, finding: dict[str, Any], item: st
             "entrySubtitle": _entry_subtitle_for_kind(entry_kind),
             "exposure": exposure,
             "tier": finding.get("tier") or "informational",
-            "score": float(finding.get("score") or 0),
+            "score": safe_float(finding.get("score")),
             "label": f"{exposure} exposure",
             "summary": f"Exposure inferred through {target}",
             "steps": [target],
@@ -211,7 +213,7 @@ def _finalize_network_paths(assets: list[dict[str, Any]]) -> list[dict[str, Any]
         for index, path in enumerate(paths):
             path["id"] = f"network:{asset['id']}:{index}"
             path["tier"] = asset["tier"] if TIER_RANK.get(asset["tier"], 0) > TIER_RANK.get(path.get("tier", "informational"), 0) else path.get("tier", "informational")
-            path["score"] = max(float(path.get("score") or 0), float(asset.get("score") or 0))
+            path["score"] = max(safe_float(path.get("score")), safe_float(asset.get("score")))
             network_paths.append(path)
     return network_paths
 
@@ -226,7 +228,7 @@ def _fallback_network_path(asset: dict[str, Any]) -> dict[str, Any]:
         "entrySubtitle": _entry_subtitle(exposure),
         "exposure": exposure,
         "tier": asset.get("tier") or "informational",
-        "score": float(asset.get("score") or 0),
+        "score": safe_float(asset.get("score")),
         "label": _fallback_path_label(exposure),
         "summary": _fallback_path_summary(exposure),
         "steps": [],
@@ -396,7 +398,7 @@ def _stats(findings: list[dict[str, Any]]) -> dict[str, Any]:
         )
         for finding in findings
     }
-    tiers = {tier: 0 for tier in TIER_RANK}
+    tiers = dict.fromkeys(TIER_RANK, 0)
     exposures: dict[str, int] = {}
     for finding in findings:
         tiers[str(finding.get("tier") or "informational")] = tiers.get(str(finding.get("tier") or "informational"), 0) + 1
@@ -839,6 +841,21 @@ li {
 const DATA = JSON.parse(document.getElementById("report-data").textContent);
 const tierRank = {informational: 0, low: 1, medium: 2, high: 3, urgent: 4};
 const exposureRank = {unknown: 0, isolated: 1, private: 1, internal: 2, external: 3, public: 4};
+const assetById = new Map((DATA.assets || []).map(asset => [asset.id, asset]));
+const vulnerabilityByFindingKey = new Map((DATA.vulnerabilities || []).map(vuln => [vuln.findingKey, vuln]));
+const vulnerabilitiesByAssetId = new Map();
+for (const vuln of DATA.vulnerabilities || []) {
+  if (!vulnerabilitiesByAssetId.has(vuln.assetId)) vulnerabilitiesByAssetId.set(vuln.assetId, []);
+  vulnerabilitiesByAssetId.get(vuln.assetId).push(vuln);
+}
+const networkPathsByAssetId = new Map();
+for (const path of DATA.networkPaths || []) {
+  if (!networkPathsByAssetId.has(path.assetId)) networkPathsByAssetId.set(path.assetId, []);
+  networkPathsByAssetId.get(path.assetId).push(path);
+}
+for (const paths of networkPathsByAssetId.values()) {
+  paths.sort((a, b) => ((exposureRank[b.exposure] ?? 0) - (exposureRank[a.exposure] ?? 0)) || ((tierRank[b.tier] ?? 0) - (tierRank[a.tier] ?? 0)) || ((b.score || 0) - (a.score || 0)));
+}
 const entryWidth = 180;
 const entryHeight = 88;
 const pathWidth = 248;
@@ -933,13 +950,13 @@ function visibleFindings() {
 
 function assetForFinding(finding) {
   const assetId = `asset:${finding.artifact.name}`;
-  return DATA.assets.find(asset => asset.id === assetId) || {};
+  return assetById.get(assetId) || {};
 }
 
 function render() {
   const findings = visibleFindings();
   const visibleKeys = new Set(findings.map(finding => finding.key));
-  const visibleVulns = DATA.vulnerabilities.filter(vuln => visibleKeys.has(vuln.findingKey));
+  const visibleVulns = findings.map(finding => vulnerabilityByFindingKey.get(finding.key)).filter(Boolean);
   const visibleAssetIds = new Set(visibleVulns.map(vuln => vuln.assetId));
   const visibleAssets = DATA.assets.filter(asset => visibleAssetIds.has(asset.id));
   const visibleNetworkPaths = visibleAssets.map(asset => primaryNetworkPath(asset)).filter(Boolean);
@@ -971,12 +988,16 @@ function layoutCards(assets, vulnerabilities) {
   const networkPathPositions = new Map();
   const assetPositions = new Map();
   const vulnerabilityPositions = new Map();
+  const visibleVulnerabilitiesByAssetId = new Map();
+  for (const vuln of vulnerabilities) {
+    if (!visibleVulnerabilitiesByAssetId.has(vuln.assetId)) visibleVulnerabilitiesByAssetId.set(vuln.assetId, []);
+    visibleVulnerabilitiesByAssetId.get(vuln.assetId).push(vuln);
+  }
   let y = 42;
   let maxVulnCount = 0;
   for (const asset of assets) {
     const networkPath = primaryNetworkPath(asset);
-    const assetVulns = vulnerabilities
-      .filter(vuln => vuln.assetId === asset.id)
+    const assetVulns = (visibleVulnerabilitiesByAssetId.get(asset.id) || [])
       .sort((a, b) => (tierRank[b.tier] - tierRank[a.tier]) || (b.score - a.score) || a.label.localeCompare(b.label));
     maxVulnCount = Math.max(maxVulnCount, assetVulns.length);
     const rowHeight = Math.max(assetHeight, pathHeight, assetVulns.length * (vulnHeight + vulnGap) - vulnGap);
@@ -1006,8 +1027,8 @@ function renderEdges(assets, vulnerabilities, networkPaths, layout) {
     const path = layout.networkPaths.get(pathNode.id);
     const asset = layout.assets.get(pathNode.assetId);
     if (!entry || !path || !asset) continue;
-    paths.push(edgePath(entry.x + entry.width, entry.y + entry.height / 2, path.x, path.y + path.height / 2, `edge network entry ${pathNode.exposure}`));
-    paths.push(edgePath(path.x + path.width, path.y + path.height / 2, asset.x, asset.y + asset.height / 2, `edge network ${pathNode.tier}`));
+    paths.push(edgePath(entry.x + entry.width, entry.y + entry.height / 2, path.x, path.y + path.height / 2, `edge network entry ${pathNode.exposure}`, `${pathNode.id}:entry`, pathNode.id));
+    paths.push(edgePath(path.x + path.width, path.y + path.height / 2, asset.x, asset.y + asset.height / 2, `edge network ${pathNode.tier}`, pathNode.id, pathNode.assetId));
   }
   for (const vuln of vulnerabilities) {
     const asset = layout.assets.get(vuln.assetId);
@@ -1018,21 +1039,25 @@ function renderEdges(assets, vulnerabilities, networkPaths, layout) {
     const x2 = target.x;
     const y2 = target.y + target.height / 2;
     const busX = x1 + 44;
-    paths.push(fanEdgePath(x1, y1, busX, x2, y2, `edge vulnerability ${vuln.tier}`));
+    paths.push(fanEdgePath(x1, y1, busX, x2, y2, `edge vulnerability ${vuln.tier}`, vuln.assetId, vuln.id));
   }
   return paths;
 }
 
-function edgePath(x1, y1, x2, y2, className) {
+function edgePath(x1, y1, x2, y2, className, sourceId, targetId) {
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
   path.setAttribute("class", className);
+  path.dataset.edgeSource = sourceId;
+  path.dataset.edgeTarget = targetId;
   path.setAttribute("d", `M ${x1} ${y1} C ${x1 + 42} ${y1}, ${x2 - 42} ${y2}, ${x2} ${y2}`);
   return path;
 }
 
-function fanEdgePath(x1, y1, busX, x2, y2, className) {
+function fanEdgePath(x1, y1, busX, x2, y2, className, sourceId, targetId) {
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
   path.setAttribute("class", className);
+  path.dataset.edgeSource = sourceId;
+  path.dataset.edgeTarget = targetId;
   path.setAttribute("d", `M ${x1} ${y1} L ${busX} ${y1} L ${busX} ${y2} L ${x2} ${y2}`);
   return path;
 }
@@ -1043,9 +1068,7 @@ function primaryNetworkPath(asset) {
 }
 
 function networkPathsForAsset(assetId) {
-  return (DATA.networkPaths || [])
-    .filter(path => path.assetId === assetId)
-    .sort((a, b) => (exposureRank[b.exposure] - exposureRank[a.exposure]) || (tierRank[b.tier] - tierRank[a.tier]) || (b.score - a.score));
+  return networkPathsByAssetId.get(assetId) || [];
 }
 
 function renderEntryCard(path, position) {
@@ -1132,6 +1155,7 @@ function createCard(kind, tierValue, position, datum) {
   const card = document.createElement("div");
   card.className = `card ${kind} ${tierValue}${selected && selected.id === datum.id ? " selected" : ""}`;
   card.dataset.role = kind;
+  card.dataset.nodeId = datum.id;
   card.style.left = `${position.x}px`;
   card.style.top = `${position.y}px`;
   card.style.width = `${position.width}px`;
@@ -1232,7 +1256,7 @@ function renderFindingList(findings) {
     const item = document.createElement("div");
     item.className = "item";
     item.addEventListener("click", () => {
-      selected = DATA.vulnerabilities.find(vuln => vuln.findingKey === finding.key);
+      selected = vulnerabilityByFindingKey.get(finding.key);
       render();
     });
     const title = document.createElement("div");
@@ -1257,7 +1281,7 @@ function renderDetails(datum) {
   }
   const section = document.createElement("section");
   if (datum.networkKind) {
-    const asset = DATA.assets.find(item => item.id === datum.assetId) || {};
+    const asset = assetById.get(datum.assetId) || {};
     section.append(heading(datum.networkKind === "entry" ? datum.entryLabel : `${datum.label} -> ${asset.name || "asset"}`));
     section.append(chips([exposureChip(datum.exposure), scoreChip(datum.score || 0, "max")]));
     section.append(kv({
@@ -1303,7 +1327,7 @@ function renderDetails(datum) {
     }));
     appendList(section, "Network paths", networkPathsForAsset(datum.id).map(path => path.evidence || path.summary).filter(Boolean));
     appendList(section, "Evidence", datum.evidence || []);
-    appendList(section, "Linked vulnerabilities", DATA.vulnerabilities.filter(vuln => vuln.assetId === datum.id).map(vuln => `${vuln.tier} ${Number(vuln.score).toFixed(1)} ${vuln.label} in ${vuln.component}`));
+    appendList(section, "Linked vulnerabilities", (vulnerabilitiesByAssetId.get(datum.id) || []).map(vuln => `${vuln.tier} ${Number(vuln.score).toFixed(1)} ${vuln.label} in ${vuln.component}`));
   }
   details.replaceChildren(section);
 }
@@ -1313,7 +1337,7 @@ function codeExposureFromState(source) {
   if (source && typeof source === "object" && source.label) return source.label;
   if (state === "attacker_controlled") return "request-controlled path";
   if (state === "function_reachable") return "reachable vulnerable API";
-  if (state === "dependency_reachable") return "reachable through dependency graph";
+  if (state === "dependency_reachable") return "dependency evidence";
   if (state === "imported") return "import observed";
   if (state === "unknown_due_to_no_rule") return "no source rule";
   if (state === "package_present") return "SBOM only";

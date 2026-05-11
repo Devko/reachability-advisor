@@ -78,14 +78,14 @@ Source reachability states:
 | `absent` | Reserved for explicit evidence that a package is not present in analyzed source or runtime scope. |
 | `unknown_due_to_no_rule` | Component appears in the SBOM, but no package-specific source rule exists; generic import evidence was also not observed. |
 | `package_present` | Component appears in the SBOM, but no stronger source evidence was found. |
-| `dependency_reachable` | CycloneDX dependency graph links the component to an imported parent dependency. This is indirect runtime evidence, not vulnerable API evidence. |
+| `dependency_reachable` | CycloneDX dependency graph links the component to an imported parent dependency, or a package-manager manifest declares the component. This is indirect dependency evidence, not import or vulnerable API evidence. |
 | `imported` | Source imports/requires/uses the package. |
 | `function_reachable` | Source imports the package and contains usage patterns associated with vulnerable APIs or high-risk library functions. |
 | `attacker_controlled` | The same function contains risky usage and input/entrypoint evidence, or a bounded static handler-to-sink call path links entrypoint code to the vulnerable sink. |
 
 The default analyzer builds one source index per artifact for Python, JavaScript/TypeScript, Java, and Go. Python functions are extracted with the standard-library `ast` module; other languages use conservative syntax patterns. The analyzer can promote same-function input/sink evidence and bounded handler-to-sink call paths to `attacker_controlled`. It does not model full interprocedural dataflow, dependency injection, async framework lifecycles, reflection, or framework-specific sanitizers.
 
-Rules are visible in `src/reachability_advisor/source.py`. Additional project-specific rules can be supplied with `--reachability-rules`. Use `export-semgrep-rules` to generate starter Semgrep YAML from built-in and custom rules. Use `--source-evidence-in` to import higher-confidence evidence from Reachability Advisor JSON, Semgrep JSON, SARIF, or govulncheck JSONL.
+Rules are visible in `src/reachability_advisor/source.py`. Additional project-specific rules can be supplied with `--reachability-rules`. Use `export-semgrep-rules` to generate starter Semgrep YAML from built-in and custom rules. Use `--source-evidence-in` to import higher-confidence evidence from Reachability Advisor JSON, Semgrep JSON including native `dataflow_trace`, CodeQL/SARIF data-flow paths, plain SARIF, or govulncheck JSONL.
 
 Built-in high-risk source rules currently cover common Java, Node, Python, and Go evidence:
 
@@ -94,9 +94,9 @@ Built-in high-risk source rules currently cover common Java, Node, Python, and G
 - Python/PyPI import and handler patterns, including requests, PyYAML, Jinja2, PyJWT, lxml, Django, FastAPI, Chainlit, and aiohttp;
 - Go import and sink evidence for common JWT/YAML packages plus generic import evidence.
 
-The JSON output includes both the machine state and a human label. The HTML report uses the labels `request-controlled path`, `reachable vulnerable API`, `reachable through dependency graph`, `import observed`, `SBOM only`, and `no source rule`.
+The JSON output includes both the machine state and a human label. The HTML report uses the labels `request-controlled path`, `reachable vulnerable API`, `dependency evidence`, `import observed`, `SBOM only`, and `no source rule`.
 
-`--source-coverage-out` writes source coverage metrics: files scanned/skipped, evidence states by artifact, external evidence records consumed, and the fraction of findings with dependency-graph, import, vulnerable API, or request-controlled evidence.
+`--source-coverage-out` writes source coverage metrics: source files and package-manager manifests scanned, skipped files, evidence states by artifact, external evidence records consumed, and the fraction of findings with dependency-graph, manifest, import, vulnerable API, or request-controlled evidence.
 
 ## Remediation grouping
 
@@ -119,6 +119,20 @@ Terraform evidence is derived from a local `terraform show -json` plan. Plan mod
 Helm and kubectl wrapper resources are classified as Kubernetes supporting
 resources, but they still emit `opaque_manifest_wrapper` visibility gaps because
 the rendered child manifests are where workload images, exposure, and RBAC live.
+
+## Rendered Kubernetes manifests
+
+`--kubernetes-manifest` accepts rendered YAML or JSON files, or directories that contain them. This input is for manifests after Helm, Kustomize, or another renderer has expanded templates. It is static and local; the scanner does not query a live cluster.
+
+The analyzer extracts:
+
+- workloads: Deployment, StatefulSet, DaemonSet, ReplicaSet, Pod, Job, and CronJob;
+- network entrypoints: Service and Ingress objects linked to workloads by selectors;
+- RBAC: Role, ClusterRole, RoleBinding, and ClusterRoleBinding objects linked to workload service accounts.
+
+`LoadBalancer`, `NodePort`, and public Ingress objects produce `public` exposure. `ExternalName` services produce `external` exposure. `ClusterIP` services produce `internal` exposure. Workloads without a Service or Ingress stay `private`. `--kubernetes-infer-lateral` can add an internal path from a public Kubernetes entrypoint to internal services; keep it disabled unless that lateral assumption matches the cluster trust model.
+
+Kubernetes RBAC uses the same context fields as Terraform IAM: `privilege`, `iam_impacts`, and `criticality`. `cluster-admin` maps to `admin_control`; secret reads map to `data_access`; workload mutation maps to `compute_control`; service, ingress, and network-policy mutation maps to `network_control`; role and binding mutation maps to `iam_escalation`.
 
 Match scoring:
 

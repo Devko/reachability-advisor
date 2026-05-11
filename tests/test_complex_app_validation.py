@@ -6,7 +6,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "run_complex_app_validation.py"
 
@@ -54,6 +53,45 @@ class ComplexAppValidationScriptTests(unittest.TestCase):
         self.assertEqual(statuses["min_sboms"], "failed")
         self.assertEqual(statuses["min_findings"], "passed")
         self.assertEqual(statuses["html_report"], "passed")
+
+    def test_advisor_summary_separates_finding_and_remediation_tier_counts(self) -> None:
+        module = _load_script()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            findings_path = root / "findings.json"
+            coverage_path = root / "terraform-coverage.json"
+            mapping_path = root / "mapping.json"
+            findings_path.write_text(
+                json.dumps(
+                    {
+                        "findings": [
+                            {"tier": "medium", "artifact": {"name": "checkout"}},
+                            {"tier": "medium", "artifact": {"name": "checkout"}},
+                            {"tier": "low", "artifact": {"name": "catalog"}},
+                        ],
+                        "remediations": [
+                            {"tier": "medium", "artifact": {"name": "checkout"}, "component": {"name": "request"}},
+                            {"tier": "low", "artifact": {"name": "catalog"}, "component": {"name": "lodash"}},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            coverage_path.write_text(json.dumps({"summary": {}}), encoding="utf-8")
+            mapping_path.write_text(json.dumps({"summary": {}, "warnings": []}), encoding="utf-8")
+
+            summary = module._advisor_summary(
+                {
+                    "findings": str(findings_path),
+                    "terraform_coverage": str(coverage_path),
+                    "mapping": str(mapping_path),
+                }
+            )
+
+        self.assertEqual(summary["finding_count"], 3)
+        self.assertEqual(summary["tier_counts"], {"low": 1, "medium": 2})
+        self.assertEqual(summary["remediation_count"], 2)
+        self.assertEqual(summary["remediation_tier_counts"], {"low": 1, "medium": 1})
 
     def test_kubernetes_manifest_generates_public_and_internal_context(self) -> None:
         module = _load_script()
