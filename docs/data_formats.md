@@ -307,6 +307,48 @@ Schema draft: `schemas/runtime-policy.schema.json`.
 }
 ```
 
+Generated findings and evidence graphs include `effective_exposure`. Terraform plan and rendered Kubernetes inputs generate this record during analysis. External context files may also provide it directly.
+
+```json
+{
+  "id": "effective-exposure:payments-api:abc123",
+  "artifact": "payments-api",
+  "provider": "aws",
+  "decision": "constrained",
+  "decision_basis": "network:constrained_by:auth_required; identity:constrained_by:scoped_resource",
+  "exposure": "public",
+  "entry": "internet",
+  "path_type": "public_load_balancer",
+  "confidence": "medium",
+  "evaluator": "aws.effective_exposure",
+  "network": {
+    "decision": "constrained",
+    "decision_basis": "constrained_by:auth_required",
+    "blockers": [{"kind": "auth_required", "effect": "constrains"}]
+  },
+  "identity": {
+    "decision": "constrained_allow",
+    "action": "secretsmanager:GetSecretValue",
+    "impact": "data_access",
+    "policy_layer": "identity_policy",
+    "decision_basis": "allowed",
+    "provider_decision_basis": "constrained_by:scoped_resource"
+  },
+  "edges": []
+}
+```
+
+Decision values:
+
+| Decision | Meaning |
+|---|---|
+| `reachable` | A provider-specific network path is linked and no blocker is visible. |
+| `constrained` | The path exists, but auth, WAF/firewall, scoped IAM, or conditions reduce confidence. |
+| `blocked` | The selected provider evidence contains a blocking condition for the path. |
+| `isolated` | No direct or lateral ingress path is visible for a private asset. |
+| `unknown` | The supplied evidence is not enough to decide the path. |
+| `reachable_without_effective_identity` | Network path is reachable, but effective IAM evidence is denied or absent for blast-radius scoring. |
+
 ## Terraform coverage JSON
 
 Generated with `--terraform-coverage-out`.
@@ -444,6 +486,76 @@ Generated with `--mapping-out`.
 
 Schema draft: `schemas/mapping-report.schema.json`. The coverage ratios are designed for CI gates: artifact deployment mapping, strong image/digest identity, source-root presence, and mapping warning count.
 
+## CI artifact manifest JSON
+
+Passed with `--artifact-manifest`. Use it when the build knows the image digest or registry reference but the SBOM does not preserve it.
+
+```json
+{
+  "artifacts": [
+    {
+      "name": "payments-api",
+      "sbom": "sboms/payments-api.cdx.json",
+      "image": "ghcr.io/example/payments-api:1.8.2",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "registry_ref": "ghcr.io/example/payments-api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "git_sha": "abc123",
+      "helm_values_image": "ghcr.io/example/payments-api:1.8.2",
+      "kustomize_image": "ghcr.io/example/payments-api:1.8.2",
+      "terraform_image": "ghcr.io/example/payments-api:1.8.2"
+    }
+  ],
+  "signature": {}
+}
+```
+
+`signature` is recorded as a marker only. Reachability Advisor does not cryptographically verify it.
+
+Schema draft: `schemas/artifact-manifest.schema.json`.
+
+## Readiness report JSON
+
+Generated with `--readiness-out` or `evidence-profile`.
+
+```json
+{
+  "schema_version": "1.0",
+  "status": "blocked",
+  "summary": {
+    "blockers": 1,
+    "warnings": 0,
+    "artifacts": 1,
+    "critical_external_evidence_coverage": 0.0,
+    "artifacts_missing_release_identity": 1,
+    "artifacts_missing_workload_match": 0,
+    "artifacts_missing_network_path": 0,
+    "artifacts_missing_identity_path": 0
+  },
+  "blockers": [
+    {
+      "kind": "critical_source_coverage",
+      "message": "critical external source evidence coverage is 0.0000; expected 1.0"
+    }
+  ],
+  "warnings": [],
+  "artifacts": [
+    {
+      "artifact": "payments-api",
+      "terraform_matched": true,
+      "strong_terraform_match": true,
+      "kubernetes_matched": false,
+      "artifact_identity_strength": "image_reference",
+      "missing": [],
+      "warnings": []
+    }
+  ]
+}
+```
+
+The report lists missing image digest or exact image reference, missing SBOM path, missing or weak deployment workload match, missing network path evidence, missing identity/effective-access evidence, low-confidence network or identity evidence, critical source coverage gaps, and unrendered Terraform or Kubernetes evidence.
+
+Schema draft: `schemas/readiness.schema.json`.
+
 ## SBOM plan JSON
 
 Generated with `sbom-plan --out-json`.
@@ -496,7 +608,9 @@ The main scan output is:
 
 `source_reachability.diagnostics[]` explains evidence gaps such as missing source roots, missing package-specific rules, unobserved imports, dependency-graph-only evidence, and unlinked attacker-input hints.
 
-`context.iam_capabilities[]` is the per-resource IAM view behind `privilege` and `iam_impacts`. Each capability records an action, impact class, access class, resource references when known, resource scope (`scoped`, `wildcard`, or `unknown`), IAM condition keys when present, provider, source resource, and evidence string. This is useful when a role is not admin but still grants critical rights such as secret reads, network mutation, workload mutation, or role passing.
+`context.iam_capabilities[]` is the per-resource IAM view behind `privilege` and `iam_impacts`. Each capability records an action, effect, policy layer, impact class, access class, resource references when known, resource scope (`scoped`, `wildcard`, or `unknown`), IAM condition keys when present, provider, source resource, and evidence string. This is useful when a role is not admin but still grants critical rights such as secret reads, network mutation, workload mutation, or role passing.
+
+`context.effective_access[]` records the workload identity/resource/action decision used by scoring. It includes `decision`, `decision_basis`, `policy_layer`, `confidence`, blockers, target resources, and the underlying Terraform evidence. Matching explicit denies mark allow records as `denied_by_explicit_deny`.
 
 Schema draft: `schemas/findings.schema.json`.
 

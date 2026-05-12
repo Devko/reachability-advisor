@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .effective_exposure import best_effective_exposure, evaluate_effective_exposure
 from .effective_graph import scoring_path_summary
 from .iam_capabilities import (
     CRITICAL_CAPABILITY_IMPACTS,
@@ -158,7 +159,11 @@ def _context_impact(context: ContextEvidence, policy: ScorePolicy) -> tuple[floa
     if criticality_points:
         candidates.append((criticality_points, f"criticality {criticality}"))
     normalized_capabilities = dedupe_iam_capabilities(context.iam_capabilities)
-    capability_impacts = {_normalized(str(capability.get("impact") or ""), "") for capability in normalized_capabilities}
+    capability_impacts = {
+        _normalized(str(capability.get("impact") or ""), "")
+        for capability in normalized_capabilities
+        if str(capability.get("effect") or "allow").lower() == "allow"
+    }
     for impact in context.iam_impacts:
         impact_name = _normalized(impact, "")
         if impact_name in capability_impacts:
@@ -170,6 +175,8 @@ def _context_impact(context: ContextEvidence, policy: ScorePolicy) -> tuple[floa
         if impact_points:
             candidates.append((impact_points, f"IAM impact {impact_name}"))
     for capability in normalized_capabilities:
+        if str(capability.get("effect") or "allow").lower() != "allow":
+            continue
         impact_name = _normalized(str(capability.get("impact") or ""), "")
         impact_points = policy.iam_impact_points.get(impact_name, 0.0)
         if impact_points:
@@ -189,7 +196,11 @@ def _has_critical_context(context: ContextEvidence) -> bool:
     privilege = _normalized(context.privilege)
     criticality = _normalized(context.criticality)
     iam_impacts = {_normalized(impact, "") for impact in context.iam_impacts}
-    capability_impacts = {_normalized(str(capability.get("impact") or ""), "") for capability in dedupe_iam_capabilities(context.iam_capabilities)}
+    capability_impacts = {
+        _normalized(str(capability.get("impact") or ""), "")
+        for capability in dedupe_iam_capabilities(context.iam_capabilities)
+        if str(capability.get("effect") or "allow").lower() == "allow"
+    }
     return (
         privilege in {"admin", "sensitive"}
         or criticality == "high"
@@ -218,12 +229,60 @@ def _private_no_ingress_cap_applies(vulnerability: VulnerabilityRecord, source: 
     )
 
 
+def _network_blocker_effects(context: ContextEvidence) -> set[str]:
+    effects: set[str] = set()
+    for record in _effective_exposure_records(context):
+        network = record.get("network") if isinstance(record, dict) else None
+        network_record = network if isinstance(network, dict) else record
+        decision = _normalized(str(network_record.get("decision") or ""), "")
+        if decision == "blocked":
+            effects.add("blocks")
+        elif decision == "constrained":
+            effects.add("constrains")
+        elif decision == "unknown":
+            effects.add("unknown")
+        for blocker in network_record.get("blockers", []) if isinstance(network_record.get("blockers"), list) else []:
+            if isinstance(blocker, dict):
+                effect = _normalized(str(blocker.get("effect") or ""), "")
+                effects.add(effect if effect in {"blocks", "constrains"} else "unknown")
+    for path in context.network_paths:
+        blockers = path.get("blockers")
+        if not isinstance(blockers, list):
+            continue
+        for blocker in blockers:
+            if not isinstance(blocker, dict):
+                continue
+            effect = _normalized(str(blocker.get("effect") or ""), "")
+            effects.add(effect if effect in {"blocks", "constrains"} else "unknown")
+    return effects
+
+
+def _effective_exposure_records(context: ContextEvidence) -> list[dict[str, Any]]:
+    if context.effective_exposure:
+        return [dict(item) for item in context.effective_exposure if isinstance(item, dict)]
+    return evaluate_effective_exposure("unknown", context)
+
+
+def _low_confidence_network_paths(context: ContextEvidence) -> bool:
+    best = best_effective_exposure(context)
+    network = best.get("network") if isinstance(best, dict) else None
+    if isinstance(network, dict) and str(network.get("confidence") or "").lower() == "low":
+        return True
+    return bool(context.network_paths) and all(_normalized(str(path.get("confidence") or ""), "") == "low" for path in context.network_paths)
+
+
+def _low_confidence_effective_access(context: ContextEvidence) -> bool:
+    records = [record for record in context.effective_access if str(record.get("effect") or "allow").lower() == "allow"]
+    return bool(records) and all(_normalized(str(record.get("confidence") or ""), "") == "low" for record in records)
+
+
 def _score_caps(vulnerability: VulnerabilityRecord, source: SourceEvidence, context: ContextEvidence, policy: ScorePolicy) -> list[tuple[float, str]]:
     caps: list[tuple[float, str]] = []
     below_high = policy.tier_thresholds[Tier.HIGH] - 1.0
     below_urgent = policy.tier_thresholds[Tier.URGENT] - 1.0
     exposure = _normalized(context.exposure)
     exploit_signal = _high_exploit_signal(vulnerability)
+    network_effects = _network_blocker_effects(context)
 
     if source.reachability in WEAK_SOURCE_STATES:
         if exploit_signal:
@@ -243,6 +302,14 @@ def _score_caps(vulnerability: VulnerabilityRecord, source: SourceEvidence, cont
 
     if _private_no_ingress_cap_applies(vulnerability, source, context):
         caps.append((below_high, "private/no-ingress finding without exploit signal or critical context is capped below high"))
+    if "blocks" in network_effects and not exploit_signal:
+        caps.append((below_high, "confirmed network blocker keeps the finding below high until the ingress path is proven reachable"))
+    elif network_effects & {"constrains", "unknown"} and not exploit_signal:
+        caps.append((below_urgent, "network blocker uncertainty keeps the finding below urgent until the effective path is proven reachable"))
+    if _low_confidence_network_paths(context) and not exploit_signal:
+        caps.append((below_urgent, "low-confidence network path keeps the finding below urgent until deployment evidence is stronger"))
+    if _low_confidence_effective_access(context) and not exploit_signal:
+        caps.append((below_urgent, "low-confidence IAM effective access keeps the finding below urgent until permission evidence is stronger"))
     if not _urgent_gate_satisfied(vulnerability, source, context):
         caps.append((below_urgent, "urgent requires known exploitation, high EPSS, request-controlled public/external code, or critical reachable context"))
     return caps
@@ -275,6 +342,12 @@ def _gate_name(reason: str) -> str:
         return "import_only_evidence"
     if "private/no-ingress" in reason:
         return "private_no_ingress"
+    if "network blocker" in reason:
+        return "network_blocker"
+    if "low-confidence network" in reason:
+        return "low_confidence_network"
+    if "low-confidence IAM" in reason:
+        return "low_confidence_iam"
     if "urgent requires" in reason:
         return "urgent_gate"
     return "priority_cap"
@@ -328,15 +401,30 @@ def score_finding(
         score += scope_adjust
         dimensions.append(_score_dimension("dependency_scope", component.scope, scope_adjust, "dependency scope adjustment"))
         rationale.append(f"dependency scope {component.scope} adjusts score by {scope_adjust:.1f} points")
-    for label, table, value in (
-        ("exposure", policy.exposure_points, context.exposure),
-        ("environment", policy.environment_points, context.environment),
-    ):
-        points = table.get((value or "unknown").lower(), 0.0)
-        if points:
-            score += points
-            dimensions.append(_score_dimension(label, value, points, f"{label} context"))
-            rationale.append(f"{label} {value} contributes {points:.1f} points")
+    exposure_value = context.exposure or "unknown"
+    exposure_points = policy.exposure_points.get(exposure_value.lower(), 0.0)
+    network_effects = _network_blocker_effects(context)
+    if exposure_points:
+        if "blocks" in network_effects:
+            dimensions.append(_score_dimension("exposure", exposure_value, 0.0, "exposure path blocked by network evidence"))
+            rationale.append(f"exposure {exposure_value} contributes 0.0 points because a network blocker is present")
+        else:
+            adjusted_exposure_points = exposure_points
+            exposure_reason = "exposure context"
+            if "constrains" in network_effects:
+                adjusted_exposure_points = exposure_points * 0.7
+                exposure_reason = "exposure context constrained by auth/WAF/firewall evidence"
+            elif "unknown" in network_effects:
+                adjusted_exposure_points = exposure_points * 0.85
+                exposure_reason = "exposure context has unresolved network blocker semantics"
+            score += adjusted_exposure_points
+            dimensions.append(_score_dimension("exposure", exposure_value, adjusted_exposure_points, exposure_reason))
+            rationale.append(f"exposure {exposure_value} contributes {adjusted_exposure_points:.1f} points")
+    environment_points = policy.environment_points.get((context.environment or "unknown").lower(), 0.0)
+    if environment_points:
+        score += environment_points
+        dimensions.append(_score_dimension("environment", context.environment, environment_points, "environment context"))
+        rationale.append(f"environment {context.environment} contributes {environment_points:.1f} points")
     context_points, context_reason = _context_impact(context, policy)
     if context_points:
         score += context_points

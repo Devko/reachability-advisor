@@ -5,9 +5,9 @@ and machine-readable reports:
 
 asset -> network path -> identity -> reachable code/package -> vulnerability -> score
 
-The legacy evidence graph keeps network, IAM, and code edges as separate views.
-The effective graph is the normalized path contract that ties those signals
-together and records provenance on every edge.
+The evidence graph still exposes separate compatibility views for network,
+IAM, and code edges. The effective graph is the normalized path contract that
+ties those signals together and records provenance on every edge.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import json
 import re
 from typing import Any
 
+from .effective_exposure import evaluate_effective_exposure
 from .iam_capabilities import capability_risk_multiplier, dedupe_iam_capabilities
 from .models import Finding, Reachability, reachability_label
 from .numeric import safe_float
@@ -190,7 +191,8 @@ def _asset_node(finding: Finding) -> dict[str, Any]:
 
 
 def _network_node(finding: Finding) -> dict[str, Any]:
-    record = _primary_network_record(finding)
+    exposure_record = _primary_effective_exposure_record(finding)
+    record = _objects_get(exposure_record, "network") or _primary_network_record(finding)
     exposure = str(record.get("exposure") or finding.context.exposure or "unknown").lower()
     source = str(record.get("source") or finding.context.source or "context")
     evidence_layer = _deployment_layer(source)
@@ -212,12 +214,37 @@ def _network_node(finding: Finding) -> dict[str, Any]:
         evidence_layer=evidence_layer,
         provider=str(record.get("provider") or _provider_from_source(source)),
         confidence=_confidence_value(record.get("confidence"), finding.context.confidence.value),
+        effective_decision=str(exposure_record.get("decision") or record.get("decision") or "unknown"),
         blockers=_objects(record.get("blockers")),
         unknowns=_dedupe_strings(unknowns),
     )
 
 
 def _identity_node(finding: Finding) -> dict[str, Any]:
+    exposure_record = _primary_effective_exposure_record(finding)
+    identity = _objects_get(exposure_record, "identity")
+    if identity:
+        source = str(identity.get("source") or finding.context.source or "context")
+        return _node(
+            id=f"identity:{finding.artifact.name}:{_stable_token(jsonish(identity))}",
+            kind="identity",
+            label=str(identity.get("identity") or identity.get("action") or identity.get("impact") or identity.get("decision") or "effective identity"),
+            privilege=finding.context.privilege,
+            action=identity.get("action"),
+            impact=identity.get("impact"),
+            resource=identity.get("resource"),
+            access=identity.get("access"),
+            decision=identity.get("decision", "unknown"),
+            decision_basis=identity.get("decision_basis"),
+            policy_layer=identity.get("policy_layer"),
+            evidence_source=str(identity.get("source") or identity.get("evidence") or "effective exposure engine"),
+            provider=str(identity.get("provider") or _provider_from_source(source)),
+            confidence=_confidence_value(identity.get("confidence"), finding.context.confidence.value),
+            blockers=_objects(identity.get("blockers")),
+            unknowns=_strings(identity.get("unknowns")),
+            origin_layer=_deployment_layer(source),
+        )
+
     access = _strongest_effective_access(finding)
     if access:
         source = str(access.get("source") or finding.context.source or "context")
@@ -391,6 +418,15 @@ def _primary_network_record(finding: Finding) -> dict[str, Any]:
     }
 
 
+def _primary_effective_exposure_record(finding: Finding) -> dict[str, Any]:
+    records = [dict(item) for item in finding.context.effective_exposure if isinstance(item, dict)]
+    if not records:
+        records = evaluate_effective_exposure(finding.artifact.name, finding.context)
+    if not records:
+        return {}
+    return max(records, key=lambda item: (_decision_rank(str(item.get("decision") or "")), _confidence_rank(str(item.get("confidence") or ""))))
+
+
 def _network_record_from_evidence(finding: Finding, evidence: str) -> dict[str, Any] | None:
     match = NETWORK_PATH_RE.match(evidence)
     if match:
@@ -449,6 +485,10 @@ def _impact_rank(impact: str) -> int:
 
 def _confidence_rank(confidence: str) -> int:
     return {"high": 3, "medium": 2, "low": 1}.get(confidence.lower(), 0)
+
+
+def _decision_rank(decision: str) -> int:
+    return {"blocked": 0, "isolated": 1, "unknown": 2, "reachable_without_effective_identity": 3, "constrained": 4, "reachable": 5}.get(decision.lower(), 2)
 
 
 def _confidence_value(value: Any, default: str = "low") -> str:
@@ -569,6 +609,11 @@ def _objects(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [{str(key): item_value for key, item_value in item.items()} for item in value if isinstance(item, dict)]
+
+
+def _objects_get(value: dict[str, Any], key: str) -> dict[str, Any]:
+    item = value.get(key)
+    return {str(item_key): item_value for item_key, item_value in item.items()} if isinstance(item, dict) else {}
 
 
 def _strings(value: Any) -> list[str]:

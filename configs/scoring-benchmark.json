@@ -27,6 +27,61 @@
       "max_score": 84
     },
     {
+      "id": "public-request-controlled-auth-constrained",
+      "description": "Auth or WAF constraints reduce public exposure weight and keep non-exploited findings below urgent until the path is proven attacker reachable.",
+      "artifact": "edge-api",
+      "component": {"name": "router", "version": "1.0.0", "scope": "runtime"},
+      "vulnerability": {"id": "GHSA-router", "package_name": "router", "cvss": 9.8},
+      "source": {"reachability": "attacker_controlled", "confidence": "high"},
+      "context": {
+        "exposure": "public",
+        "environment": "prod",
+        "privilege": "sensitive",
+        "network_paths": [{"confidence": "medium", "blockers": [{"kind": "auth_required", "effect": "constrains"}]}],
+        "confidence": "medium"
+      },
+      "expected_tier": "high",
+      "min_score": 80,
+      "max_score": 84
+    },
+    {
+      "id": "public-path-blocked-by-private-endpoint",
+      "description": "A confirmed network blocker prevents a public signal from being scored as confirmed exposure.",
+      "artifact": "private-api",
+      "component": {"name": "parser", "version": "1.0.0", "scope": "runtime"},
+      "vulnerability": {"id": "GHSA-parser", "package_name": "parser", "cvss": 9.8},
+      "source": {"reachability": "function_reachable", "confidence": "high"},
+      "context": {
+        "exposure": "public",
+        "environment": "prod",
+        "privilege": "sensitive",
+        "network_paths": [{"confidence": "medium", "blockers": [{"kind": "public_network_disabled", "effect": "blocks"}]}],
+        "confidence": "medium"
+      },
+      "expected_tier": "medium",
+      "min_score": 60,
+      "max_score": 64
+    },
+    {
+      "id": "low-confidence-iam-critical-context",
+      "description": "Low-confidence IAM effective access contributes uncertainty and should not make a non-exploited finding urgent.",
+      "artifact": "ops-api",
+      "component": {"name": "serializer", "version": "1.0.0", "scope": "runtime"},
+      "vulnerability": {"id": "GHSA-serializer", "package_name": "serializer", "cvss": 9.8},
+      "source": {"reachability": "function_reachable", "confidence": "high"},
+      "context": {
+        "exposure": "external",
+        "environment": "prod",
+        "privilege": "none",
+        "iam_impacts": ["data_access"],
+        "effective_access": [{"effect": "allow", "impact": "data_access", "confidence": "low"}],
+        "confidence": "medium"
+      },
+      "expected_tier": "high",
+      "min_score": 75,
+      "max_score": 84
+    },
+    {
       "id": "private-function-reachable-no-blast-radius",
       "description": "Private function-reachable finding without exploit signal or critical context should stay below high.",
       "artifact": "batch-worker",

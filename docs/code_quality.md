@@ -2,7 +2,7 @@
 
 ## Current gates
 
-- Unit and workflow tests: 420.
+- Unit and workflow tests: 469.
 - Coverage threshold: 93%.
 - Current measured coverage: passes the 93% line/branch-aware coverage gate.
 - Test runner: `scripts/run_tests.py`.
@@ -11,7 +11,7 @@
 - Static type configuration: strict `mypy` across `src`.
 - Sample workflow: `make sample`.
 - Terraform fixture workflow: `make fixtures`.
-- Release validation: `make release-check` currently covers 49 import/export and release-contract checks.
+- Release validation: `make release-check` currently covers 51 import/export and release-contract checks.
 - Complex real-world app validation: `make external-complex` (AWS Retail Store and Google Online Boutique).
 - Package build: `make package` (`python -m build --no-isolation`).
 - CI matrix: Python 3.10, 3.11, 3.12.
@@ -65,7 +65,7 @@ python -m build --no-isolation
 - Dataclass model for reviewability.
 - Explicit parser errors for malformed inputs.
 - Output renderers separated from scoring.
-- Thin IDE wrapper that delegates logic to the CLI.
+- VS Code extension keeps analysis in the CLI and handles only editor integration.
 - Multi-cloud Terraform coverage is manifest-driven and auditable.
 - SBOM/source/Terraform mapping is exposed through `--mapping-out`.
 - Source analysis coverage is exposed through `--source-coverage-out`.

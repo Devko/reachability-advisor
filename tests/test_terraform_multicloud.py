@@ -300,6 +300,28 @@ class TerraformPrivilegeTests(unittest.TestCase):
         self.assertEqual(secret.to_json()["effective_risk"], "constrained_critical")
         self.assertLess(secret.to_json()["risk_multiplier"], 1.0)
 
+    def test_policy_capabilities_preserve_explicit_deny(self) -> None:
+        r = self._tf_resource(
+            "aws_iam_role_policy",
+            {
+                "policy": {
+                    "Statement": [
+                        {
+                            "Effect": "Deny",
+                            "Action": "secretsmanager:GetSecretValue",
+                            "Resource": "*",
+                        }
+                    ]
+                }
+            },
+        )
+
+        grant = iam_grant_for_resource(r)
+
+        self.assertEqual(grant.privilege, "unknown")
+        self.assertEqual(grant.capabilities[0].effect, "deny")
+        self.assertEqual(grant.capabilities[0].impact, "data_access")
+
     def test_aws_role_policy_privilege(self) -> None:
         r = self._tf_resource("aws_iam_role_policy", {"policy": json.dumps({"Statement": {"Effect": "Allow", "Action": "*"}})})
         self.assertEqual(privilege_for_resource(r), "admin")
@@ -353,6 +375,39 @@ class TerraformAnalysisTests(unittest.TestCase):
         self.assertEqual(analysis.coverage["summary"]["artifact_match_coverage"], 1.0)
         self.assertGreater(analysis.coverage["summary"]["network_paths_observed"], 0)
         self.assertGreater(analysis.coverage["summary"]["effective_access_records"], 0)
+
+    def test_effective_access_applies_explicit_deny_precedence(self) -> None:
+        artifacts = [Artifact(name="app", reference="repo/app:1")]
+        data = plan(
+            [
+                resource("aws_lambda_function.app", "aws_lambda_function", {"function_name": "app", "image_uri": "repo/app:1", "role": "app-role"}),
+                resource(
+                    "aws_iam_role_policy.app",
+                    "aws_iam_role_policy",
+                    {
+                        "role": "app-role",
+                        "policy": {
+                            "Statement": [
+                                {"Effect": "Allow", "Action": "secretsmanager:GetSecretValue", "Resource": "*"},
+                                {"Effect": "Deny", "Action": "secretsmanager:GetSecretValue", "Resource": "*"},
+                            ]
+                        },
+                    },
+                ),
+            ]
+        )
+
+        analysis = TerraformAnalyzer(data, artifacts).analyze()
+        records = analysis.contexts["app"].effective_access
+        allow = next(record for record in records if record["effect"] == "allow")
+        deny = next(record for record in records if record["effect"] == "deny")
+
+        self.assertEqual(allow["decision"], "denied_by_explicit_deny")
+        self.assertEqual(allow["decision_basis"], "explicit_deny_precedence")
+        self.assertEqual(allow["policy_layer"], "identity_policy")
+        self.assertEqual(allow["confidence"], "high")
+        self.assertTrue(any(blocker["kind"] == "explicit_deny_precedence" for blocker in allow["blockers"]))
+        self.assertEqual(deny["decision"], "denied")
 
     def test_unsupported_resources_are_reported_as_visibility_gaps(self) -> None:
         artifacts = [Artifact(name="app", reference="ghcr.io/acme/app:1")]
@@ -703,6 +758,62 @@ class TerraformBranchCoverageTests(unittest.TestCase):
         self.assertEqual(context.privilege, "sensitive")
         self.assertEqual(context.criticality, "high")
         self.assertTrue(any("aws_iam_policy.secret" in item and "targets aws_secretsmanager_secret.db" in item for item in context.evidence))
+
+    def test_effective_access_graph_records_deny_decisions_without_raising_privilege(self) -> None:
+        data = plan([
+            resource("aws_iam_role.app", "aws_iam_role", {"name": "app-role"}),
+            resource(
+                "aws_iam_role_policy.deny_secret",
+                "aws_iam_role_policy",
+                {
+                    "role": "app-role",
+                    "policy": {
+                        "Statement": [
+                            {
+                                "Effect": "Deny",
+                                "Action": "secretsmanager:GetSecretValue",
+                                "Resource": "*",
+                            }
+                        ]
+                    },
+                },
+            ),
+            resource("aws_instance.app", "aws_instance", {"ami": "ami-1", "iam_instance_profile": "app-role"}),
+        ])
+
+        analysis = TerraformAnalyzer(data, [Artifact(name="app")]).analyze()
+        context = analysis.contexts["app"]
+
+        self.assertEqual(context.privilege, "unknown")
+        self.assertTrue(any(item["effect"] == "deny" for item in context.iam_capabilities))
+        denied = next(item for item in context.effective_access if item["effect"] == "deny")
+        self.assertEqual(denied["decision"], "denied")
+        self.assertTrue(any(blocker["kind"] == "explicit_deny" for blocker in denied["blockers"]))
+
+    def test_inferred_public_workload_path_records_auth_and_waf_blockers(self) -> None:
+        data = plan([
+            resource(
+                "azurerm_linux_web_app.app",
+                "azurerm_linux_web_app",
+                {
+                    "name": "app",
+                    "site_config": [{"linux_fx_version": "DOCKER|repo/app:1"}],
+                    "auth_settings": [{"enabled": True}],
+                    "web_application_firewall_policy_link_id": "/subscriptions/1/resourceGroups/rg/providers/Microsoft.Network/ApplicationGatewayWebApplicationFirewallPolicies/waf",
+                },
+            )
+        ])
+
+        analysis = TerraformAnalyzer(data, [Artifact(name="app", reference="repo/app:1")]).analyze()
+        path = analysis.contexts["app"].network_paths[0]
+        blocker_kinds = {blocker["kind"] for blocker in path["blockers"]}
+
+        self.assertEqual(path["exposure"], "public")
+        self.assertEqual(path["path_type"], "direct_public")
+        self.assertEqual(path["confidence"], "low")
+        self.assertIn("auth_required", blocker_kinds)
+        self.assertIn("waf_or_firewall_policy", blocker_kinds)
+        self.assertTrue(path["unknowns"])
 
     def test_limited_network_control_identity_creates_internal_pivot(self) -> None:
         data = plan([

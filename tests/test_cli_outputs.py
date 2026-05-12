@@ -248,6 +248,173 @@ class CliTests(unittest.TestCase):
             coverage = json.loads((out / "source-coverage.json").read_text(encoding="utf-8"))
             self.assertEqual(coverage["production_readiness"]["status"], "ready")
 
+    def test_production_profile_rejects_external_evidence_that_misses_critical_package(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            source = out / "src"
+            source.mkdir()
+            sbom = out / "bom.json"
+            vulns = out / "vulns.json"
+            evidence = out / "source-evidence.json"
+            plan = out / "tfplan.json"
+            coverage = out / "source-coverage.json"
+            sbom.write_text(
+                json.dumps(
+                    {
+                        "bomFormat": "CycloneDX",
+                        "metadata": {"component": {"name": "app", "properties": [{"name": "oci:image:ref", "value": "repo/app:1"}]}},
+                        "components": [{"name": "requests", "version": "2.19.0", "purl": "pkg:pypi/requests@2.19.0"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            vulns.write_text(json.dumps({"vulnerabilities": [{"id": "GHSA-requests", "package": {"name": "requests"}, "severity": "critical", "cvss": 9.8}]}), encoding="utf-8")
+            evidence.write_text(
+                json.dumps(
+                    {
+                        "evidence": [
+                            {
+                                "component": "unrelated",
+                                "vulnerability": "GHSA-unrelated",
+                                "state": "function_reachable",
+                                "confidence": "high",
+                                "tool": "semgrep",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (source / "api.py").write_text(
+                "from fastapi import FastAPI, Request\nimport requests\napp = FastAPI()\n@app.get('/x')\ndef x(request: Request):\n    return requests.get(request.query_params['url']).text\n",
+                encoding="utf-8",
+            )
+            plan.write_text(
+                json.dumps(
+                    {
+                        "planned_values": {
+                            "root_module": {
+                                "resources": [
+                                    {
+                                        "address": "aws_lambda_function.app",
+                                        "type": "aws_lambda_function",
+                                        "name": "app",
+                                        "values": {"function_name": "app", "image_uri": "repo/app:1"},
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            code = main([
+                "scan",
+                "--sbom", str(sbom),
+                "--vulns", str(vulns),
+                "--source-root", f"app={source}",
+                "--source-evidence-in", str(evidence),
+                "--terraform-plan", str(plan),
+                "--analysis-profile", "production",
+                "--source-coverage-out", str(coverage),
+                "--no-table",
+            ])
+
+            self.assertEqual(code, 10)
+            report = json.loads(coverage.read_text(encoding="utf-8"))
+            self.assertEqual(report["summary"]["external_evidence_records"], 1)
+            self.assertEqual(report["summary"]["critical_external_evidence_coverage"], 0.0)
+            self.assertEqual(report["summary"]["critical_findings_missing_external_evidence"], 1)
+
+    def test_production_profile_rejects_critical_dependency_only_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            source = out / "src"
+            source.mkdir()
+            sbom = out / "bom.json"
+            vulns = out / "vulns.json"
+            evidence = out / "source-evidence.json"
+            plan = out / "tfplan.json"
+            coverage = out / "source-coverage.json"
+            sbom.write_text(
+                json.dumps(
+                    {
+                        "bomFormat": "CycloneDX",
+                        "metadata": {"component": {"name": "app", "properties": [{"name": "oci:image:ref", "value": "repo/app:1"}]}},
+                        "components": [{"name": "critical-lib", "version": "1.0.0", "purl": "pkg:npm/critical-lib@1.0.0"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            vulns.write_text(
+                json.dumps(
+                    {
+                        "vulnerabilities": [
+                            {
+                                "id": "GHSA-critical-lib",
+                                "package": {"name": "critical-lib"},
+                                "severity": "critical",
+                                "cvss": 9.8,
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            evidence.write_text(
+                json.dumps(
+                    {
+                        "evidence": [
+                            {
+                                "artifact": "app",
+                                "component": "critical-lib",
+                                "vulnerability": "GHSA-critical-lib",
+                                "state": "dependency_reachable",
+                                "confidence": "medium",
+                                "tool": "semgrep",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            plan.write_text(
+                json.dumps(
+                    {
+                        "planned_values": {
+                            "root_module": {
+                                "resources": [
+                                    {
+                                        "address": "aws_lambda_function.app",
+                                        "type": "aws_lambda_function",
+                                        "name": "app",
+                                        "values": {"function_name": "app", "image_uri": "repo/app:1"},
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            code = main([
+                "scan",
+                "--sbom", str(sbom),
+                "--vulns", str(vulns),
+                "--source-root", f"app={source}",
+                "--source-evidence-in", str(evidence),
+                "--terraform-plan", str(plan),
+                "--analysis-profile", "production",
+                "--source-coverage-out", str(coverage),
+                "--no-table",
+            ])
+
+            self.assertEqual(code, 10)
+            report = json.loads(coverage.read_text(encoding="utf-8"))
+            self.assertEqual(report["summary"]["critical_findings_with_dependency_only_source"], 1)
+
     def test_scan_accepts_grype_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)

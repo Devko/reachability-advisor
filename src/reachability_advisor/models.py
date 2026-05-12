@@ -170,6 +170,7 @@ class ContextEvidence:
     iam_impacts: list[str] = field(default_factory=list)
     iam_capabilities: list[dict[str, Any]] = field(default_factory=list)
     effective_access: list[dict[str, Any]] = field(default_factory=list)
+    effective_exposure: list[dict[str, Any]] = field(default_factory=list)
     network_paths: list[dict[str, Any]] = field(default_factory=list)
     owner: str | None = None
     source: str = "none"
@@ -243,6 +244,7 @@ class Finding:
                 "iam_impacts": self.context.iam_impacts,
                 "iam_capabilities": self.context.iam_capabilities,
                 "effective_access": self.context.effective_access,
+                "effective_exposure": self.context.effective_exposure,
                 "network_paths": self.context.network_paths,
                 "owner": self.context.owner,
                 "source": self.context.source,

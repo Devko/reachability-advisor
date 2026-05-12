@@ -24,6 +24,7 @@ def validate_paths(
     policy: str | None = None,
     reachability_rules: str | None = None,
     source_evidence: list[str] | None = None,
+    artifact_manifests: list[str] | None = None,
 ) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     for path in sboms:
@@ -48,6 +49,8 @@ def validate_paths(
         _validate_file(reachability_rules, "reachability-rules", issues)
     for path in source_evidence or []:
         _validate_file(path, "source-evidence", issues)
+    for path in artifact_manifests or []:
+        _validate_file(path, "artifact-manifest", issues)
     if terraform_source:
         source_path = Path(terraform_source)
         if not source_path.exists():

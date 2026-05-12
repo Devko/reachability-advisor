@@ -30,6 +30,8 @@ def _context_from_mapping(raw: dict[str, Any], source: str) -> ContextEvidence:
     iam_capabilities = dedupe_iam_capabilities([dict(item) for item in raw_capabilities if isinstance(item, dict)]) if isinstance(raw_capabilities, list) else []
     raw_effective_access = raw.get("effective_access")
     effective_access = [dict(item) for item in raw_effective_access if isinstance(item, dict)] if isinstance(raw_effective_access, list) else []
+    raw_effective_exposure = raw.get("effective_exposure")
+    effective_exposure = [dict(item) for item in raw_effective_exposure if isinstance(item, dict)] if isinstance(raw_effective_exposure, list) else []
     raw_network_paths = raw.get("network_paths")
     network_paths = [dict(item) for item in raw_network_paths if isinstance(item, dict)] if isinstance(raw_network_paths, list) else []
     confidence = str(raw.get("confidence") or "medium").lower()
@@ -43,6 +45,7 @@ def _context_from_mapping(raw: dict[str, Any], source: str) -> ContextEvidence:
         iam_impacts=[str(item).lower() for item in raw.get("iam_impacts", [])] if isinstance(raw.get("iam_impacts"), list) else [],
         iam_capabilities=iam_capabilities,
         effective_access=effective_access,
+        effective_exposure=effective_exposure,
         network_paths=network_paths,
         owner=str(raw.get("owner")) if raw.get("owner") else None,
         source=source,

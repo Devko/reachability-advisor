@@ -11,7 +11,10 @@
   "categories": ["Linters", "Other"],
   "activationEvents": [
     "onCommand:reachabilityAdvisor.scanWorkspace",
-    "onCommand:reachabilityAdvisor.explainFinding"
+    "onCommand:reachabilityAdvisor.explainFinding",
+    "onCommand:reachabilityAdvisor.generateSbomPlan",
+    "onCommand:reachabilityAdvisor.generateSourceEvidencePlan",
+    "onCommand:reachabilityAdvisor.validateProfile"
   ],
   "main": "./extension.js",
   "contributes": {
@@ -23,6 +26,18 @@
       {
         "command": "reachabilityAdvisor.explainFinding",
         "title": "Reachability Advisor: Explain Finding"
+      },
+      {
+        "command": "reachabilityAdvisor.generateSbomPlan",
+        "title": "Reachability Advisor: Generate SBOM Plan"
+      },
+      {
+        "command": "reachabilityAdvisor.generateSourceEvidencePlan",
+        "title": "Reachability Advisor: Generate Source Evidence Plan"
+      },
+      {
+        "command": "reachabilityAdvisor.validateProfile",
+        "title": "Reachability Advisor: Validate Profile"
       }
     ],
     "configuration": {
@@ -64,6 +79,12 @@
           "default": "advisory",
           "description": "Scan profile. Production expects external source evidence and rendered deployment evidence."
         },
+        "reachabilityAdvisor.profilePreset": {
+          "type": "string",
+          "enum": ["", "advisory", "release-gate"],
+          "default": "",
+          "description": "User-facing profile preset. release-gate maps to analysisProfile=production and requires strong source evidence for critical findings."
+        },
         "reachabilityAdvisor.sourceEvidence": {
           "type": ["array", "string"],
           "default": [],
@@ -83,6 +104,11 @@
           "type": ["array", "string"],
           "default": [],
           "description": "Rendered Kubernetes YAML/JSON manifest paths or directories."
+        },
+        "reachabilityAdvisor.artifactManifest": {
+          "type": ["array", "string"],
+          "default": [],
+          "description": "CI artifact identity manifest paths. Use this to pass built image digests, registry refs, Git SHA, and SBOM paths."
         },
         "reachabilityAdvisor.baseline": {
           "type": "string",

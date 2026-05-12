@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .artifacts import ArtifactMatch, artifact_match_evidence
+from .effective_exposure import evaluate_effective_exposure
 from .iam_capabilities import dedupe_iam_capabilities
 from .models import Artifact, Confidence, ContextEvidence
 from .terraform import max_confidence, max_criticality, max_exposure, max_privilege
@@ -377,7 +378,7 @@ def _contexts_from_resources(
             evidence.extend(grant.evidence for grant in grants if grant.evidence)
         criticality = _network_iam_criticality(exposure, privilege, impacts)
         confidence = Confidence.HIGH if match.match.score >= 72 and exposures else Confidence.MEDIUM
-        contexts[artifact.name] = ContextEvidence(
+        context = ContextEvidence(
             environment="unknown",
             exposure=exposure,
             privilege=privilege,
@@ -388,6 +389,8 @@ def _contexts_from_resources(
             confidence=confidence,
             evidence=evidence,
         )
+        context.effective_exposure = evaluate_effective_exposure(artifact.name, context)
+        contexts[artifact.name] = context
     return contexts
 
 

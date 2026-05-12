@@ -9,6 +9,7 @@ CycloneDX SBOMs
   + vulnerability intelligence (Grype JSON or normalized local JSON)
   + source roots
   + Terraform plan JSON
+  + CI artifact manifest, when SBOM metadata lacks image identity
   + context JSON overrides, when needed
   + custom source rules, when needed
   -> SBOM artifact identity
@@ -73,6 +74,7 @@ For each SBOM, the loader builds artifact candidates from:
 - metadata properties such as `container:image`, `oci:image:ref`, `artifact:reference`, and `reachability:artifact_ref`;
 - external references such as `distribution`, `container-image`, and `vcs`;
 - CI, Dockerfile, Helm, Kustomize, and Terraform-module output hints when they are preserved as SBOM properties such as `github:workflow:image`, `dockerfile:image`, `helm:values:image`, `kustomize:image`, or `terraform:module_output:image`;
+- CI artifact manifest entries supplied with `--artifact-manifest`, including image references, digests, registry refs, Git SHA, Helm values image, Kustomize image, Terraform image output, and SBOM path;
 - scan-time aliases from `--artifact-alias`.
 
 All candidates appear in `--mapping-out` with their source and strength. Strong candidates are image digests, exact image references, and repository/tag references. Weak candidates such as artifact names and repository leaf names remain usable, but the selected Terraform match records the proof chain in `match_proof`.
@@ -115,7 +117,17 @@ When multiple source evidence providers match the same finding, the scanner pick
 
 External source evidence must include a component/package, package URL, or vulnerability selector. Artifact-only records are retained for diagnostics but do not upgrade findings, because artifact names can only narrow a dependency match. `source-coverage.json` reports unmatchable external records under `external_evidence_selector_diagnostics`.
 
-Use `--analysis-profile production` for release gates. It requires external source evidence, usable selectors, and rendered deployment evidence from `--terraform-plan` or `--kubernetes-manifest`. The default `advisory` profile keeps built-in source rules available for local development and early pull requests.
+Use `--analysis-profile production` for release gates. It requires external source evidence, usable selectors, rendered deployment evidence from `--terraform-plan` or `--kubernetes-manifest`, and external analyzer coverage for critical findings. It also fails when critical findings only have dependency-level or weaker source evidence. The default `advisory` profile keeps built-in source rules available for local development and early pull requests.
+
+Use `source-evidence-plan` to generate the analyzer handoff. Pass `--language` for CodeQL command generation. Supported language profiles are JavaScript/TypeScript, Java/Kotlin, Python, and Go; Go plans also include `govulncheck`. Without a supported language or package-manager hint, the command emits only the generic Semgrep starter workflow.
+
+```bash
+reachability-advisor source-evidence-plan \
+  --source-root . \
+  --language python \
+  --out-md reachability/source-evidence-plan.md \
+  --out-json reachability/source-evidence-plan.json
+```
 
 Built-in high-risk source rules currently cover common Java, Node, Python, and Go evidence:
 
@@ -126,7 +138,7 @@ Built-in high-risk source rules currently cover common Java, Node, Python, and G
 
 The JSON output includes both the machine state and a human label. The HTML report uses the labels `request-controlled path`, `reachable vulnerable API`, `dependency evidence`, `import observed`, `SBOM only`, and `no source rule`.
 
-`--source-coverage-out` writes source coverage metrics: source files and package-manager manifests scanned, skipped files, evidence states by artifact, source diagnostic counts, external evidence records consumed, external evidence provider counts, package-specific rule coverage, rule gaps, weak-source evidence counts, and the fraction of findings with dependency-graph, manifest, import, vulnerable API, or request-controlled evidence.
+`--source-coverage-out` writes source coverage metrics: source files and package-manager manifests scanned, skipped files, evidence states by artifact, source diagnostic counts, external evidence records consumed, external evidence provider counts, package-specific rule coverage, rule gaps, weak-source evidence counts, critical package coverage, and the fraction of findings with dependency-graph, manifest, import, vulnerable API, or request-controlled evidence.
 
 ## Remediation grouping
 
@@ -142,8 +154,8 @@ Terraform evidence is derived from a local `terraform show -json` plan. Use plan
 4. Extract likely container image or artifact references from provider-specific and generic fields.
 5. Match those references against SBOM artifact candidates and preserve candidate source/strength in the match proof.
 6. Build a bounded network graph from ingress, load balancer, target attachment, gateway backend, service, security-group, private-network, and provider bridge edges.
-7. Infer exposure from graph paths linked to the matched workload. The emitted context includes typed `network_paths` with path type, provider, confidence, steps, and blocker/constraint evidence where visible.
-8. Build effective-access records per matched workload identity, resource/action, impact, scope, condition keys, target resources, confidence, and blockers. This is a local evidence graph, not a full cloud IAM simulator.
+7. Infer exposure from graph paths linked to the matched workload. The emitted context includes typed `network_paths` with path type, entry class, provider, confidence, steps, blocker/constraint evidence, and unknowns where visible.
+8. Build effective-access records per matched workload identity, resource/action, policy layer, allow-or-deny effect, decision, decision basis, impact, scope, condition keys, target resources, confidence, and blockers. Matching explicit denies mark allow records as `denied_by_explicit_deny`. This is a local evidence graph, not a full cloud IAM simulator.
 9. Infer direct workload identity privilege and IAM impact classes from IAM/role/policy resources, including targeted sensitive resources where visible. Unrelated provider-level IAM is not applied to every workload.
 10. Emit coverage and mapping reports.
 
@@ -192,7 +204,29 @@ The graph walks directed paths such as internet -> public security group -> work
 
 Route tables, AWS/Azure/GCP route resources, private endpoints, VPC access connectors, subnet associations, firewall priorities, firewall target tags, and Azure NSG allow/deny rules are handled by provider network adapters. Adapter signals can prove internal reachability or lateral/provider-network bridges when linked to a workload. They do not turn an unrelated private workload public.
 
-IAM is combined with network reachability in three ways. First, workload identity references such as task roles, instance profiles, service accounts, managed identities, and role bindings add `limited`, `sensitive`, or `admin` privilege evidence to the matched artifact. Second, policies are expanded into capability records with action, impact, access class, resource scope, condition keys, resource references, `effective_risk`, and `risk_multiplier` where known. Impact classes are `data_access`, `network_control`, `iam_escalation`, `compute_control`, `admin_control`, and `limited_access`. Provider role catalogs cover common AWS managed policies, Azure built-in roles, GCP predefined roles, and Kubernetes role names before falling back to string impact detection. Limited-looking permissions such as `secretsmanager:GetSecretValue`, `ec2:AuthorizeSecurityGroupIngress`, `iam:PassRole`, `sts:AssumeRole`, or workload update permissions can raise context criticality when the workload is reachable. Scoped or conditional permissions still count, but score lower than broad unconditioned permissions for the same impact. Explicit `sts:AssumeRole` edges inherit the target role's visible capabilities when the target role is present in the plan; `iam:PassRole` remains escalation evidence but is not expanded without a compatible compute mutation path. Third, a network-reachable workload with `admin_control`, `network_control`, or `iam_escalation` can create an internal provider-control-plane pivot, raising private same-provider workloads to `internal` when the compromised identity can alter routes, security groups, policies, or attachments.
+Network blockers carry semantics. `blocks` means the observed path should not contribute exposure points unless stronger evidence proves reachability. `constrains` means the path still exists, but auth, WAF, firewall, or API-key evidence reduces exposure weight and keeps non-exploited findings below `urgent`. Missing blocker semantics are treated as uncertainty.
+
+The effective exposure engine normalizes provider signals into one asset-level decision before scoring. It selects the strongest linked network path, routes the record through the AWS, Azure, GCP, Kubernetes, or fallback evaluator, joins the strongest effective-access or IAM capability record, and emits:
+
+- `decision`: `reachable`, `constrained`, `blocked`, `isolated`, `unknown`, or `reachable_without_effective_identity`;
+- `decision_basis`: the network or identity reason that drove the combined decision;
+- `evaluator`: the provider evaluator that produced the decision, for example `aws.effective_exposure`;
+- `network`: provider, entry, path type, exposure, confidence, decision basis, blockers, unknowns, and evidence layer;
+- `identity`: identity/action/impact, policy layer, source decision basis, provider decision basis, confidence, blockers, and unknowns;
+- `edges`: asset -> effective network path -> effective identity -> runtime, with provider, source, confidence, blocker, and unknown state.
+
+The provider evaluators live under `src/reachability_advisor/provider_evaluators/`. Each evaluator owns its blocker taxonomy, provider decision basis, and unresolved-precedence notes for the provider:
+
+- AWS interprets IAM authorization, API authorizers, source security-group/CIDR restrictions, source VPC endpoint conditions, WAF evidence, permissions boundaries, SCP scope or deny, resource policies, trust policies, session policies, NACL uncertainty, and route-table uncertainty.
+- Azure interprets Private Endpoint, App Service auth and access restrictions, NSG deny evidence, Front Door/Application Gateway WAF evidence, deny assignments, management-group scope, PIM eligibility, NSG ordering, and route-table uncertainty.
+- GCP interprets IAP, Cloud Armor, Private Service Connect, internal serverless ingress, VPC connector evidence, IAM deny policies, conditional IAM bindings, Workload Identity mappings, organization/folder scope, hierarchical firewall uncertainty, and route uncertainty.
+- Kubernetes interprets NetworkPolicy deny-all or allow-list evidence, internal ingress class, service-mesh AuthorizationPolicy and mTLS evidence, RBAC denies, service-account scope, namespace scope, and `resourceNames` scope.
+
+The fallback evaluator keeps unknown-provider evidence visible without pretending provider precedence was evaluated.
+
+This is the provider-specific layer used by scoring gates and by the evidence graph. It does not replace raw network paths or IAM records; it makes their effective meaning explicit.
+
+IAM is combined with network reachability in three ways. First, workload identity references such as task roles, instance profiles, service accounts, managed identities, and role bindings add `limited`, `sensitive`, or `admin` privilege evidence to the matched artifact. Second, policies are expanded into capability records with action, effect, policy layer, decision, decision basis, impact, access class, resource scope, condition keys, resource references, `effective_risk`, and `risk_multiplier` where known. Impact classes are `data_access`, `network_control`, `iam_escalation`, `compute_control`, `admin_control`, and `limited_access`. Provider role catalogs cover common AWS managed policies, Azure built-in roles, GCP predefined roles, and Kubernetes role names before falling back to string impact detection. Limited-looking permissions such as `secretsmanager:GetSecretValue`, `ec2:AuthorizeSecurityGroupIngress`, `iam:PassRole`, `sts:AssumeRole`, or workload update permissions can raise context criticality when the workload is reachable. Scoped or conditional permissions still count, but score lower than broad unconditioned permissions for the same impact. Explicit deny statements are preserved as denied effective-access records, matching allow records are marked `denied_by_explicit_deny`, and neither raises privilege. Explicit `sts:AssumeRole` edges inherit the target role's visible capabilities when the target role is present in the plan; `iam:PassRole` remains escalation evidence but is not expanded without a compatible compute mutation path. Third, a network-reachable workload with `admin_control`, `network_control`, or `iam_escalation` can create an internal provider-control-plane pivot, raising private same-provider workloads to `internal` when the compromised identity can alter routes, security groups, policies, or attachments.
 
 IAM criticality is network-aware. Critical IAM impacts on public, external, or internal workloads raise context `criticality` to `high`; the same impact on a private-only workload raises it to `medium` because the blast radius is serious but the entry path is weaker. Targeted sensitive resources are recorded as evidence when Terraform exposes both the policy resource ARN/name and the sensitive resource. Identity resource names alone are not treated as permission evidence.
 
@@ -237,7 +271,7 @@ score = severity
       + max(privilege impact, IAM impact, asset criticality)
 ```
 
-Context impact is not fully additive. `admin`, `sensitive`, `data_access`, `network_control`, `iam_escalation`, and high asset criticality can describe the same blast radius, so the scorer takes the strongest one instead of stacking all of them. IAM capability records are normalized before scoring, and the strongest capability contributes through the same impact table as aggregate `iam_impacts` after applying its `risk_multiplier`. The JSON finding includes `scoring.dimensions[]` for each point contribution and `scoring.gates[]` for caps such as weak source evidence, private/no-ingress context, and the urgent gate.
+Context impact is not fully additive. `admin`, `sensitive`, `data_access`, `network_control`, `iam_escalation`, and high asset criticality can describe the same blast radius, so the scorer takes the strongest one instead of stacking all of them. IAM capability records are normalized before scoring, and the strongest capability contributes through the same impact table as aggregate `iam_impacts` after applying its `risk_multiplier`. The provider-specific `effective_exposure` decision drives blocker and low-confidence gates. Low-confidence IAM and network paths remain evidence, but caps prevent them from behaving like confirmed exposure. The JSON finding includes `scoring.dimensions[]` for each point contribution and `scoring.gates[]` for caps such as weak source evidence, private/no-ingress context, low-confidence IAM/network evidence, network blockers, and the urgent gate.
 
 Priority gates prevent weakly actionable findings from crossing high-severity thresholds only because several small signals add up:
 
@@ -246,6 +280,9 @@ Priority gates prevent weakly actionable findings from crossing high-severity th
 - dependency-graph evidence is capped below `high` unless it is public/external with critical context, and below `urgent` until direct vulnerable API usage or stronger exploit intelligence exists;
 - import-only evidence is capped below `high` unless it is public/external and has critical context;
 - private/no-ingress findings without exploit signal or critical context are capped below `high`;
+- confirmed network blockers cap non-exploited findings below `high`;
+- constrained or unknown blocker semantics keep non-exploited findings below `urgent`;
+- low-confidence IAM or network evidence keeps non-exploited findings below `urgent`;
 - `urgent` requires known exploitation, high EPSS, a request-controlled public/external path, or critical reachable context.
 
 Each JSON finding includes `scoring.effective_exposure_path`, a compact reference to the path used for the score. The full node and edge details are in `evidence_graph.effective_exposure_graph`.

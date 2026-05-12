@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from .artifacts import artifact_identity_proof, artifact_match_evidence
+from .effective_exposure import evaluate_effective_exposure
 from .iam_capabilities import dedupe_iam_capabilities
 from .models import Artifact, Confidence, ContextEvidence
 from .terraform_exposure import (
@@ -135,7 +136,7 @@ class ArtifactContextAccumulator:
         providers = ",".join(sorted(self.providers)) if self.providers else "unknown"
         if providers != "unknown":
             evidence.append(f"provider context: {providers}")
-        return ContextEvidence(
+        context = ContextEvidence(
             environment=self.environment,
             exposure=self.exposure,
             privilege=self.privilege,
@@ -149,6 +150,8 @@ class ArtifactContextAccumulator:
             confidence=self.confidence,
             evidence=evidence,
         )
+        context.effective_exposure = evaluate_effective_exposure(self.artifact.name, context)
+        return context
 
 
 @dataclass
@@ -208,7 +211,7 @@ class TerraformNetworkGraph:
     def _build_identity_index(self) -> None:
         for resource in self.resources:
             grant = iam_grant_for_resource(resource)
-            if grant.privilege == "unknown":
+            if grant.privilege == "unknown" and not grant.capabilities:
                 continue
             for ref in self._identity_refs_for_resource(resource):
                 self._record_identity_grant(ref, grant)
@@ -238,12 +241,18 @@ class TerraformNetworkGraph:
             target_evidence: list[str] = []
             for ref in self._workload_identity_refs(resource):
                 ref_privilege = self.identity_privilege_by_ref.get(ref, "unknown")
-                if ref_privilege == "unknown":
+                grants = self.identity_grants_by_ref.get(ref, [])
+                if ref_privilege == "unknown" and not grants:
                     continue
-                privilege = max_privilege(privilege, ref_privilege)
+                if ref_privilege != "unknown":
+                    privilege = max_privilege(privilege, ref_privilege)
                 evidence.extend(self.identity_evidence_by_ref.get(ref, []))
-                for grant in self.identity_grants_by_ref.get(ref, []):
-                    impacts.update(grant.impacts)
+                for grant in grants:
+                    impacts.update(
+                        capability.impact
+                        for capability in grant.capabilities
+                        if capability.effect == "allow" and capability.impact in CRITICAL_IAM_IMPACTS | {"limited_access"}
+                    )
                     capabilities.extend(capability.to_json() for capability in grant.capabilities)
                     effective_access.extend(self._effective_access_records(resource, ref, grant))
                     target_evidence.extend(self._target_evidence_for_grant(grant))
@@ -260,7 +269,7 @@ class TerraformNetworkGraph:
                 self.iam_target_evidence_by_address[resource.address] = list(dict.fromkeys(target_evidence))
 
     def _network_path_record(self, resource: TerraformResource, exposure: str, path: list[str]) -> dict[str, Any]:
-        blockers = _network_blockers_for_resource(resource)
+        blockers = _dedupe_record_dicts([*_network_blockers_for_resource(resource), *self._network_blockers_for_path(path)])
         return {
             "target": resource.address,
             "provider": resource.provider,
@@ -273,12 +282,21 @@ class TerraformNetworkGraph:
             "source": "terraform-plan",
         }
 
+    def _network_blockers_for_path(self, path: list[str]) -> list[dict[str, str]]:
+        text = " ".join(path).lower()
+        blockers: list[dict[str, str]] = []
+        for resource in self.resources:
+            if resource.address.lower() in text:
+                blockers.extend(_network_blockers_for_resource(resource))
+        return blockers
+
     def _effective_access_records(self, resource: TerraformResource, identity_ref: str, grant: IamGrant) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
         target_resources = self._target_resources_for_grant(grant)
         for capability in grant.capabilities:
             capability_json = capability.to_json()
             blockers = _effective_access_blockers(capability_json)
+            effect = str(capability_json.get("effect") or "allow").lower()
             records.append(
                 {
                     "identity": identity_ref,
@@ -287,12 +305,14 @@ class TerraformNetworkGraph:
                     "action": capability_json.get("action"),
                     "impact": capability_json.get("impact"),
                     "access": capability_json.get("access"),
-                    "effect": capability_json.get("effect", "allow"),
+                    "effect": effect,
                     "resource_refs": capability_json.get("resource_refs", []),
                     "resource_scope": capability_json.get("resource_scope", "unknown"),
                     "condition_keys": capability_json.get("condition_keys", []),
+                    "policy_layer": capability_json.get("policy_layer", "identity_policy"),
                     "target_resources": target_resources,
-                    "decision": "allowed",
+                    "decision": "denied" if effect == "deny" else "allowed",
+                    "decision_basis": _effective_access_decision_basis(capability_json, blockers),
                     "confidence": _effective_access_confidence(capability_json, blockers),
                     "blockers": blockers,
                     "evidence": grant.evidence,
@@ -317,7 +337,8 @@ class TerraformNetworkGraph:
 
     @staticmethod
     def _dedupe_effective_access(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        seen: set[tuple[str, str, str, tuple[str, ...], tuple[str, ...]]] = set()
+        records = _apply_explicit_deny_precedence(records)
+        seen: set[tuple[str, str, str, str, tuple[str, ...], tuple[str, ...]]] = set()
         deduped: list[dict[str, Any]] = []
         for record in records:
             refs = record.get("resource_refs")
@@ -326,6 +347,7 @@ class TerraformNetworkGraph:
                 str(record.get("identity") or ""),
                 str(record.get("action") or ""),
                 str(record.get("impact") or ""),
+                str(record.get("decision") or record.get("effect") or ""),
                 tuple(str(item) for item in refs) if isinstance(refs, list) else (),
                 tuple(str(item) for item in targets) if isinstance(targets, list) else (),
             )
@@ -591,7 +613,8 @@ class TerraformNetworkGraph:
         if not ref:
             return
         key = str(ref).lower()
-        self.identity_privilege_by_ref[key] = max_privilege(self.identity_privilege_by_ref.get(key, "unknown"), grant.privilege)
+        if grant.privilege != "unknown":
+            self.identity_privilege_by_ref[key] = max_privilege(self.identity_privilege_by_ref.get(key, "unknown"), grant.privilege)
         self.identity_evidence_by_ref.setdefault(key, []).append(grant.evidence)
         self.identity_grants_by_ref.setdefault(key, []).append(grant)
 
@@ -788,7 +811,10 @@ class TerraformAnalyzer:
                 path_exposure = self._network_paths.exposure_by_address.get(resource.address, "unknown")
                 exposure = max_exposure(exposure, path_exposure)
                 accumulator.exposure = max_exposure(accumulator.exposure, exposure)
-                accumulator.network_paths.extend(self._network_paths.network_paths_by_address.get(resource.address, []))
+                path_records = self._network_paths.network_paths_by_address.get(resource.address, [])
+                if not path_records and exposure != "unknown":
+                    path_records = [_inferred_network_path_record(resource, exposure, self.source_name)]
+                accumulator.network_paths.extend(path_records)
                 for item in self._network_paths.evidence_by_address.get(resource.address, []):
                     accumulator.evidence.append(item)
                 if exposure != "unknown":
@@ -1846,6 +1872,22 @@ def _network_entry_for_exposure(exposure: str) -> str:
     }.get(exposure, "unknown")
 
 
+def _inferred_network_path_record(resource: TerraformResource, exposure: str, source_name: str) -> dict[str, Any]:
+    steps = [f"{resource.address} inferred {exposure} deployment context"]
+    return {
+        "target": resource.address,
+        "provider": resource.provider,
+        "exposure": exposure,
+        "path_type": _network_path_type(exposure, steps),
+        "entry": _network_entry_for_exposure(exposure),
+        "steps": steps,
+        "confidence": "low",
+        "blockers": _network_blockers_for_resource(resource),
+        "source": f"terraform:{source_name}",
+        "unknowns": ["no explicit graph hop sequence linked this inferred exposure"],
+    }
+
+
 def _network_path_type(exposure: str, path: list[str]) -> str:
     text = " ".join(path).lower()
     if exposure == "public" and ("load balancer" in text or "aws_lb" in text or "aws_alb" in text):
@@ -1873,19 +1915,34 @@ def _network_blockers_for_resource(resource: TerraformResource) -> list[dict[str
     for key in ("authorization_type", "authorization", "auth_type"):
         auth = str(values.get(key) or "").strip()
         if auth and auth.upper() not in {"NONE", "ANONYMOUS", "PUBLIC"}:
-            blockers.append({"kind": "auth_required", "evidence": f"{resource.address} {key}={auth}"})
+            blockers.append({"kind": "auth_required", "effect": "constrains", "evidence": f"{resource.address} {key}={auth}"})
     if values.get("public_network_access_enabled") is False:
-        blockers.append({"kind": "public_network_disabled", "evidence": f"{resource.address} public_network_access_enabled=false"})
+        blockers.append({"kind": "public_network_disabled", "effect": "blocks", "evidence": f"{resource.address} public_network_access_enabled=false"})
     if values.get("internal") is True:
-        blockers.append({"kind": "internal_only_endpoint", "evidence": f"{resource.address} internal=true"})
+        blockers.append({"kind": "internal_only_endpoint", "effect": "blocks", "evidence": f"{resource.address} internal=true"})
     ingress = str(values.get("ingress") or "").lower()
     if "internal" in ingress:
-        blockers.append({"kind": "internal_ingress_only", "evidence": f"{resource.address} ingress={ingress}"})
+        blockers.append({"kind": "internal_ingress_only", "effect": "blocks", "evidence": f"{resource.address} ingress={ingress}"})
+    if _truthy_nested(values, "api_key_required", "requires_api_key"):
+        blockers.append({"kind": "api_key_required", "effect": "constrains", "evidence": f"{resource.address} requires an API key"})
+    for key in ("auth_settings", "auth_settings_v2", "authentication"):
+        if _nested_key_present(values, key):
+            blockers.append({"kind": "auth_required", "effect": "constrains", "evidence": f"{resource.address} has {key}"})
+    for key in ("authorizer_id", "authorizer_uri", "authorization_scopes", "jwt_configuration", "openid_connect_configuration"):
+        if _nested_key_present(values, key):
+            blockers.append({"kind": "api_authorizer", "effect": "constrains", "evidence": f"{resource.address} has {key}"})
+    for key in ("web_acl_id", "web_application_firewall_policy_link_id", "firewall_policy_id", "waf_policy_id"):
+        if _nested_key_present(values, key):
+            blockers.append({"kind": "waf_or_firewall_policy", "effect": "constrains", "evidence": f"{resource.address} has {key}"})
+    if resource.type in {"aws_wafv2_web_acl_association", "aws_wafregional_web_acl_association"}:
+        blockers.append({"kind": "waf_or_firewall_policy", "effect": "constrains", "evidence": f"{resource.address} associates a WAF policy"})
     return blockers
 
 
 def _effective_access_blockers(capability: dict[str, Any]) -> list[dict[str, str]]:
     blockers: list[dict[str, str]] = []
+    if str(capability.get("effect") or "allow").lower() == "deny":
+        blockers.append({"kind": "explicit_deny", "evidence": "policy statement explicitly denies this action"})
     scope = str(capability.get("resource_scope") or "unknown").lower()
     if scope == "unknown":
         blockers.append({"kind": "unknown_resource_scope", "evidence": "policy resource scope could not be resolved"})
@@ -1898,13 +1955,106 @@ def _effective_access_blockers(capability: dict[str, Any]) -> list[dict[str, str
     return blockers
 
 
+def _effective_access_decision_basis(capability: dict[str, Any], blockers: list[dict[str, str]]) -> str:
+    layer = str(capability.get("policy_layer") or "identity_policy")
+    effect = str(capability.get("effect") or "allow").lower()
+    if effect == "deny":
+        return f"{layer}:explicit_deny"
+    if any(blocker.get("kind") == "condition" for blocker in blockers):
+        return f"{layer}:conditional_allow"
+    if any(blocker.get("kind") == "scoped_resource" for blocker in blockers):
+        return f"{layer}:scoped_allow"
+    if any(blocker.get("kind") == "unknown_resource_scope" for blocker in blockers):
+        return f"{layer}:unresolved_scope"
+    return f"{layer}:allow"
+
+
 def _effective_access_confidence(capability: dict[str, Any], blockers: list[dict[str, str]]) -> str:
+    if str(capability.get("effect") or "allow").lower() == "deny":
+        return "high"
     scope = str(capability.get("resource_scope") or "unknown").lower()
     if scope == "unknown":
         return "low"
     if blockers:
         return "medium"
     return "high"
+
+
+def _apply_explicit_deny_precedence(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deny_records = [record for record in records if str(record.get("effect") or "").lower() == "deny"]
+    if not deny_records:
+        return records
+    result: list[dict[str, Any]] = []
+    for record in records:
+        if str(record.get("effect") or "").lower() != "allow" or not any(_deny_overrides_allow(deny, record) for deny in deny_records):
+            result.append(record)
+            continue
+        updated = dict(record)
+        blockers = [dict(item) for item in updated.get("blockers", []) if isinstance(item, dict)]
+        blockers.append(
+            {
+                "kind": "explicit_deny_precedence",
+                "evidence": "an explicit deny with matching identity/action/resource overrides this allow",
+            }
+        )
+        updated["decision"] = "denied_by_explicit_deny"
+        updated["decision_basis"] = "explicit_deny_precedence"
+        updated["confidence"] = "high"
+        updated["blockers"] = _dedupe_record_dicts(blockers)
+        result.append(updated)
+    return result
+
+
+def _deny_overrides_allow(deny: dict[str, Any], allow: dict[str, Any]) -> bool:
+    if str(deny.get("identity") or "") != str(allow.get("identity") or ""):
+        return False
+    if str(deny.get("impact") or "") != str(allow.get("impact") or ""):
+        return False
+    if not _action_overlaps(str(deny.get("action") or ""), str(allow.get("action") or "")):
+        return False
+    deny_refs = {str(item) for item in deny.get("resource_refs", []) if str(item)}
+    allow_refs = {str(item) for item in allow.get("resource_refs", []) if str(item)}
+    deny_targets = {str(item) for item in deny.get("target_resources", []) if str(item)}
+    allow_targets = {str(item) for item in allow.get("target_resources", []) if str(item)}
+    if "*" in deny_refs or "* sensitive resources" in deny_targets:
+        return True
+    if deny_refs and allow_refs and deny_refs.isdisjoint(allow_refs):
+        return False
+    return not (deny_targets and allow_targets and deny_targets.isdisjoint(allow_targets))
+
+
+def _action_overlaps(deny_action: str, allow_action: str) -> bool:
+    deny_action = deny_action.lower()
+    allow_action = allow_action.lower()
+    if deny_action in {"*", "*:*"}:
+        return True
+    if deny_action == allow_action:
+        return True
+    return deny_action.endswith(":*") and allow_action.startswith(deny_action[:-1])
+
+
+def _nested_key_present(value: Any, target_key: str) -> bool:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if str(key).lower() == target_key.lower() and item not in (None, "", [], {}):
+                return True
+            if isinstance(item, (dict, list)) and _nested_key_present(item, target_key):
+                return True
+    elif isinstance(value, list):
+        return any(_nested_key_present(item, target_key) for item in value)
+    return False
+
+
+def _truthy_nested(value: Any, *target_keys: str) -> bool:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if str(key).lower() in {target.lower() for target in target_keys} and bool(item):
+                return True
+            if isinstance(item, (dict, list)) and _truthy_nested(item, *target_keys):
+                return True
+    elif isinstance(value, list):
+        return any(_truthy_nested(item, *target_keys) for item in value)
+    return False
 
 
 def _dedupe_record_dicts(records: list[dict[str, Any]]) -> list[dict[str, Any]]:

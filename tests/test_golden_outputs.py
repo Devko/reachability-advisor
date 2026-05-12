@@ -79,13 +79,13 @@ class GoldenOutputRegressionTests(unittest.TestCase):
 
         self.assertEqual(len(findings["findings"]), 10)
         self.assertEqual(len(findings["remediations"]), 10)
-        self.assertEqual(_count_by(findings["findings"], "tier"), {"high": 2, "informational": 1, "low": 2, "medium": 2, "urgent": 3})
+        self.assertEqual(_count_by(findings["findings"], "tier"), {"high": 4, "informational": 1, "low": 2, "medium": 2, "urgent": 1})
         self.assertEqual(
             [(item["artifact"]["name"], item["component"]["name"], item["tier"], item["max_score"]) for item in findings["remediations"][:5]],
             [
                 ("payments-api", "log4j-core", "urgent", 100.0),
-                ("orders-api", "requests", "urgent", 96.0),
-                ("audit-api", "jackson-databind", "urgent", 93.4),
+                ("orders-api", "requests", "high", 84.0),
+                ("audit-api", "jackson-databind", "high", 84.0),
                 ("notifier", "lodash", "high", 74.0),
                 ("inventory-api", "requests", "high", 68.0),
             ],
@@ -95,7 +95,7 @@ class GoldenOutputRegressionTests(unittest.TestCase):
         self.assertEqual(kubernetes["summary"]["exposure_counts"], {"internal": 1, "public": 1})
         self.assertEqual(source["summary"]["states"], {"attacker_controlled": 5, "function_reachable": 2, "package_present": 3})
         self.assertEqual(mapping["summary"]["artifacts_with_terraform_matches"], 7)
-        self.assertEqual({key: len(visual[key]) for key in ("assets", "vulnerabilities", "networkPaths", "links")}, {"assets": 7, "vulnerabilities": 10, "networkPaths": 8, "links": 10})
+        self.assertEqual({key: len(visual[key]) for key in ("assets", "vulnerabilities", "networkPaths", "links")}, {"assets": 7, "vulnerabilities": 10, "networkPaths": 11, "links": 10})
         self.assertTrue(all("pathType" in item for item in visual["networkPaths"]))
         effective = visual["evidenceGraph"]["effective_exposure_graph"]
         self.assertEqual(len(effective["paths"]), len(findings["findings"]))

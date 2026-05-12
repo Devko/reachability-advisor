@@ -24,6 +24,7 @@ from reachability_advisor.models import (
     SbomDocument,
     VulnerabilityRecord,
 )
+from reachability_advisor.readiness import release_readiness_report
 from reachability_advisor.sbom import load_sbom
 from reachability_advisor.sbom_plan import (
     recommend_sbom_commands,
@@ -34,6 +35,10 @@ from reachability_advisor.source import (
     analyze_component_source,
     load_external_source_evidence,
     load_reachability_rules,
+)
+from reachability_advisor.source_evidence_plan import (
+    recommend_source_evidence_commands,
+    render_source_evidence_plan_markdown,
 )
 from reachability_advisor.terraform import (
     TerraformAnalyzer,
@@ -103,6 +108,26 @@ class ArtifactIdentityTests(unittest.TestCase):
         self.assertIn("registry.example.com/shop/checkout-canary:1.2.4", candidates)
         self.assertIn("registry.example.com/shop/checkout:stable", candidates)
         self.assertTrue(artifact_match_evidence(artifact, "registry.example.com/shop/checkout:from-module").matched)
+
+    def test_artifact_candidates_include_release_pipeline_image_hints(self) -> None:
+        artifact = Artifact(
+            name="checkout",
+            properties={
+                "gha:image": "ghcr.io/acme/checkout:sha-123",
+                "org.opencontainers.image.ref.name": "ghcr.io/acme/checkout:1.2.3",
+                "docker:repo-digest": "ghcr.io/acme/checkout@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "skaffold:image": "ghcr.io/acme/checkout-skaffold:1",
+                "jib:image": "ghcr.io/acme/checkout-jib:1",
+            },
+        )
+
+        candidates = artifact_candidates(artifact)
+
+        self.assertIn("ghcr.io/acme/checkout:sha-123", candidates)
+        self.assertIn("ghcr.io/acme/checkout:1.2.3", candidates)
+        self.assertIn("ghcr.io/acme/checkout@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", candidates)
+        self.assertIn("ghcr.io/acme/checkout-skaffold:1", candidates)
+        self.assertIn("ghcr.io/acme/checkout-jib:1", candidates)
 
     def test_artifact_identity_proof_preserves_candidate_source_and_strength(self) -> None:
         artifact = Artifact(
@@ -575,6 +600,30 @@ class MappingAndSbomPlanTests(unittest.TestCase):
             self.assertTrue(out_json.exists())
             self.assertIn("npm sbom", out_md.read_text(encoding="utf-8"))
 
+    def test_source_evidence_plan_recommends_external_analyzer_handoff(self) -> None:
+        commands = recommend_source_evidence_commands(source_root="src", output_dir="reachability", language="go")
+        markdown = render_source_evidence_plan_markdown(commands)
+
+        self.assertTrue(any(command.tool == "semgrep" for command in commands))
+        self.assertTrue(any(command.tool == "codeql" and "codeql/go-queries" in command.command for command in commands))
+        self.assertTrue(any(command.tool == "govulncheck" for command in commands))
+        self.assertIn("--source-evidence-in reachability/semgrep-results.json", markdown)
+
+    def test_cli_source_evidence_plan_writes_json_and_markdown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out_json = Path(tmp) / "source-plan.json"
+            out_md = Path(tmp) / "source-plan.md"
+            code = main([
+                "source-evidence-plan",
+                "--source-root", "src",
+                "--language", "python",
+                "--out-json", str(out_json),
+                "--out-md", str(out_md),
+            ])
+            self.assertEqual(code, 0)
+            self.assertIn("reachability-advisor-source-evidence-plan", out_json.read_text(encoding="utf-8"))
+            self.assertIn("codeql/python-queries", out_md.read_text(encoding="utf-8"))
+
     def test_mapping_report_shows_source_and_terraform_matches(self) -> None:
         sbom = load_sbom(ROOT / "samples/sboms/payments-api.cdx.json")
         plan = json.loads((ROOT / "samples/tfplan-multicloud.json").read_text(encoding="utf-8"))
@@ -583,6 +632,110 @@ class MappingAndSbomPlanTests(unittest.TestCase):
         self.assertEqual(report["summary"]["artifact_count"], 1)
         self.assertTrue(report["artifacts"][0]["terraform_matched"])
         self.assertFalse(report["artifacts"][0]["mapping_warnings"])
+
+    def test_artifact_manifest_supplies_release_identity_and_readiness(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sbom = root / "bom.json"
+            vulns = root / "vulns.json"
+            manifest = root / "artifact-manifest.json"
+            plan_path = root / "tfplan.json"
+            mapping = root / "mapping.json"
+            readiness = root / "readiness.json"
+            source_coverage = root / "source-coverage.json"
+            readiness_from_inputs = root / "readiness-from-inputs.json"
+            digest = "sha256:" + "a" * 64
+            sbom.write_text(json.dumps({"bomFormat": "CycloneDX", "metadata": {"component": {"name": "app"}}, "components": []}), encoding="utf-8")
+            vulns.write_text(json.dumps({"vulnerabilities": []}), encoding="utf-8")
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "signed": True,
+                        "artifacts": [
+                            {
+                                "name": "app",
+                                "sbom": "bom.json",
+                                "image": "repo/app:1",
+                                "digest": digest,
+                                "git_sha": "abc123",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "planned_values": {
+                            "root_module": {
+                                "resources": [
+                                    {
+                                        "address": "aws_lambda_function.app",
+                                        "type": "aws_lambda_function",
+                                        "name": "app",
+                                        "values": {"function_name": "app", "image_uri": f"repo/app@{digest}"},
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            code = main(
+                [
+                    "scan",
+                    "--sbom",
+                    str(sbom),
+                    "--vulns",
+                    str(vulns),
+                    "--terraform-plan",
+                    str(plan_path),
+                    "--artifact-manifest",
+                    str(manifest),
+                    "--mapping-out",
+                    str(mapping),
+                    "--source-coverage-out",
+                    str(source_coverage),
+                    "--readiness-out",
+                    str(readiness),
+                    "--no-table",
+                ]
+            )
+
+            self.assertEqual(code, 0)
+            mapping_report = json.loads(mapping.read_text(encoding="utf-8"))
+            self.assertEqual(mapping_report["artifact_manifest"]["applied"], 1)
+            self.assertTrue(mapping_report["artifacts"][0]["strong_artifact_identity"])
+            self.assertTrue(mapping_report["artifacts"][0]["terraform_matched"])
+            self.assertEqual(json.loads(readiness.read_text(encoding="utf-8"))["status"], "ready")
+            self.assertEqual(
+                main(
+                    [
+                        "evidence-profile",
+                        "--mapping",
+                        str(mapping),
+                        "--source-coverage",
+                        str(source_coverage),
+                        "--out",
+                        str(readiness_from_inputs),
+                        "--fail-on-blockers",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(json.loads(readiness_from_inputs.read_text(encoding="utf-8"))["status"], "ready")
+
+    def test_readiness_blocks_zero_critical_external_coverage(self) -> None:
+        report = release_readiness_report(
+            mapping_report={"artifacts": [], "summary": {}},
+            source_coverage={"summary": {"critical_external_evidence_coverage": 0.0}},
+        )
+
+        self.assertEqual(report["status"], "blocked")
+        self.assertTrue(any(blocker["kind"] == "critical_source_coverage" for blocker in report["blockers"]))
 
     def test_scan_writes_source_coverage_and_accepts_external_source_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

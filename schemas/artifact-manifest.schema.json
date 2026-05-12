@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/reachability-advisor/artifact-manifest.schema.json",
+  "title": "Reachability Advisor CI Artifact Manifest",
+  "type": "object",
+  "required": ["artifacts"],
+  "additionalProperties": true,
+  "properties": {
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "additionalProperties": true,
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "artifact": {"type": "string"},
+          "sbom": {"type": "string"},
+          "sbom_path": {"type": "string"},
+          "image": {"type": "string"},
+          "image_ref": {"type": "string"},
+          "digest": {"type": "string"},
+          "image_digest": {"type": "string"},
+          "registry_ref": {"type": "string"},
+          "repository_digest": {"type": "string"},
+          "git_sha": {"type": "string"},
+          "commit": {"type": "string"},
+          "revision": {"type": "string"},
+          "helm_values_image": {"type": "string"},
+          "helm_image": {"type": "string"},
+          "kustomize_image": {"type": "string"},
+          "terraform_image": {"type": "string"},
+          "terraform_module_output_image": {"type": "string"},
+          "aliases": {"type": "array", "items": {"type": "string"}},
+          "properties": {"type": "object", "additionalProperties": {"type": "string"}}
+        }
+      }
+    },
+    "signature": {"type": ["object", "string", "boolean"]},
+    "signed": {"type": "boolean"}
+  }
+}

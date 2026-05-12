@@ -38,7 +38,7 @@
         "artifact": "audit-api",
         "component": "requests",
         "vulnerability": "CVE-2023-32681",
-        "tier": "urgent"
+        "tier": "high"
       }
     ]
   },

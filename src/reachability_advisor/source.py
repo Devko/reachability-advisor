@@ -1268,6 +1268,10 @@ def source_coverage_report(
         "findings_with_package_specific_rule": 0,
         "findings_with_rule_gap": 0,
         "findings_with_weak_source_evidence": 0,
+        "critical_findings": 0,
+        "critical_findings_with_dependency_only_source": 0,
+        "critical_findings_with_external_evidence": 0,
+        "critical_findings_missing_external_evidence": 0,
         "source_diagnostic_counts": {},
     }
     external_selector_diagnostics = external_evidence.selector_diagnostics() if external_evidence else {"records": 0, "matchable_records": 0, "artifact_only_records": 0, "unscoped_records": 0}
@@ -1282,6 +1286,7 @@ def source_coverage_report(
         totals["files_skipped"] += len(index.skipped_files)
         artifact_states: dict[str, int] = {}
         artifact_diagnostics: dict[str, int] = {}
+        critical_packages: dict[str, dict[str, Any]] = {}
         for finding in artifact_findings:
             state = finding.source.reachability.value
             artifact_states[state] = artifact_states.get(state, 0) + 1
@@ -1304,6 +1309,35 @@ def source_coverage_report(
                 totals["findings_with_package_specific_rule"] += 1
             if state in {Reachability.UNKNOWN_DUE_TO_NO_RULE.value, Reachability.PACKAGE_PRESENT.value, Reachability.DEPENDENCY_REACHABLE.value}:
                 totals["findings_with_weak_source_evidence"] += 1
+            if _critical_source_gate_applies(finding):
+                totals["critical_findings"] += 1
+                package_key = finding.component.purl or finding.component.display_name
+                package_row = critical_packages.setdefault(
+                    package_key,
+                    {
+                        "component": finding.component.display_name,
+                        "purl": finding.component.purl,
+                        "vulnerabilities": [],
+                        "external_evidence": False,
+                        "states": {},
+                    },
+                )
+                package_row["vulnerabilities"].append(finding.vulnerability.id)
+                package_row["states"][state] = package_row["states"].get(state, 0) + 1
+                if state in {
+                    Reachability.ABSENT.value,
+                    Reachability.UNKNOWN_DUE_TO_NO_RULE.value,
+                    Reachability.PACKAGE_PRESENT.value,
+                    Reachability.DEPENDENCY_REACHABLE.value,
+                }:
+                    totals["critical_findings_with_dependency_only_source"] += 1
+                if finding.source.evidence_source != "builtin":
+                    totals["critical_findings_with_external_evidence"] += 1
+                    package_row["external_evidence"] = True
+                else:
+                    totals["critical_findings_missing_external_evidence"] += 1
+        critical_package_rows = sorted(critical_packages.values(), key=lambda row: str(row["component"]))
+        critical_packages_with_external = sum(1 for row in critical_package_rows if row["external_evidence"])
         artifacts.append(
             {
                 "artifact": sbom.artifact.name,
@@ -1316,6 +1350,8 @@ def source_coverage_report(
                 "findings_analyzed": len(artifact_findings),
                 "states": artifact_states,
                 "source_diagnostics": artifact_diagnostics,
+                "critical_packages": critical_package_rows,
+                "critical_package_coverage": round(critical_packages_with_external / len(critical_package_rows), 4) if critical_package_rows else 1.0,
                 "skipped_files": index.skipped_files[:20],
             }
         )
@@ -1336,6 +1372,7 @@ def source_coverage_report(
     totals["external_evidence_providers"] = external_evidence.provider_counts() if external_evidence else {}
     totals["external_evidence_selector_diagnostics"] = external_selector_diagnostics
     totals["external_evidence_selected_ratio"] = round(totals["findings_with_external_evidence"] / len(findings), 4) if findings else 1.0
+    totals["critical_external_evidence_coverage"] = round(totals["critical_findings_with_external_evidence"] / totals["critical_findings"], 4) if totals["critical_findings"] else 1.0
     return {
         "schema_version": "1.0",
         "summary": totals,
@@ -1346,8 +1383,24 @@ def source_coverage_report(
             "Package-manager manifest evidence is weak dependency evidence. It does not prove runtime import or vulnerable API execution.",
             "External evidence must match a component/package, package URL, or vulnerability selector; artifact only narrows a selector match.",
             "Built-in source rules are advisory fallback evidence. Production gates should import Semgrep, CodeQL/SARIF, govulncheck, or native evidence.",
+            "Production profile fails when critical findings only have dependency-level or weaker source evidence.",
         ],
     }
+
+
+def _critical_source_gate_applies(finding: Any) -> bool:
+    vulnerability = getattr(finding, "vulnerability", None)
+    tier = str(getattr(getattr(finding, "tier", ""), "value", getattr(finding, "tier", ""))).lower()
+    severity = str(getattr(vulnerability, "severity", "") or "").lower()
+    cvss = getattr(vulnerability, "cvss", None)
+    epss = getattr(vulnerability, "epss", None)
+    return (
+        tier in {"high", "urgent"}
+        or severity == "critical"
+        or (isinstance(cvss, (int, float)) and cvss >= 9.0)
+        or bool(getattr(vulnerability, "known_exploited", False))
+        or (isinstance(epss, (int, float)) and epss >= 0.5)
+    )
 
 
 def semgrep_rules_yaml(rules: Iterable[ReachabilityRule] = BUILTIN_RULES) -> str:

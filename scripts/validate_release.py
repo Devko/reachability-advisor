@@ -186,6 +186,7 @@ def check_action_metadata() -> None:
         "kubernetes-manifest",
         "reachability-rules",
         "artifact-alias",
+        "artifact-manifest",
         "baseline",
         "fail-on-new-tier",
         "min-artifact-match-coverage",
@@ -194,13 +195,17 @@ def check_action_metadata() -> None:
         "min-source-rule-coverage",
         "require-external-source-evidence",
         "min-external-evidence-usable-ratio",
+        "min-critical-external-source-coverage",
         "--baseline-out",
+        "--artifact-manifest",
         "--min-artifact-match-coverage",
         "--min-strong-artifact-identity-coverage",
         "--fail-on-mapping-warnings",
         "--min-source-rule-coverage",
         "--require-external-source-evidence",
         "--min-external-evidence-usable-ratio",
+        "--min-critical-external-source-coverage",
+        "--readiness-out",
         "output-dir",
         "scan_code=$?",
         "outputs:",
@@ -319,6 +324,7 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
     kubernetes_coverage = out_dir / "kubernetes-coverage.json"
     source_coverage = out_dir / "source-coverage.json"
     mapping = out_dir / "mapping.json"
+    readiness = out_dir / "readiness.json"
     run_cli(
         [
             "scan",
@@ -350,6 +356,8 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
             str(source_coverage),
             "--mapping-out",
             str(mapping),
+            "--readiness-out",
+            str(readiness),
             "--evidence-graph-out",
             str(evidence_graph),
             "--source-root",
@@ -413,6 +421,27 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
     check("generated Kubernetes coverage", kubernetes_coverage, "kubernetes-coverage.schema.json")
     check("generated source coverage", source_coverage, "source-coverage.schema.json")
     check("generated mapping report", mapping, "mapping-report.schema.json")
+    check("generated readiness report", readiness, "readiness.schema.json")
+
+    readiness_from_inputs = out_dir / "readiness-from-inputs.json"
+    run_cli(
+        [
+            "evidence-profile",
+            "--mapping",
+            str(mapping),
+            "--source-coverage",
+            str(source_coverage),
+            "--terraform-coverage",
+            str(terraform_coverage),
+            "--kubernetes-coverage",
+            str(kubernetes_coverage),
+            "--findings",
+            str(findings),
+            "--out",
+            str(readiness_from_inputs),
+        ]
+    )
+    check("generated readiness report from saved inputs", readiness_from_inputs, "readiness.schema.json")
 
     _check_no_cloud_terraform_plan_e2e(out_dir, checks)
 

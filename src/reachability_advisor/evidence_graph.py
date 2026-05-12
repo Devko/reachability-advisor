@@ -55,6 +55,7 @@ def build_evidence_graph(findings: list[Finding], metadata: dict[str, Any] | Non
                 "privilege": finding.context.privilege,
                 "criticality": finding.context.criticality,
                 "iam_impacts": [],
+                "effective_exposure": [],
                 "confidence": finding.context.confidence.value,
                 "max_score": 0.0,
                 "max_tier": "informational",
@@ -157,6 +158,10 @@ def _raise_asset(asset: dict[str, Any], finding: Finding) -> None:
     for impact in finding.context.iam_impacts:
         if impact not in asset["iam_impacts"]:
             asset["iam_impacts"].append(impact)
+    exposure_records = asset.setdefault("effective_exposure", [])
+    for record in finding.context.effective_exposure:
+        if isinstance(record, dict) and all(existing.get("id") != record.get("id") for existing in exposure_records if isinstance(existing, dict)):
+            exposure_records.append(record)
 
 
 def _merge_node(target: dict[str, dict[str, Any]], node: dict[str, Any]) -> None:

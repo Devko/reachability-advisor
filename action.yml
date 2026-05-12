@@ -16,6 +16,10 @@ inputs:
     description: Newline-separated artifact=reference aliases for SBOMs without strong artifact metadata.
     required: false
     default: ""
+  artifact-manifest:
+    description: Newline-separated CI artifact identity manifests with built image digests, registry refs, Git SHA, SBOM paths, and renderer metadata.
+    required: false
+    default: ""
   context:
     description: Context JSON path for explicit overrides or enrichment.
     required: false
@@ -68,8 +72,16 @@ inputs:
     description: Set to true to require imported Semgrep, CodeQL/SARIF, govulncheck, or native source evidence.
     required: false
     default: "false"
+  require-strong-source-for-critical:
+    description: Set to true to fail when critical findings only have dependency-level or weaker source evidence. Production profile enables this behavior.
+    required: false
+    default: "false"
   min-external-evidence-usable-ratio:
     description: Optional 0..1 gate for imported external source evidence selector usability.
+    required: false
+    default: ""
+  min-critical-external-source-coverage:
+    description: Optional 0..1 gate for critical findings covered by external source analyzer evidence. Production defaults to 1.0.
     required: false
     default: ""
   policy:
@@ -126,6 +138,9 @@ outputs:
   source_coverage:
     description: Source-analysis coverage JSON output path.
     value: ${{ steps.scan.outputs.source_coverage }}
+  readiness:
+    description: Release evidence readiness JSON output path.
+    value: ${{ steps.scan.outputs.readiness }}
   baseline:
     description: Stable baseline artifact output path.
     value: ${{ steps.scan.outputs.baseline }}
@@ -184,15 +199,17 @@ runs:
         terraform_coverage="$output_dir/terraform-coverage.json"
         kubernetes_coverage="$output_dir/kubernetes-coverage.json"
         source_coverage="$output_dir/source-coverage.json"
+        readiness="$output_dir/release-readiness.json"
         baseline_out="$output_dir/reachability-baseline.json"
         delta="$output_dir/reachability-delta.json"
         delta_markdown="$output_dir/reachability-delta.md"
 
-        args=(scan --vulns "${{ inputs.vulns }}" --out "$findings" --baseline-out "$baseline_out" --sarif-out "$sarif" --diagnostics-out "$diagnostics" --markdown-out "$markdown" --html-out "$html" --evidence-graph-out "$evidence_graph" --annotations-out "$annotations" --mapping-out "$mapping" --source-coverage-out "$source_coverage" --no-table)
+        args=(scan --vulns "${{ inputs.vulns }}" --out "$findings" --baseline-out "$baseline_out" --sarif-out "$sarif" --diagnostics-out "$diagnostics" --markdown-out "$markdown" --html-out "$html" --evidence-graph-out "$evidence_graph" --annotations-out "$annotations" --mapping-out "$mapping" --source-coverage-out "$source_coverage" --readiness-out "$readiness" --no-table)
 
         add_repeated_args "--sbom" "${{ inputs.sbom }}"
         add_repeated_args "--source-root" "${{ inputs.source-root }}"
         add_repeated_args "--artifact-alias" "${{ inputs.artifact-alias }}"
+        add_repeated_args "--artifact-manifest" "${{ inputs.artifact-manifest }}"
         add_repeated_args "--source-evidence-in" "${{ inputs.source-evidence-in }}"
         add_repeated_args "--kubernetes-manifest" "${{ inputs.kubernetes-manifest }}"
 
@@ -209,7 +226,9 @@ runs:
         if [[ "${{ inputs.fail-on-mapping-warnings }}" == "true" ]]; then args+=(--fail-on-mapping-warnings); fi
         if [[ -n "${{ inputs.min-source-rule-coverage }}" ]]; then args+=(--min-source-rule-coverage "${{ inputs.min-source-rule-coverage }}"); fi
         if [[ "${{ inputs.require-external-source-evidence }}" == "true" ]]; then args+=(--require-external-source-evidence); fi
+        if [[ "${{ inputs.require-strong-source-for-critical }}" == "true" ]]; then args+=(--require-strong-source-for-critical); fi
         if [[ -n "${{ inputs.min-external-evidence-usable-ratio }}" ]]; then args+=(--min-external-evidence-usable-ratio "${{ inputs.min-external-evidence-usable-ratio }}"); fi
+        if [[ -n "${{ inputs.min-critical-external-source-coverage }}" ]]; then args+=(--min-critical-external-source-coverage "${{ inputs.min-critical-external-source-coverage }}"); fi
         if [[ -n "${{ inputs.fail-on-tier }}" ]]; then args+=(--fail-on-tier "${{ inputs.fail-on-tier }}"); fi
 
         set +e
@@ -251,6 +270,7 @@ runs:
             echo "terraform_coverage=$terraform_coverage"
             echo "kubernetes_coverage=$kubernetes_coverage"
             echo "source_coverage=$source_coverage"
+            echo "readiness=$readiness"
             echo "baseline=$baseline_out"
             echo "delta=$delta"
             echo "delta_markdown=$delta_markdown"

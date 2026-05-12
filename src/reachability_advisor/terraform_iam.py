@@ -110,6 +110,7 @@ class IamCapability:
     source: str = "terraform"
     provider: str = "unknown"
     catalog: str = ""
+    policy_layer: str = "identity_policy"
 
     def to_json(self) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -124,6 +125,7 @@ class IamCapability:
             "source": self.source,
             "provider": self.provider,
             "catalog": self.catalog,
+            "policy_layer": self.policy_layer,
         }
         data["effective_risk"] = capability_effective_risk(data)
         data["risk_multiplier"] = capability_risk_multiplier(data)
@@ -334,7 +336,10 @@ def _policy_capabilities(policy: Any, resource: TerraformIamResource, fallback_i
         statements = [statements]
     capabilities: list[IamCapability] = []
     for statement in statements:
-        if not isinstance(statement, dict) or str(statement.get("Effect", "Allow")).lower() != "allow":
+        if not isinstance(statement, dict):
+            continue
+        effect = str(statement.get("Effect", "Allow")).lower()
+        if effect not in {"allow", "deny"}:
             continue
         refs = value_reference_candidates(statement.get("Resource"))
         refs.update(value_reference_candidates(statement.get("NotResource")))
@@ -353,13 +358,13 @@ def _policy_capabilities(policy: Any, resource: TerraformIamResource, fallback_i
             if not action_impacts and fallback_impacts and len(actions) == 1:
                 action_impacts = set(fallback_impacts)
             if not action_impacts:
-                capabilities.append(_limited_capability(action, refs, evidence, resource.address, condition_keys=condition_keys, resource_scope=resource_scope))
+                capabilities.append(_limited_capability(action, refs, evidence, resource.address, condition_keys=condition_keys, resource_scope=resource_scope, effect=effect, policy_layer=_policy_layer_for_resource(resource)))
                 continue
             for impact in sorted(action_impacts):
-                capabilities.append(_capability(action, impact, refs, evidence, resource.address, condition_keys=condition_keys, resource_scope=resource_scope))
+                capabilities.append(_capability(action, impact, refs, evidence, resource.address, condition_keys=condition_keys, resource_scope=resource_scope, effect=effect, policy_layer=_policy_layer_for_resource(resource)))
     if not capabilities and fallback_impacts:
         for impact in sorted(fallback_impacts):
-            capabilities.append(_capability("policy", impact, fallback_refs, evidence, resource.address))
+            capabilities.append(_capability("policy", impact, fallback_refs, evidence, resource.address, policy_layer=_policy_layer_for_resource(resource)))
     return capabilities
 
 
@@ -368,9 +373,9 @@ def _role_text_capabilities(value: Any, resource: TerraformIamResource, impacts:
     action = _compact_action(text) or "role"
     if impacts:
         catalog = "provider-role-catalog" if _catalog_role_match(text.lower()) else ""
-        return [_capability(action, impact, refs, evidence, resource.address, catalog=catalog) for impact in sorted(impacts)]
+        return [_capability(action, impact, refs, evidence, resource.address, catalog=catalog, policy_layer=_policy_layer_for_resource(resource)) for impact in sorted(impacts)]
     if classify_role_text(value) in {"limited", "sensitive", "admin"}:
-        return [_limited_capability(action, refs, evidence, resource.address)]
+        return [_limited_capability(action, refs, evidence, resource.address, policy_layer=_policy_layer_for_resource(resource))]
     return []
 
 
@@ -388,12 +393,15 @@ def _capability(
     condition_keys: tuple[str, ...] = (),
     resource_scope: str | None = None,
     catalog: str = "",
+    effect: str = "allow",
+    policy_layer: str = "identity_policy",
 ) -> IamCapability:
     resource_refs = tuple(sorted(str(ref) for ref in refs if ref))
     return IamCapability(
         action=_compact_action(action) or "unknown",
         impact=impact,
         access=_access_for_impact(impact),
+        effect=effect,
         resource_refs=resource_refs,
         resource_scope=resource_scope or _resource_scope(resource_refs),
         condition_keys=condition_keys,
@@ -401,6 +409,7 @@ def _capability(
         source=source,
         provider=_provider_from_resource_address(source),
         catalog=catalog,
+        policy_layer=policy_layer,
     )
 
 
@@ -412,19 +421,43 @@ def _limited_capability(
     *,
     condition_keys: tuple[str, ...] = (),
     resource_scope: str | None = None,
+    effect: str = "allow",
+    policy_layer: str = "identity_policy",
 ) -> IamCapability:
     resource_refs = tuple(sorted(str(ref) for ref in refs if ref))
     return IamCapability(
         action=_compact_action(action) or "limited",
         impact="limited_access",
         access="limited",
+        effect=effect,
         resource_refs=resource_refs,
         resource_scope=resource_scope or _resource_scope(resource_refs),
         condition_keys=condition_keys,
         evidence=evidence,
         source=source,
         provider=_provider_from_resource_address(source),
+        policy_layer=policy_layer,
     )
+
+
+def _policy_layer_for_resource(resource: TerraformIamResource) -> str:
+    rtype = resource.type
+    values = resource.values
+    if rtype in {"aws_iam_policy", "aws_iam_role_policy", "aws_iam_user_policy", "aws_iam_group_policy", "aws_iam_role_policy_attachment"}:
+        return "identity_policy"
+    if rtype == "aws_iam_role" and values.get("assume_role_policy"):
+        return "trust_policy"
+    if "permissions_boundary" in values:
+        return "permissions_boundary"
+    if "service_control_policy" in rtype or rtype.endswith("_policy_attachment") and "organizations" in str(values).lower():
+        return "service_control_policy"
+    if rtype in {"google_secret_manager_secret_iam_member", "google_kms_crypto_key_iam_member", "google_artifact_registry_repository_iam_member", "google_iap_web_cloud_run_service_iam_member"}:
+        return "resource_policy"
+    if rtype in {"kubernetes_role_binding", "kubernetes_cluster_role_binding", "kubernetes_role_binding_v1", "kubernetes_cluster_role_binding_v1", "kubernetes_role_v1", "kubernetes_cluster_role_v1"}:
+        return "kubernetes_rbac"
+    if rtype in {"azurerm_role_assignment", "azurerm_key_vault_access_policy"}:
+        return "provider_role_assignment"
+    return "identity_policy"
 
 
 def _condition_keys(condition: Any) -> tuple[str, ...]:

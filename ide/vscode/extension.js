@@ -1,4 +1,9 @@
-const vscode = require('vscode');
+let vscode;
+try {
+  vscode = require('vscode');
+} catch {
+  vscode = null;
+}
 const childProcess = require('child_process');
 const fs = require('fs');
 const os = require('os');
@@ -9,13 +14,25 @@ const tierRank = { informational: 0, low: 1, medium: 2, high: 3, urgent: 4 };
 let collection;
 let output;
 let lastDiagnostics = [];
+let statusBar;
 
 function activate(context) {
+  if (!vscode) {
+    return;
+  }
   collection = vscode.languages.createDiagnosticCollection('Reachability Advisor');
   output = vscode.window.createOutputChannel('Reachability Advisor');
-  context.subscriptions.push(collection, output);
+  statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+  statusBar.command = 'reachabilityAdvisor.scanWorkspace';
+  statusBar.text = 'RA: idle';
+  statusBar.tooltip = 'Reachability Advisor scan status';
+  statusBar.show();
+  context.subscriptions.push(collection, output, statusBar);
   context.subscriptions.push(vscode.commands.registerCommand('reachabilityAdvisor.scanWorkspace', scanWorkspace));
   context.subscriptions.push(vscode.commands.registerCommand('reachabilityAdvisor.explainFinding', explainFinding));
+  context.subscriptions.push(vscode.commands.registerCommand('reachabilityAdvisor.generateSbomPlan', () => generatePlan('sbom')));
+  context.subscriptions.push(vscode.commands.registerCommand('reachabilityAdvisor.generateSourceEvidencePlan', () => generatePlan('source-evidence')));
+  context.subscriptions.push(vscode.commands.registerCommand('reachabilityAdvisor.validateProfile', validateCurrentProfile));
 }
 
 function deactivate() {
@@ -24,6 +41,9 @@ function deactivate() {
   }
   if (output) {
     output.dispose();
+  }
+  if (statusBar) {
+    statusBar.dispose();
   }
 }
 
@@ -36,12 +56,17 @@ async function scanWorkspace() {
   const root = workspace.uri.fsPath;
   const cfg = vscode.workspace.getConfiguration('reachabilityAdvisor');
   const executable = cfg.get('executable') || 'reachability-advisor';
-  const sbom = discoverPath(root, cfg.get('sbom'), ['app.cdx.json', 'bom.json', 'sbom.json', 'reachability/app.cdx.json']);
-  const vulns = discoverPath(root, cfg.get('vulns'), ['vulnerabilities.json', 'grype.json', 'reachability/vulnerabilities.json']);
-  if (!sbom || !vulns) {
-    vscode.window.showWarningMessage('Reachability Advisor needs an SBOM and vulnerability JSON. Configure reachabilityAdvisor.sbom and reachabilityAdvisor.vulns.');
+  const profile = profileState(cfg);
+  setStatus(`RA: ${profile.label}`);
+  const validation = profileValidation(cfg, root);
+  writeProfileValidation(validation);
+  if (validation.status === 'blocked') {
+    setStatus(`RA: ${profile.label} blocked`);
+    vscode.window.showWarningMessage(`Reachability Advisor ${profile.label} profile is blocked: ${validation.blockers.map((item) => item.message).join('; ')}`);
     return;
   }
+  const sbom = discoverPath(root, cfg.get('sbom'), ['app.cdx.json', 'bom.json', 'sbom.json', 'reachability/app.cdx.json', 'reachability/sbom.cdx.json', '.reachability/app.cdx.json']);
+  const vulns = discoverPath(root, cfg.get('vulns'), ['vulnerabilities.json', 'grype.json', 'reachability/vulnerabilities.json', 'reachability/grype.json', '.reachability/grype.json']);
 
   const diagnosticsPath = path.join(os.tmpdir(), `reachability-advisor-diagnostics-${Date.now()}.json`);
   const findingsPath = path.join(os.tmpdir(), `reachability-advisor-findings-${Date.now()}.json`);
@@ -51,7 +76,7 @@ async function scanWorkspace() {
     '--sbom', sbom,
     '--vulns', vulns,
     '--source-root', `${cfg.get('sourceRootArtifact') || 'app'}=${root}`,
-    '--analysis-profile', cfg.get('analysisProfile') || 'advisory',
+    '--analysis-profile', profile.analysisProfile,
     '--diagnostics-out', diagnosticsPath,
     '--source-coverage-out', sourceCoveragePath,
     '--out', findingsPath,
@@ -64,6 +89,10 @@ async function scanWorkspace() {
   pushOptional(args, '--terraform-source', resolvePath(root, cfg.get('terraformSource')));
   pushRepeated(args, '--kubernetes-manifest', cfg.get('kubernetesManifest'), root);
   pushRepeated(args, '--source-evidence-in', cfg.get('sourceEvidence'), root);
+  pushRepeated(args, '--artifact-manifest', cfg.get('artifactManifest'), root);
+  if (profile.analysisProfile === 'production') {
+    args.push('--require-strong-source-for-critical');
+  }
 
   await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Reachability Advisor scanning' }, async () => {
     try {
@@ -80,11 +109,15 @@ async function scanWorkspace() {
       const parsed = JSON.parse(fs.readFileSync(diagnosticsPath, 'utf8'));
       let diagnostics = parsed.diagnostics || [];
       diagnostics = filterByTier(diagnostics, cfg.get('diagnosticMinimumTier') || 'low');
-      diagnostics = await filterByBaseline(diagnostics, executable, root, findingsPath, resolvePath(root, cfg.get('baseline')));
+      const baselinePath = resolvePath(root, cfg.get('baseline'));
+      diagnostics = await filterByBaseline(diagnostics, executable, root, findingsPath, baselinePath);
       lastDiagnostics = diagnostics;
       publishDiagnostics(diagnostics, root);
-      vscode.window.showInformationMessage(`Reachability Advisor reported ${diagnostics.length} diagnostics.`);
+      const baselineLabel = baselinePath && fs.existsSync(baselinePath) ? 'baseline filtered' : 'no baseline';
+      setStatus(`RA: ${profile.label}, ${diagnostics.length} findings`);
+      vscode.window.showInformationMessage(`Reachability Advisor reported ${diagnostics.length} diagnostics (${profile.label}, ${baselineLabel}).`);
     } catch (err) {
+      setStatus('RA: failed');
       vscode.window.showErrorMessage(`Reachability Advisor failed: ${err.message}`);
       output.appendLine(err.stack || err.message);
     }
@@ -130,7 +163,10 @@ function publishDiagnostics(items, root) {
       severity(item.severity)
     );
     diagnostic.source = item.source || 'Reachability Advisor';
-    diagnostic.code = item.code;
+    diagnostic.code = {
+      value: item.code,
+      target: vscode.Uri.parse('command:reachabilityAdvisor.explainFinding'),
+    };
     diagnostic.relatedInformation = relatedInformation(item, root);
     if (!byFile.has(uri.toString())) {
       byFile.set(uri.toString(), { uri, diagnostics: [] });
@@ -139,6 +175,12 @@ function publishDiagnostics(items, root) {
   }
   for (const entry of byFile.values()) {
     collection.set(entry.uri, entry.diagnostics);
+  }
+}
+
+function setStatus(text) {
+  if (statusBar) {
+    statusBar.text = text;
   }
 }
 
@@ -186,6 +228,48 @@ async function explainFinding() {
     }, null, 2),
     language: 'json',
   });
+  vscode.window.showTextDocument(doc, { preview: true });
+}
+
+async function validateCurrentProfile() {
+  const workspace = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0];
+  if (!workspace) {
+    vscode.window.showWarningMessage('Reachability Advisor requires an open workspace.');
+    return;
+  }
+  const validation = profileValidation(vscode.workspace.getConfiguration('reachabilityAdvisor'), workspace.uri.fsPath);
+  writeProfileValidation(validation);
+  const message = validation.status === 'ready'
+    ? 'Reachability Advisor profile is ready.'
+    : `Reachability Advisor profile is ${validation.status}: ${validation.blockers.concat(validation.warnings).map((item) => item.message).join('; ')}`;
+  if (validation.status === 'blocked') {
+    vscode.window.showWarningMessage(message);
+  } else {
+    vscode.window.showInformationMessage(message);
+  }
+}
+
+async function generatePlan(kind) {
+  const workspace = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0];
+  if (!workspace) {
+    vscode.window.showWarningMessage('Reachability Advisor requires an open workspace.');
+    return;
+  }
+  const root = workspace.uri.fsPath;
+  const cfg = vscode.workspace.getConfiguration('reachabilityAdvisor');
+  const executable = cfg.get('executable') || 'reachability-advisor';
+  const plan = planCommandArgs(kind, cfg, root);
+  fs.mkdirSync(plan.outputDir, { recursive: true });
+  output.appendLine(`$ ${executable} ${plan.args.join(' ')}`);
+  const result = await execFile(executable, plan.args, root);
+  if (result.stderr) {
+    output.appendLine(result.stderr);
+  }
+  if (result.code !== 0) {
+    vscode.window.showErrorMessage(`Reachability Advisor plan generation failed with exit code ${result.code}. See Output: Reachability Advisor.`);
+    return;
+  }
+  const doc = await vscode.workspace.openTextDocument(plan.markdownPath);
   vscode.window.showTextDocument(doc, { preview: true });
 }
 
@@ -248,4 +332,123 @@ function pushRepeated(args, flag, value, root) {
   }
 }
 
-module.exports = { activate, deactivate };
+function configuredPaths(value, root) {
+  const paths = [];
+  const values = Array.isArray(value) ? value : String(value || '').split(/\r?\n/);
+  for (const item of values) {
+    const resolved = resolvePath(root, item);
+    if (resolved) {
+      paths.push(resolved);
+    }
+  }
+  return paths;
+}
+
+function profileState(cfg) {
+  const preset = cfg.get('profilePreset') || '';
+  if (preset === 'release-gate') {
+    return { label: 'release gate', analysisProfile: 'production' };
+  }
+  if (preset === 'advisory') {
+    return { label: 'advisory', analysisProfile: 'advisory' };
+  }
+  const analysisProfile = cfg.get('analysisProfile') || 'advisory';
+  return { label: analysisProfile === 'production' ? 'release gate' : 'advisory', analysisProfile };
+}
+
+function profileValidation(cfg, root) {
+  const profile = profileState(cfg);
+  const blockers = [];
+  const warnings = [];
+  const sbom = discoverPath(root, cfg.get('sbom'), ['app.cdx.json', 'bom.json', 'sbom.json', 'reachability/app.cdx.json', 'reachability/sbom.cdx.json', '.reachability/app.cdx.json']);
+  const vulns = discoverPath(root, cfg.get('vulns'), ['vulnerabilities.json', 'grype.json', 'reachability/vulnerabilities.json', 'reachability/grype.json', '.reachability/grype.json']);
+  const sourceEvidence = configuredPaths(cfg.get('sourceEvidence'), root).filter((item) => fs.existsSync(item));
+  const terraformPlan = resolvePath(root, cfg.get('terraformPlan'));
+  const terraformSource = resolvePath(root, cfg.get('terraformSource'));
+  const kubernetesManifests = configuredPaths(cfg.get('kubernetesManifest'), root).filter((item) => fs.existsSync(item));
+  const artifactManifests = configuredPaths(cfg.get('artifactManifest'), root).filter((item) => fs.existsSync(item));
+
+  if (!sbom || !fs.existsSync(sbom)) {
+    blockers.push({ kind: 'missing_sbom', message: 'missing SBOM; run Reachability Advisor: Generate SBOM Plan or configure reachabilityAdvisor.sbom' });
+  }
+  if (!vulns || !fs.existsSync(vulns)) {
+    blockers.push({ kind: 'missing_vulnerabilities', message: 'missing vulnerability JSON; configure reachabilityAdvisor.vulns' });
+  }
+  if (profile.analysisProfile === 'production') {
+    if (!sourceEvidence.length) {
+      blockers.push({ kind: 'missing_external_source_evidence', message: 'release gate requires Semgrep, CodeQL, govulncheck, or native source evidence' });
+    }
+    if ((!terraformPlan || !fs.existsSync(terraformPlan)) && !kubernetesManifests.length) {
+      blockers.push({ kind: 'missing_rendered_deployment_evidence', message: 'release gate requires terraform show -json plan or rendered Kubernetes manifests' });
+    }
+    if (terraformSource && fs.existsSync(terraformSource) && (!terraformPlan || !fs.existsSync(terraformPlan))) {
+      blockers.push({ kind: 'terraform_source_only', message: 'Terraform source mode is advisory; release gate needs a rendered Terraform plan' });
+    }
+    if (!artifactManifests.length) {
+      warnings.push({ kind: 'missing_artifact_manifest', message: 'no CI artifact manifest configured; image digest matching may depend on SBOM metadata only' });
+    }
+  }
+  return {
+    status: blockers.length ? 'blocked' : warnings.length ? 'warning' : 'ready',
+    profile: profile.label,
+    analysisProfile: profile.analysisProfile,
+    blockers,
+    warnings,
+  };
+}
+
+function writeProfileValidation(validation) {
+  if (!output) {
+    return;
+  }
+  output.appendLine(`Profile: ${validation.profile} (${validation.status})`);
+  for (const item of validation.blockers) {
+    output.appendLine(`  blocker: ${item.message}`);
+  }
+  for (const item of validation.warnings) {
+    output.appendLine(`  warning: ${item.message}`);
+  }
+}
+
+function planCommandArgs(kind, cfg, root) {
+  const outputDir = path.join(root, '.reachability');
+  if (kind === 'sbom') {
+    const artifact = cfg.get('sourceRootArtifact') || 'app';
+    return {
+      outputDir,
+      markdownPath: path.join(outputDir, 'sbom-plan.md'),
+      args: [
+        'sbom-plan',
+        '--artifact', artifact,
+        '--source-root', root,
+        '--output-dir', '.reachability',
+        '--out-md', path.join(outputDir, 'sbom-plan.md'),
+        '--out-json', path.join(outputDir, 'sbom-plan.json'),
+      ],
+    };
+  }
+  return {
+    outputDir,
+    markdownPath: path.join(outputDir, 'source-evidence-plan.md'),
+    args: [
+      'source-evidence-plan',
+      '--source-root', root,
+      '--output-dir', '.reachability',
+      '--out-md', path.join(outputDir, 'source-evidence-plan.md'),
+      '--out-json', path.join(outputDir, 'source-evidence-plan.json'),
+    ],
+  };
+}
+
+module.exports = {
+  activate,
+  deactivate,
+  configuredPaths,
+  discoverPath,
+  filterByTier,
+  planCommandArgs,
+  profileValidation,
+  profileState,
+  pushRepeated,
+  resolvePath,
+};

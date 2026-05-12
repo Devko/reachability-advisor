@@ -7,7 +7,8 @@ Release-gate inputs:
 - one CycloneDX SBOM per deployable artifact;
 - Grype JSON or normalized local vulnerability data from the same artifact;
 - source roots for code reachability;
-- Terraform plan JSON and/or rendered Kubernetes manifests for workload, network, and IAM context.
+- Terraform plan JSON and/or rendered Kubernetes manifests for workload, network, and IAM context;
+- optional CI artifact manifest when SBOM metadata does not preserve image digests or registry refs.
 
 The scanner can run without Terraform or Kubernetes manifests, but that is a degraded mode. Without deployment context it cannot prove public exposure, lateral network paths, private isolation, workload IAM/RBAC, or artifact-to-infrastructure mapping.
 
@@ -26,7 +27,8 @@ Outputs:
 - source-analysis coverage reports;
 - Terraform multi-cloud coverage reports;
 - rendered Kubernetes manifest coverage reports;
-- SBOM/source/Terraform mapping reports.
+- SBOM/source/Terraform mapping reports;
+- release evidence readiness reports.
 
 Package version: **v1.0.0**.
 License: **GNU GPL v3.0 or later**.
@@ -38,11 +40,12 @@ License: **GNU GPL v3.0 or later**.
 3. Rendered Kubernetes manifests add workload, Service, Ingress, and RBAC context for Kubernetes deployments.
 4. Semgrep, CodeQL/SARIF, govulncheck, or native source evidence is the production path for code reachability. Built-in source rules are fallback evidence.
 5. Source-only or HCL-static analysis is for early feedback, not release confidence.
-6. Weak evidence never suppresses a vulnerability or marks it `not_affected`.
-7. Every finding has a unified effective exposure path: asset -> network path -> identity -> reachable code/package -> vulnerability -> score.
-8. Every score includes rationale and every artifact match is visible in `--mapping-out`.
-9. Every Terraform resource in a valid plan is represented in `--terraform-coverage-out`; unsupported resources are reported as visibility gaps.
-10. This project does not provide live cloud inventory, posture management, ticketing, dashboards, secrets scanning, malware scanning, or DSPM.
+6. Critical findings need external analyzer coverage for the risky package set in production scans.
+7. Weak evidence never suppresses a vulnerability or marks it `not_affected`.
+8. Every finding has a unified effective exposure path: asset -> network path -> identity -> reachable code/package -> vulnerability -> score.
+9. Every score includes rationale and every artifact match is visible in `--mapping-out`.
+10. Every Terraform resource in a valid plan is represented in `--terraform-coverage-out`; unsupported resources are reported as visibility gaps.
+11. This project does not provide live cloud inventory, posture management, ticketing, dashboards, secrets scanning, malware scanning, or DSPM.
 
 ## Install
 
@@ -89,6 +92,8 @@ Recommended practice:
 - use filesystem/source SBOMs for early IDE or PR feedback;
 - preserve artifact metadata such as image reference, digest, owner, and environment.
 
+If the SBOM generator drops build metadata, pass a CI artifact manifest with `--artifact-manifest`. The manifest can map artifact name, SBOM path, image ref, image digest, registry ref, Git SHA, Helm value image, Kustomize image, and Terraform image output into one file.
+
 See `docs/sbom_generation.md`.
 
 ## Quick start
@@ -97,6 +102,16 @@ For release gates, generate vulnerability matches from the same SBOM with Grype:
 
 ```bash
 grype sbom:sboms/payments-api.cdx.json -o json > vulns/payments-api.grype.json
+```
+
+Generate an external source-evidence workflow for CI before the production scan:
+
+```bash
+reachability-advisor source-evidence-plan \
+  --source-root . \
+  --language javascript \
+  --out-md reachability/source-evidence-plan.md \
+  --out-json reachability/source-evidence-plan.json
 ```
 
 For source-only validation, Grype can also emit both sides of the handoff from the same directory scan:
@@ -126,6 +141,7 @@ PYTHONPATH=src python -m reachability_advisor scan \
   --kubernetes-coverage-out outputs/kubernetes-coverage.json \
   --source-coverage-out outputs/source-coverage.json \
   --mapping-out outputs/mapping.json \
+  --readiness-out outputs/readiness.json \
   --source-root payments-api=samples/source/payments-api \
   --source-root notifier=samples/source/notifier \
   --source-root orders-api=samples/source/orders-api \
@@ -148,11 +164,11 @@ Expected top signals:
 payments-api / log4j-core: urgent
   AWS ECS + public SG/API context + sensitive IAM + attacker-controlled source path
 
-orders-api / requests: urgent
-  Azure Container App + external ingress + contributor role + attacker-controlled source path
+orders-api / requests: high
+  Azure Container App + inferred public deployment context + contributor role + attacker-controlled source path; low-confidence path evidence caps it below urgent
 
-audit-api / jackson-databind: urgent
-  GCP Cloud Run + allUsers invoker + secret accessor + attacker-controlled source path
+audit-api / jackson-databind: high
+  GCP Cloud Run + allUsers invoker + secret accessor + attacker-controlled source path; unresolved IAM scope caps it below urgent
 
 inventory-api / requests: high
   AWS ECS + lateral path through the public API security group + attacker-controlled source path
@@ -426,12 +442,13 @@ The `ide/vscode` directory contains a VS Code extension wrapper. It discovers lo
 | Vulnerability input | Grype JSON, local JSON, and small OSV-Scanner-style JSON |
 | Source reachability | JVM, Node, Python, and Go rules with same-function input/sink evidence, bounded handler-to-sink paths, CycloneDX dependency-graph evidence, and package-manager manifest evidence for Maven/Gradle, npm/pnpm/Yarn, Poetry/requirements, and Go modules |
 | Custom source rules | `--reachability-rules` JSON and `export-semgrep-rules` starter YAML |
-| External source evidence | `--source-evidence-in` for Reachability Advisor JSON, Semgrep JSON, SARIF/CodeQL, and govulncheck JSONL, with selector diagnostics and production gates for artifact-only or unscoped evidence |
-| Terraform context | Primary deployment context. AWS, Azure, GCP, and Kubernetes plan/source support with coverage reporting, artifact matching, network graphing, route/private-endpoint/firewall-tag hints, IAM capability records, AWS `sts:AssumeRole` propagation, and IAM impact classification |
+| External source evidence | `--source-evidence-in` for Reachability Advisor JSON, Semgrep JSON, SARIF/CodeQL, and govulncheck JSONL. `source-evidence-plan` has maintained profiles for JavaScript/TypeScript, Java/Kotlin, Python, and Go. Gates reject artifact-only, unscoped, or critical-package coverage gaps |
+| Terraform context | Primary deployment context. AWS, Azure, GCP, and Kubernetes plan/source support with coverage reporting, artifact matching, network graphing, typed path blockers, route/private-endpoint/firewall-tag hints, IAM allow/deny capability records, AWS `sts:AssumeRole` propagation, provider-specific effective exposure decisions, and IAM impact classification |
 | Kubernetes manifests | Rendered YAML/JSON workload, Service, Ingress, RBAC, and NetworkPolicy context with artifact matching and coverage reporting |
+| Artifact manifest | `--artifact-manifest` for CI-supplied image digests, registry refs, Git SHA, SBOM paths, Helm values images, Kustomize images, and Terraform image outputs |
 | Context JSON | Explicit override/enrichment keyed by artifact name |
-| Outputs | JSON with remediation groups and raw findings, unified effective exposure graph JSON, baseline JSON, PR delta JSON/Markdown, SARIF, diagnostics JSON, Markdown, interactive HTML, annotations, Terraform coverage JSON, Kubernetes coverage JSON, source coverage JSON, mapping JSON |
-| CI quality gates | Built-in scan gates for artifact match coverage, strong artifact identity coverage, mapping warnings, source rule coverage, external evidence presence, and external evidence selector usability |
+| Outputs | JSON with remediation groups and raw findings, unified effective exposure graph JSON, baseline JSON, PR delta JSON/Markdown, SARIF, diagnostics JSON, Markdown, interactive HTML, annotations, Terraform coverage JSON, Kubernetes coverage JSON, source coverage JSON, mapping JSON, readiness JSON |
+| CI quality gates | Built-in scan gates for artifact match coverage, strong artifact identity coverage, mapping warnings, source rule coverage, external evidence presence, external selector usability, critical external coverage, weak workload matches, low-confidence network/IAM evidence, and readiness blockers |
 
 ## Import/export contract
 
@@ -445,9 +462,10 @@ It verifies:
 
 - vulnerability imports: local JSON, Grype `matches[]`, and OSV-Scanner-style JSON;
 - source-evidence imports: native Reachability Advisor JSON, Reachability Advisor findings JSON, Semgrep JSON/dataflow traces, SARIF/CodeQL code flows, and govulncheck JSONL;
-- deployment/context inputs: Terraform plan JSON, a synthetic no-cloud Terraform plan E2E fixture, Terraform source paths through `hcl-audit`, rendered Kubernetes YAML/JSON, context JSON, and artifact aliases;
+- deployment/context inputs: Terraform plan JSON, a synthetic no-cloud Terraform plan E2E fixture, Terraform source paths through `hcl-audit`, rendered Kubernetes YAML/JSON, context JSON, artifact aliases, and CI artifact manifests;
 - configuration inputs: custom reachability rules and runtime policy JSON;
-- exports: findings JSON, remediation groups, evidence graph JSON, baseline JSON, PR delta JSON/Markdown, SARIF, diagnostics JSON, PR summary Markdown, GitHub annotations, self-contained HTML graph, source coverage, Terraform coverage, Kubernetes coverage, mapping reports, HCL audit JSON/Markdown, SBOM plan JSON/Markdown, scoring benchmark JSON, complex benchmark JSON/Markdown, Semgrep starter rules, fixture validation, fixture run reports, and single-finding explanations.
+- exports: findings JSON, remediation groups, evidence graph JSON, baseline JSON, PR delta JSON/Markdown, SARIF, diagnostics JSON, PR summary Markdown, GitHub annotations, self-contained HTML graph, source coverage, Terraform coverage, Kubernetes coverage, mapping reports, readiness reports, HCL audit JSON/Markdown, SBOM plan JSON/Markdown, scoring benchmark JSON, complex benchmark JSON/Markdown, Semgrep starter rules, fixture validation, fixture run reports, and single-finding explanations.
+- target-state documentation: [docs/maturity_targets.md](docs/maturity_targets.md).
 
 ## Run quality gates
 
@@ -464,11 +482,11 @@ make package
 Current validation snapshot:
 
 ```text
-Ran 423 tests: OK
+Ran 469 tests: OK
 Coverage: 93%
 Coverage gate: 93% passed
 Fixture packs: 9 passed, 0 failed
-Release import/export contract: 49 checks passed
+Release import/export contract: 51 checks passed
 Package build: sdist and wheel
 ```
 

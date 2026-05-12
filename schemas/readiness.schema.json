@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/reachability-advisor/readiness.schema.json",
+  "title": "Reachability Advisor Release Evidence Readiness Report",
+  "type": "object",
+  "required": ["schema_version", "status", "summary", "blockers", "warnings", "artifacts"],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {"type": "string"},
+    "status": {"enum": ["ready", "warning", "blocked"]},
+    "summary": {
+      "type": "object",
+      "required": ["blockers", "warnings", "artifacts", "critical_external_evidence_coverage"],
+      "additionalProperties": true,
+      "properties": {
+        "blockers": {"type": "integer", "minimum": 0},
+        "warnings": {"type": "integer", "minimum": 0},
+        "artifacts": {"type": "integer", "minimum": 0},
+        "critical_external_evidence_coverage": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "blockers": {"type": "array", "items": {"$ref": "#/$defs/message"}},
+    "warnings": {"type": "array", "items": {"$ref": "#/$defs/message"}},
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["artifact", "terraform_matched", "kubernetes_matched", "missing"],
+        "additionalProperties": true,
+        "properties": {
+          "artifact": {"type": "string"},
+          "terraform_matched": {"type": "boolean"},
+          "kubernetes_matched": {"type": "boolean"},
+          "missing": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "message": {
+      "type": "object",
+      "required": ["kind", "message"],
+      "additionalProperties": true,
+      "properties": {
+        "artifact": {"type": "string"},
+        "kind": {"type": "string"},
+        "message": {"type": "string"}
+      }
+    }
+  }
+}

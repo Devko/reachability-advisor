@@ -159,6 +159,7 @@ def write_diagnostics(findings: list[Finding], path: str | Path) -> None:
                     "source_locations": [location.to_json() for location in finding.source.locations],
                     "network_paths": finding.context.network_paths,
                     "effective_access": finding.context.effective_access,
+                    "effective_exposure": finding.context.effective_exposure,
                     "context_evidence": finding.context.evidence[:12],
                 },
             }

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .artifact_manifest import ArtifactManifestError, apply_artifact_manifests
 from .baseline import (
     baseline_as_findings_json,
     create_baseline_from_findings,
@@ -18,6 +19,7 @@ from .baseline import (
 )
 from .compare import compare_findings, delta_fails, pr_delta, write_delta, write_delta_markdown
 from .context import ContextError, load_context_file
+from .effective_exposure import enrich_context_map_with_effective_exposure
 from .evidence_graph import build_evidence_graph
 from .fixtures import (
     FixtureError,
@@ -51,6 +53,7 @@ from .outputs import (
     write_sarif,
 )
 from .policy import apply_exceptions, load_runtime_policy
+from .readiness import load_release_readiness_inputs, release_readiness_report
 from .sbom import SbomError, load_sboms
 from .sbom_plan import recommend_sbom_commands, render_sbom_plan_markdown, write_sbom_plan_json
 from .scoring import generate_findings_with_source_report
@@ -60,6 +63,11 @@ from .source import (
     load_reachability_rules,
     parse_source_roots,
     semgrep_rules_yaml,
+)
+from .source_evidence_plan import (
+    recommend_source_evidence_commands,
+    render_source_evidence_plan_markdown,
+    write_source_evidence_plan_json,
 )
 from .terraform import TerraformContextError, analyze_terraform_plan, empty_coverage_report
 from .validators import has_errors, issues_report, validate_paths
@@ -92,6 +100,7 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--source-coverage-out", help="Write source-analysis coverage and evidence report JSON.")
     scan.add_argument("--evidence-graph-out", help="Write structured asset/source/network/IAM/finding graph JSON.")
     scan.add_argument("--artifact-alias", action="append", default=[], help="Add artifact mapping alias: artifact=reference. Repeatable; use when SBOM metadata lacks image refs.")
+    scan.add_argument("--artifact-manifest", action="append", default=[], help="CI artifact identity manifest JSON with image refs, digests, Git SHA, SBOM path, and renderer metadata. Repeatable.")
     scan.add_argument("--reachability-rules", help="Custom source reachability rules JSON.")
     scan.add_argument("--source-evidence-in", action="append", default=[], help="External source evidence JSON, Semgrep JSON, SARIF, or govulncheck JSONL. Repeatable.")
     scan.add_argument(
@@ -106,6 +115,8 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--min-source-rule-coverage", type=float, help="Exit 10 when source package-rule coverage is below this 0..1 ratio.")
     scan.add_argument("--require-external-source-evidence", action="store_true", help="Exit 10 when no external source analyzer evidence was imported.")
     scan.add_argument("--min-external-evidence-usable-ratio", type=float, help="Exit 10 when imported external source evidence selector usability is below this 0..1 ratio.")
+    scan.add_argument("--min-critical-external-source-coverage", type=float, help="Exit 10 when critical finding coverage by external source evidence is below this 0..1 ratio. Production defaults to 1.0.")
+    scan.add_argument("--require-strong-source-for-critical", action="store_true", help="Exit 10 when critical findings only have dependency-level or weaker source evidence. Production profile enables this gate.")
     scan.add_argument("--policy", help="Policy JSON with exceptions and fail tier.")
     scan.add_argument("--out", help="Findings JSON output path.")
     scan.add_argument("--baseline-out", help="Write a stable baseline artifact for future PR delta gates.")
@@ -114,6 +125,7 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--markdown-out", help="Developer PR summary Markdown output path.")
     scan.add_argument("--html-out", help="Self-contained interactive HTML graph report output path.")
     scan.add_argument("--annotations-out", help="GitHub Actions workflow-command annotations output path.")
+    scan.add_argument("--readiness-out", help="Write release evidence readiness report JSON.")
     scan.add_argument("--limit", type=int, default=20, help="Maximum rows printed to stdout.")
     scan.add_argument("--no-table", action="store_true", help="Do not print stdout table.")
     scan.add_argument("--fail-on-tier", choices=[tier.value for tier in Tier], help="Exit 10 when any non-excepted finding reaches this tier.")
@@ -130,6 +142,7 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--policy")
     validate.add_argument("--reachability-rules")
     validate.add_argument("--source-evidence-in", action="append", default=[])
+    validate.add_argument("--artifact-manifest", action="append", default=[])
     validate.add_argument("--json-out")
 
     explain = sub.add_parser("explain", help="Explain one finding from findings JSON.")
@@ -151,6 +164,15 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--only-new-or-worsened", action="store_true", help="Emit only new and worsened findings in JSON and Markdown output.")
     compare.add_argument("--fail-on-new-tier", choices=[tier.value for tier in Tier])
 
+    readiness = sub.add_parser("evidence-profile", help="Evaluate release-gate evidence profile from scanner reports.")
+    readiness.add_argument("--mapping", required=True, help="Mapping report JSON from --mapping-out.")
+    readiness.add_argument("--source-coverage", required=True, help="Source coverage JSON from --source-coverage-out.")
+    readiness.add_argument("--terraform-coverage", help="Terraform coverage JSON from --terraform-coverage-out.")
+    readiness.add_argument("--kubernetes-coverage", help="Kubernetes coverage JSON from --kubernetes-coverage-out.")
+    readiness.add_argument("--findings", help="Findings JSON from --out.")
+    readiness.add_argument("--out", help="Write readiness JSON.")
+    readiness.add_argument("--fail-on-blockers", action="store_true", help="Exit 10 when readiness blockers are present.")
+
     init_policy = sub.add_parser("init-policy", help="Write an example runtime policy JSON.")
     init_policy.add_argument("--out", required=True)
 
@@ -162,6 +184,14 @@ def build_parser() -> argparse.ArgumentParser:
     sbom_plan.add_argument("--output-dir", default="sboms", help="Directory to place generated SBOMs in examples.")
     sbom_plan.add_argument("--out-json", help="Write command plan JSON.")
     sbom_plan.add_argument("--out-md", help="Write command plan Markdown.")
+
+    source_plan = sub.add_parser("source-evidence-plan", help="Print recommended Semgrep/CodeQL/govulncheck source evidence commands.")
+    source_plan.add_argument("--source-root", default=".", help="Source root used in generated analyzer commands.")
+    source_plan.add_argument("--output-dir", default="reachability", help="Directory for generated source-evidence artifacts.")
+    source_plan.add_argument("--language", choices=["javascript", "typescript", "java", "python", "go", "golang"], help="Primary language for CodeQL or govulncheck command selection. Omit for generic Semgrep-only output.")
+    source_plan.add_argument("--package-manager", choices=["npm", "pnpm", "yarn", "maven", "gradle", "pypi", "poetry", "pip", "go", "golang"], help="Package manager/ecosystem hint.")
+    source_plan.add_argument("--out-json", help="Write command plan JSON.")
+    source_plan.add_argument("--out-md", help="Write command plan Markdown.")
 
     hcl_audit = sub.add_parser("hcl-audit", help="Audit Terraform .tf source coverage without running Terraform.")
     hcl_audit.add_argument("--path", required=True, help="Terraform source directory or .tf file.")
@@ -285,6 +315,7 @@ def run_scan(args: argparse.Namespace) -> int:
             args.policy,
             args.reachability_rules,
             args.source_evidence_in,
+            args.artifact_manifest,
         )
         for issue in issues:
             print(f"{issue.severity}: {issue.target}: {issue.message}", file=sys.stderr)
@@ -292,6 +323,11 @@ def run_scan(args: argparse.Namespace) -> int:
             raise UserFacingError("input validation failed", 2)
     runtime_policy = load_runtime_policy(args.policy)
     sboms = load_sboms(args.sbom)
+    artifact_manifest_report = (
+        apply_artifact_manifests(sboms, args.artifact_manifest)
+        if args.artifact_manifest
+        else {"schema_version": "1.0", "manifests": [], "entries": 0, "applied": 0, "unmatched": []}
+    )
     _apply_artifact_aliases(sboms, args.artifact_alias)
     vulnerabilities = load_vulnerabilities(args.vulns)
     source_roots = parse_source_roots(args.source_root)
@@ -324,6 +360,7 @@ def run_scan(args: argparse.Namespace) -> int:
         )
         merge_context_maps(contexts, kubernetes_analysis.contexts)
         kubernetes_coverage = kubernetes_analysis.coverage
+    contexts = enrich_context_map_with_effective_exposure(contexts)
     external_source_evidence = load_external_source_evidence(args.source_evidence_in)
     findings, source_coverage = generate_findings_with_source_report(
         sboms,
@@ -336,6 +373,8 @@ def run_scan(args: argparse.Namespace) -> int:
     )
     findings = apply_exceptions(findings, runtime_policy)
     mapping_report = build_mapping_report(sboms, source_roots, terraform_coverage)
+    if args.artifact_manifest:
+        mapping_report["artifact_manifest"] = artifact_manifest_report
     metadata = {
         "sbom_count": len(sboms),
         "vulnerability_records": len(vulnerabilities),
@@ -345,6 +384,7 @@ def run_scan(args: argparse.Namespace) -> int:
         "source_files": source_coverage.get("summary", {}).get("files_scanned", 0),
         "external_source_evidence_records": source_coverage.get("summary", {}).get("external_evidence_records", 0),
         "analysis_profile": args.analysis_profile,
+        "artifact_manifest_entries": artifact_manifest_report.get("entries", 0),
     }
     _annotate_analysis_profile(args, source_coverage, terraform_coverage, kubernetes_coverage)
     if args.out:
@@ -382,6 +422,17 @@ def run_scan(args: argparse.Namespace) -> int:
         out = Path(args.mapping_out)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(mapping_report, indent=2), encoding="utf-8")
+    if args.readiness_out:
+        readiness = release_readiness_report(
+            mapping_report=mapping_report,
+            source_coverage=source_coverage,
+            terraform_coverage=terraform_coverage,
+            kubernetes_coverage=kubernetes_coverage,
+            findings=findings,
+        )
+        out = Path(args.readiness_out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(readiness, indent=2), encoding="utf-8")
     if not args.no_table:
         print(render_table(findings, args.limit))
     quality_failures = _quality_gate_failures(args, mapping_report, source_coverage)
@@ -425,12 +476,17 @@ def _quality_gate_failures(args: argparse.Namespace, mapping_report: dict[str, A
     production = getattr(args, "analysis_profile", "advisory") == "production"
     source_rule_minimum = _profile_minimum(args.min_source_rule_coverage, 0.8 if production else None)
     external_usable_minimum = _profile_minimum(args.min_external_evidence_usable_ratio, 0.8 if production else None)
+    critical_external_minimum = _profile_minimum(args.min_critical_external_source_coverage, 1.0 if production else None)
     ratio_gate("source rule coverage", source_summary.get("source_rule_coverage"), source_rule_minimum)
     ratio_gate("external source evidence usable ratio", source_summary.get("external_evidence_usable_ratio"), external_usable_minimum)
+    ratio_gate("critical external source evidence coverage", source_summary.get("critical_external_evidence_coverage"), critical_external_minimum)
     if args.fail_on_mapping_warnings and int(mapping_summary.get("mapping_warnings_count") or 0) > 0:
         failures.append(f"mapping report contains {mapping_summary.get('mapping_warnings_count')} warning(s)")
     if (args.require_external_source_evidence or production) and int(source_summary.get("external_evidence_records") or 0) == 0:
         failures.append("no external source analyzer evidence was imported")
+    weak_critical = int(source_summary.get("critical_findings_with_dependency_only_source") or 0)
+    if (args.require_strong_source_for_critical or production) and weak_critical > 0:
+        failures.append(f"{weak_critical} critical finding(s) only have dependency-level or weaker source evidence")
     if production and not args.terraform_plan and not args.kubernetes_manifest:
         failures.append("production profile requires rendered deployment evidence: provide --terraform-plan or --kubernetes-manifest")
     if production and args.terraform_source and not args.terraform_plan:
@@ -491,6 +547,7 @@ def run_validate(args: argparse.Namespace) -> int:
         args.policy,
         args.reachability_rules,
         args.source_evidence_in,
+        args.artifact_manifest,
     )
     report = issues_report(issues)
     if args.json_out:
@@ -500,6 +557,26 @@ def run_validate(args: argparse.Namespace) -> int:
     else:
         print(json.dumps(report, indent=2))
     return 2 if has_errors(issues) else 0
+
+
+def run_evidence_profile(args: argparse.Namespace) -> int:
+    report = load_release_readiness_inputs(
+        mapping=args.mapping,
+        source_coverage=args.source_coverage,
+        terraform_coverage=args.terraform_coverage,
+        kubernetes_coverage=args.kubernetes_coverage,
+        findings=args.findings,
+    )
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    else:
+        print(json.dumps(report, indent=2))
+    if args.fail_on_blockers and report.get("status") == "blocked":
+        print(f"Reachability Advisor evidence profile failed: {report['summary']['blockers']} blocker(s).", file=sys.stderr)
+        return 10
+    return 0
 
 
 def run_explain(args: argparse.Namespace) -> int:
@@ -545,6 +622,25 @@ def run_sbom_plan(args: argparse.Namespace) -> int:
     markdown = render_sbom_plan_markdown(args.artifact, commands)
     if args.out_json:
         write_sbom_plan_json(args.out_json, args.artifact, commands)
+    if args.out_md:
+        out = Path(args.out_md)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(markdown, encoding="utf-8")
+    if not args.out_json and not args.out_md:
+        print(markdown)
+    return 0
+
+
+def run_source_evidence_plan(args: argparse.Namespace) -> int:
+    commands = recommend_source_evidence_commands(
+        source_root=args.source_root,
+        output_dir=args.output_dir,
+        language=args.language,
+        package_manager=args.package_manager,
+    )
+    markdown = render_source_evidence_plan_markdown(commands)
+    if args.out_json:
+        write_source_evidence_plan_json(args.out_json, commands)
     if args.out_md:
         out = Path(args.out_md)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -615,10 +711,14 @@ def main(argv: list[str] | None = None) -> int:
             return run_explain(args)
         if args.command == "compare":
             return run_compare(args)
+        if args.command == "evidence-profile":
+            return run_evidence_profile(args)
         if args.command == "init-policy":
             return run_init_policy(args)
         if args.command == "sbom-plan":
             return run_sbom_plan(args)
+        if args.command == "source-evidence-plan":
+            return run_source_evidence_plan(args)
         if args.command == "fixtures":
             return run_fixtures(args)
         if args.command == "hcl-audit":
@@ -630,7 +730,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         parser.error("unknown command")
         return 2
-    except (UserFacingError, SbomError, VulnerabilityError, ContextError, FixtureError, HclAuditError, KubernetesManifestError, ValueError) as exc:
+    except (UserFacingError, SbomError, VulnerabilityError, ContextError, FixtureError, HclAuditError, KubernetesManifestError, ArtifactManifestError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return exc.exit_code if isinstance(exc, UserFacingError) else 2
 
