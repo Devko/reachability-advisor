@@ -7,7 +7,9 @@ Release-gate inputs:
 - CycloneDX SBOM JSON;
 - Grype JSON or normalized vulnerability JSON;
 - source-root mappings;
-- Terraform plan JSON and/or rendered Kubernetes manifests.
+- external source evidence from Semgrep, CodeQL/SARIF, govulncheck, or native JSON;
+- Terraform plan JSON and/or rendered Kubernetes manifests;
+- CI artifact manifest when SBOM metadata lacks image digest or registry reference.
 
 Context JSON, Terraform source mode, and custom source rules are enrichment or fallback inputs.
 
@@ -173,6 +175,37 @@ Supported imported formats:
 - govulncheck JSONL for Go call-stack evidence.
 
 For CodeQL, generic query ids such as `js/request-forgery` are kept as matched symbols, not treated as vulnerability selectors. Rule ids are used as vulnerability selectors only when they look like vulnerability ids such as `CVE-*`, `GHSA-*`, `GO-*`, `OSV-*`, or `PYSEC-*`.
+
+## Source evidence pack JSON
+
+Generated with `source-evidence-pack --output-dir`.
+
+```json
+{
+  "schema_version": "1.0",
+  "kind": "reachability-advisor-source-evidence-pack",
+  "version": "2026-05-12",
+  "profile": {
+    "name": "javascript-typescript",
+    "ecosystems": ["npm", "pnpm", "yarn"],
+    "tools": ["semgrep", "codeql"],
+    "critical_package_families": ["http clients", "template engines"]
+  },
+  "files": [
+    "reachability/source-evidence-pack/semgrep-reachability.yml",
+    "reachability/source-evidence-pack/codeql/reachability-suite.qls",
+    "reachability/source-evidence-pack/govulncheck/reachability-govulncheck.json"
+  ],
+  "release_gate": {
+    "requires_external_evidence": true,
+    "critical_external_evidence_coverage": 1.0,
+    "rejects_dependency_only_critical_source": true,
+    "selector_contract": "artifact plus package URL, component, or vulnerability selector"
+  }
+}
+```
+
+The pack is local project scaffolding. It writes maintained Semgrep metadata rules, a CodeQL suite that points to the upstream security queries, govulncheck profile metadata, and a manifest that states the release-gate evidence contract.
 
 ## Source coverage JSON
 
@@ -431,6 +464,18 @@ Generated with `--kubernetes-coverage-out` when `--kubernetes-manifest` is suppl
       "limited": 1
     }
   },
+  "artifact_matches": [
+    {
+      "artifact": "payments-api",
+      "resource": "kubernetes_deployment.payments-api",
+      "type": "kubernetes_deployment",
+      "provider": "kubernetes",
+      "image": "ghcr.io/example/payments-api:1.8.2",
+      "match_method": "exact-reference",
+      "match_score": 100,
+      "match_confidence": "high"
+    }
+  ],
   "resources": [],
   "unmatched_artifacts": []
 }
@@ -449,8 +494,15 @@ Generated with `--mapping-out`.
     "artifact_count": 1,
     "artifacts_with_source_roots": 1,
     "source_root_coverage": 1.0,
+    "artifacts_with_deployment_matches": 1,
+    "deployment_match_coverage": 1.0,
     "artifacts_with_terraform_matches": 1,
+    "terraform_match_coverage": 1.0,
+    "artifacts_with_kubernetes_matches": 0,
+    "kubernetes_match_coverage": 0.0,
     "artifact_match_coverage": 1.0,
+    "artifacts_with_strong_deployment_matches": 1,
+    "strong_deployment_match_coverage": 1.0,
     "artifacts_with_strong_terraform_matches": 1,
     "strong_terraform_match_coverage": 1.0,
     "artifacts_with_strong_identity": 1,
@@ -475,14 +527,22 @@ Generated with `--mapping-out`.
       "strong_artifact_identity": true,
       "source_root": "services/payments-api",
       "source_root_exists": true,
+      "deployment_matched": true,
+      "strong_deployment_match": true,
+      "deployment_matches": [],
       "terraform_matched": true,
       "strong_terraform_match": true,
       "terraform_matches": [],
+      "kubernetes_matched": false,
+      "strong_kubernetes_match": false,
+      "kubernetes_matches": [],
       "mapping_warnings": []
     }
   ]
 }
 ```
+
+`artifact_match_coverage` is deployment coverage: an artifact can be matched through Terraform plan/source evidence or rendered Kubernetes manifest evidence. Provider-specific ratios stay available as `terraform_match_coverage` and `kubernetes_match_coverage`.
 
 Schema draft: `schemas/mapping-report.schema.json`. The coverage ratios are designed for CI gates: artifact deployment mapping, strong image/digest identity, source-root presence, and mapping warning count.
 
@@ -512,6 +572,59 @@ Passed with `--artifact-manifest`. Use it when the build knows the image digest 
 `signature` is recorded as a marker only. Reachability Advisor does not cryptographically verify it.
 
 Schema draft: `schemas/artifact-manifest.schema.json`.
+
+Generate and validate a manifest in CI:
+
+```bash
+reachability-advisor artifact-manifest init \
+  --artifact payments-api \
+  --sbom sboms/payments-api.cdx.json \
+  --image ghcr.io/example/payments-api:1.8.2 \
+  --digest sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  --registry-ref ghcr.io/example/payments-api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  --git-sha "$GITHUB_SHA" \
+  --out reachability/artifacts.json
+
+reachability-advisor artifact-manifest validate \
+  --manifest reachability/artifacts.json \
+  --out reachability/artifact-manifest-validation.json \
+  --fail-on-warning
+```
+
+Validation reports whether each artifact has a strong image reference or digest, an SBOM path, Git identity, and a signature marker.
+
+## Rendered IaC plan JSON
+
+Generated with `rendered-iac-plan --out-json`.
+
+```json
+{
+  "schema_version": "1.0",
+  "kind": "reachability-advisor-rendered-iac-plan",
+  "commands": [
+    {
+      "tool": "shell",
+      "purpose": "create the local directory used for rendered evidence",
+      "command": "mkdir -p reachability",
+      "output": "reachability"
+    },
+    {
+      "tool": "terraform",
+      "purpose": "create a Terraform plan from the deployable module",
+      "command": "terraform -chdir=infra plan -out=tfplan.binary",
+      "output": "infra/tfplan.binary"
+    },
+    {
+      "tool": "terraform",
+      "purpose": "render Terraform plan JSON for release-gate context",
+      "command": "terraform -chdir=infra show -json tfplan.binary > reachability/tfplan.json",
+      "output": "reachability/tfplan.json"
+    }
+  ]
+}
+```
+
+This is a helper artifact, not scan evidence. It records the exact Terraform, Helm, and Kustomize render commands a pipeline should run before `scan`.
 
 ## Readiness report JSON
 

@@ -422,6 +422,34 @@ class SourceAndScoringEdgeTests(unittest.TestCase):
         self.assertLess(finding.score, 65)
         self.assertIn("import-only source evidence", " ".join(finding.rationale))
 
+    def test_unknown_context_scores_above_confirmed_internal_no_role(self) -> None:
+        sbom_like = type("SbomLike", (), {"artifact": Artifact(name="app")})()
+        component = Component(name="http-lib", version="1.0.0", purl="pkg:npm/http-lib@1.0.0")
+        vulnerability = VulnerabilityRecord(id="GHSA-HTTP", package_name="http-lib", cvss=7.5)
+        source = SourceEvidence(reachability=Reachability.ATTACKER_CONTROLLED, confidence=Confidence.HIGH)
+
+        internal = score_finding(
+            sbom_like,
+            component,
+            vulnerability,
+            source,
+            ContextEvidence(exposure="internal", privilege="none", confidence=Confidence.MEDIUM),
+            ScorePolicy(),
+        )
+        unknown = score_finding(
+            sbom_like,
+            component,
+            vulnerability,
+            source,
+            ContextEvidence(exposure="unknown", privilege="unknown", confidence=Confidence.LOW),
+            ScorePolicy(),
+        )
+
+        self.assertGreater(unknown.score, internal.score)
+        self.assertLess(unknown.score, 85)
+        self.assertIn("exposure unknown contributes", " ".join(unknown.rationale))
+        self.assertIn("privilege unknown", " ".join(unknown.rationale))
+
     def test_high_source_confidence_is_not_downgraded_to_low(self) -> None:
         sbom_like = type("SbomLike", (), {"artifact": Artifact(name="app")})()
         finding = score_finding(

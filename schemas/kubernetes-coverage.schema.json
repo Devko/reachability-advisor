@@ -24,6 +24,26 @@
         "privilege_counts": {"type": "object"}
       }
     },
+    "artifact_matches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["artifact", "resource", "provider", "match_method", "match_score", "match_confidence"],
+        "properties": {
+          "artifact": {"type": "string"},
+          "resource": {"type": "string"},
+          "type": {"type": "string"},
+          "provider": {"type": "string"},
+          "image": {"type": "string"},
+          "match_method": {"type": "string"},
+          "match_score": {"type": "integer", "minimum": 0, "maximum": 100},
+          "match_confidence": {"type": "string"},
+          "artifact_identity": {"type": "object"},
+          "match_proof": {"type": "object"}
+        },
+        "additionalProperties": true
+      }
+    },
     "resources": {
       "type": "array",
       "items": {

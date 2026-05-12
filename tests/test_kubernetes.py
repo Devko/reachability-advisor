@@ -173,6 +173,9 @@ subjects:
         self.assertEqual(analysis.contexts["worker"].exposure, "private")
         self.assertEqual(analysis.contexts["worker"].privilege, "limited")
         self.assertEqual(analysis.coverage["summary"]["artifacts_matched"], 3)
+        self.assertEqual(len(analysis.coverage["artifact_matches"]), 3)
+        self.assertEqual(analysis.coverage["artifact_matches"][0]["provider"], "kubernetes")
+        self.assertIn("match_proof", analysis.coverage["artifact_matches"][0])
 
     def test_network_policy_deny_all_ingress_overrides_service_exposure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -499,6 +499,73 @@ class CliTests(unittest.TestCase):
             self.assertEqual(data["schema_version"], "1.0")
             self.assertEqual(data["fail_on_tier"], "high")
 
+    def test_artifact_manifest_source_pack_and_iac_plan_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            manifest = out / "artifact-manifest.json"
+            manifest_report = out / "artifact-manifest-report.json"
+            pack = out / "pack"
+            iac_plan = out / "iac-plan.json"
+
+            init_code = main([
+                "artifact-manifest",
+                "init",
+                "--artifact",
+                "api",
+                "--image",
+                "ghcr.io/acme/api:1",
+                "--digest",
+                "sha256:" + "a" * 64,
+                "--git-sha",
+                "abc123",
+                "--sbom",
+                "api.cdx.json",
+                "--signed",
+                "--out",
+                str(manifest),
+            ])
+            validate_code = main(["artifact-manifest", "validate", "--manifest", str(manifest), "--out", str(manifest_report), "--fail-on-warning"])
+            pack_code = main(["source-evidence-pack", "--output-dir", str(pack), "--language", "go"])
+            iac_code = main(["rendered-iac-plan", "--terraform-dir", "infra", "--helm-chart", "charts/app", "--kustomize-dir", "deploy/prod", "--out-json", str(iac_plan)])
+
+            self.assertEqual(init_code, 0)
+            self.assertEqual(validate_code, 0)
+            self.assertEqual(pack_code, 0)
+            self.assertEqual(iac_code, 0)
+            self.assertTrue((pack / "semgrep-reachability.yml").exists())
+            self.assertTrue((pack / "source-evidence-pack.json").exists())
+            self.assertEqual(json.loads(manifest_report.read_text(encoding="utf-8"))["status"], "ready")
+            commands = json.loads(iac_plan.read_text(encoding="utf-8"))["commands"]
+            self.assertTrue(any(command["tool"] == "terraform" for command in commands))
+            self.assertTrue(any(command["tool"] == "helm" for command in commands))
+
+    def test_composite_action_exposes_readiness_gates(self) -> None:
+        text = (ROOT / "action.yml").read_text(encoding="utf-8")
+
+        self.assertIn("require-release-ready:", text)
+        self.assertIn("fail-on-readiness-warnings:", text)
+        self.assertIn("--require-release-ready", text)
+        self.assertIn("--fail-on-readiness-warnings", text)
+
+    def test_scan_can_enforce_release_readiness_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            code = main([
+                "scan",
+                "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"),
+                "--vulns", str(ROOT / "samples/vulnerabilities.json"),
+                "--source-root", f"payments-api={ROOT / 'samples/source/payments-api'}",
+                "--mapping-out", str(out / "mapping.json"),
+                "--source-coverage-out", str(out / "source-coverage.json"),
+                "--readiness-out", str(out / "readiness.json"),
+                "--require-release-ready",
+                "--no-table",
+            ])
+
+            self.assertEqual(code, 10)
+            readiness = json.loads((out / "readiness.json").read_text(encoding="utf-8"))
+            self.assertEqual(readiness["status"], "blocked")
+
     def test_explain_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             findings_path = Path(tmp) / "findings.json"

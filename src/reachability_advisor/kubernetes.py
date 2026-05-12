@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .artifacts import ArtifactMatch, artifact_match_evidence
+from .artifacts import ArtifactMatch, artifact_identity_proof, artifact_match_evidence
 from .effective_exposure import evaluate_effective_exposure
 from .iam_capabilities import dedupe_iam_capabilities
 from .models import Artifact, Confidence, ContextEvidence
@@ -702,8 +702,9 @@ def _coverage_report(
     for context in contexts.values():
         exposure_counts[context.exposure] = exposure_counts.get(context.exposure, 0) + 1
         privilege_counts[context.privilege] = privilege_counts.get(context.privilege, 0) + 1
+    artifact_matches = _artifact_match_rows(resources, artifacts)
     requested = len(artifacts)
-    matched = len(contexts)
+    matched = len({str(match.get("artifact")) for match in artifact_matches})
     return {
         "schema_version": "1.0",
         "summary": {
@@ -721,6 +722,7 @@ def _coverage_report(
             "exposure_counts": dict(sorted(exposure_counts.items())),
             "privilege_counts": dict(sorted(privilege_counts.items())),
         },
+        "artifact_matches": artifact_matches,
         "resources": [
             {
                 "path": str(resource.path),
@@ -732,7 +734,7 @@ def _coverage_report(
             }
             for resource in resources
         ],
-        "unmatched_artifacts": [artifact.name for artifact in artifacts if artifact.name not in contexts],
+        "unmatched_artifacts": [artifact.name for artifact in artifacts if artifact.name not in {str(match.get("artifact")) for match in artifact_matches}],
         "notes": [
             "Rendered Kubernetes manifest evidence is static and local. It does not query a live cluster.",
             "LoadBalancer, NodePort, and public Ingress objects create public exposure. ClusterIP services create internal exposure.",
@@ -740,6 +742,30 @@ def _coverage_report(
             "RBAC privilege is derived from rendered Role, ClusterRole, RoleBinding, and ClusterRoleBinding objects.",
         ],
     }
+
+
+def _artifact_match_rows(resources: list[KubernetesResource], artifacts: list[Artifact]) -> list[dict[str, Any]]:
+    workloads = [resource for resource in resources if resource.kind in WORKLOAD_KINDS]
+    rows: list[dict[str, Any]] = []
+    for artifact in artifacts:
+        match = _best_workload_match(artifact, workloads)
+        if not match:
+            continue
+        rows.append(
+            {
+                "artifact": artifact.name,
+                "resource": match.resource.address,
+                "type": _kind_resource_type(match.resource.kind),
+                "provider": "kubernetes",
+                "image": match.target,
+                "match_method": match.match.method,
+                "match_score": match.match.score,
+                "match_confidence": match.match.confidence,
+                "artifact_identity": artifact_identity_proof(artifact),
+                "match_proof": match.match.to_json(),
+            }
+        )
+    return rows
 
 
 def _kind_resource_type(kind: str) -> str:

@@ -279,6 +279,77 @@ class EffectiveExposureEngineTests(unittest.TestCase):
 
         self.assertTrue(any(blocker["kind"] == "trust_policy_condition" for blocker in trust_record["identity"]["blockers"]))
 
+    def test_provider_evaluators_classify_route_firewall_and_ingress_auth_uncertainty(self) -> None:
+        aws = evaluate_effective_exposure(
+            "api",
+            ContextEvidence(
+                exposure="public",
+                confidence=Confidence.HIGH,
+                network_paths=[
+                    {
+                        "provider": "aws",
+                        "exposure": "public",
+                        "steps": ["aws_lb_listener.authenticate_oidc", "aws_network_acl.api", "aws_route_table.public"],
+                        "authenticate_oidc": True,
+                        "network_acl": [{"rule_action": "allow"}],
+                        "route_table": "aws_route_table.public",
+                    }
+                ],
+            ),
+        )[0]
+        azure = evaluate_effective_exposure(
+            "api",
+            ContextEvidence(
+                exposure="public",
+                confidence=Confidence.HIGH,
+                network_paths=[
+                    {
+                        "provider": "azure",
+                        "exposure": "public",
+                        "steps": ["azurerm_application_gateway.edge auth", "azurerm_network_security_rule.allow", "azurerm_route_table.app"],
+                    }
+                ],
+            ),
+        )[0]
+        gcp = evaluate_effective_exposure(
+            "api",
+            ContextEvidence(
+                exposure="public",
+                confidence=Confidence.HIGH,
+                network_paths=[
+                    {
+                        "provider": "gcp",
+                        "exposure": "public",
+                        "steps": ["google_compute_firewall.priority=1000", "google_compute_route.default"],
+                        "priority": 1000,
+                    }
+                ],
+            ),
+        )[0]
+        k8s = evaluate_effective_exposure(
+            "api",
+            ContextEvidence(
+                exposure="public",
+                confidence=Confidence.HIGH,
+                network_paths=[
+                    {
+                        "provider": "kubernetes",
+                        "exposure": "public",
+                        "steps": ["ingress nginx.ingress.kubernetes.io/auth-url", "securityContext"],
+                    }
+                ],
+            ),
+        )[0]
+
+        self.assertIn("elb_listener_auth", {blocker["kind"] for blocker in aws["network"]["blockers"]})
+        self.assertIn("nacl_rule_order_unknown", {blocker["kind"] for blocker in aws["network"]["blockers"]})
+        self.assertIn("application_gateway_auth", {blocker["kind"] for blocker in azure["network"]["blockers"]})
+        self.assertIn("nsg_priority_unknown", {blocker["kind"] for blocker in azure["network"]["blockers"]})
+        self.assertIn("firewall_priority_unknown", {blocker["kind"] for blocker in gcp["network"]["blockers"]})
+        self.assertIn("route_precedence_unknown", {blocker["kind"] for blocker in gcp["network"]["blockers"]})
+        self.assertIn("ingress_controller_auth", {blocker["kind"] for blocker in k8s["network"]["blockers"]})
+        self.assertIn("pod_security_boundary", {blocker["kind"] for blocker in k8s["network"]["blockers"]})
+
     def test_gcp_iap_and_cloud_armor_are_provider_constraints(self) -> None:
         context = ContextEvidence(
             exposure="public",

@@ -81,7 +81,7 @@ terraform show -json tfplan.binary > tfplan.json
 
 ## Scoring Behavior
 
-- Missing Terraform context is `unknown`; it is not isolation evidence.
+- Missing Terraform context is `unknown`; it is not isolation evidence. Scoring treats unknown network/IAM as uncertainty that ranks above confirmed internal/no-role context, but below confirmed public or sensitive/admin context, and caps it below `urgent` until stronger evidence proves the effective path.
 - Unsupported resource types become visibility gaps.
 - Helm and kubectl manifest wrappers are semantically classified as Kubernetes support resources, but still emit `opaque_manifest_wrapper` gaps because Terraform does not expose the rendered child workload graph. Pass rendered YAML/JSON through `--kubernetes-manifest` to analyze workload, Service, Ingress, and RBAC context.
 - Public exposure is only raised when a supported resource provides a clear public signal linked to the matched workload. A public resource elsewhere in the same provider plan does not create provider-wide public context.

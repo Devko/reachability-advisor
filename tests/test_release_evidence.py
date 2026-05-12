@@ -9,11 +9,19 @@ from pathlib import Path
 from reachability_advisor.artifact_manifest import (
     ArtifactManifestError,
     apply_artifact_manifests,
+    create_artifact_manifest_payload,
     load_artifact_manifest,
+    validate_artifact_manifest,
+    write_artifact_manifest,
+)
+from reachability_advisor.iac_render import (
+    recommend_iac_render_commands,
+    render_iac_render_plan_markdown,
 )
 from reachability_advisor.models import Artifact, SbomDocument
 from reachability_advisor.readiness import load_release_readiness_inputs, release_readiness_report
 from reachability_advisor.scoring_benchmark import run_scoring_benchmark
+from reachability_advisor.source_evidence_pack import write_source_evidence_pack
 from reachability_advisor.source_evidence_plan import (
     recommend_source_evidence_commands,
     render_source_evidence_plan_markdown,
@@ -107,6 +115,20 @@ class ArtifactManifestTests(unittest.TestCase):
         self.assertEqual(sbom.artifact.reference, f"registry.example.com/app@{digest}")
         self.assertEqual(sbom.artifact.properties["ci:registry_ref"], f"registry.example.com/app@{digest}")
         self.assertIn("old", sbom.artifact.properties["reachability:aliases"])
+
+    def test_manifest_init_and_validate_reports_identity_strength(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "manifest.json"
+            digest = "sha256:" + "c" * 64
+            payload = create_artifact_manifest_payload(["api"], image="ghcr.io/acme/api:1", digest=digest, git_sha="abc123", sbom="api.cdx.json", signed=True)
+            write_artifact_manifest(path, payload)
+            report = validate_artifact_manifest(path)
+
+        self.assertEqual(report["status"], "ready")
+        self.assertEqual(report["summary"]["strong_identity"], 1)
+        self.assertEqual(report["summary"]["with_digest"], 1)
+        self.assertTrue(report["artifacts"][0]["signed"])
 
 
 class ReadinessTests(unittest.TestCase):
@@ -284,6 +306,39 @@ class SourceEvidencePlanTests(unittest.TestCase):
         self.assertEqual(data["kind"], "reachability-advisor-source-evidence-plan")
         self.assertIn("go", data["profiles"])
         self.assertTrue(any(command["tool"] == "govulncheck" for command in data["commands"]))
+
+    def test_source_evidence_pack_writes_maintained_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pack = write_source_evidence_pack(Path(tmp) / "pack", language="go")
+            manifest = json.loads((pack.root / "source-evidence-pack.json").read_text(encoding="utf-8"))
+
+            self.assertEqual(manifest["kind"], "reachability-advisor-source-evidence-pack")
+            self.assertEqual(manifest["profile"]["name"], "go")
+            self.assertTrue((pack.root / "semgrep-reachability.yml").exists())
+            self.assertTrue((pack.root / "codeql" / "reachability-suite.qls").exists())
+            self.assertTrue((pack.root / "govulncheck" / "reachability-govulncheck.json").exists())
+            self.assertEqual(manifest["release_gate"]["critical_external_evidence_coverage"], 1.0)
+
+
+class RenderedIacPlanTests(unittest.TestCase):
+    def test_rendered_iac_plan_commands_cover_terraform_helm_and_kustomize(self) -> None:
+        commands = recommend_iac_render_commands(
+            terraform_dir="infra",
+            helm_chart="charts/app",
+            helm_values=["values-prod.yaml"],
+            kustomize_dir="deploy/overlays/prod",
+            output_dir="reachability",
+        )
+        markdown = render_iac_render_plan_markdown(commands)
+
+        rendered = "\n".join(command.command for command in commands)
+        self.assertIn("mkdir -p reachability", rendered)
+        self.assertIn("terraform -chdir=infra plan", rendered)
+        self.assertIn("terraform -chdir=infra show -json", rendered)
+        self.assertIn("infra/tfplan.binary", {command.output for command in commands})
+        self.assertIn("helm template app charts/app", rendered)
+        self.assertIn("kustomize build deploy/overlays/prod", rendered)
+        self.assertIn("--terraform-plan", markdown)
 
 
 class DocumentationConsistencyTests(unittest.TestCase):

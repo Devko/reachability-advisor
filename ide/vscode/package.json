@@ -14,7 +14,8 @@
     "onCommand:reachabilityAdvisor.explainFinding",
     "onCommand:reachabilityAdvisor.generateSbomPlan",
     "onCommand:reachabilityAdvisor.generateSourceEvidencePlan",
-    "onCommand:reachabilityAdvisor.validateProfile"
+    "onCommand:reachabilityAdvisor.validateProfile",
+    "onCommand:reachabilityAdvisor.openEvidenceExplorer"
   ],
   "main": "./extension.js",
   "contributes": {
@@ -38,6 +39,10 @@
       {
         "command": "reachabilityAdvisor.validateProfile",
         "title": "Reachability Advisor: Validate Profile"
+      },
+      {
+        "command": "reachabilityAdvisor.openEvidenceExplorer",
+        "title": "Reachability Advisor: Open Evidence Explorer"
       }
     ],
     "configuration": {
@@ -120,6 +125,11 @@
           "enum": ["informational", "low", "medium", "high", "urgent"],
           "default": "low",
           "description": "Minimum tier shown as VS Code diagnostics."
+        },
+        "reachabilityAdvisor.openExplorerAfterScan": {
+          "type": "boolean",
+          "default": false,
+          "description": "Open the evidence explorer webview after each workspace scan."
         }
       }
     }

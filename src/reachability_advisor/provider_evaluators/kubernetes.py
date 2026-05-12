@@ -24,7 +24,9 @@ class KubernetesExposureEvaluator(ProviderEvaluator):
             {
                 "auth_required",
                 "ingress_auth_required",
+                "ingress_controller_auth",
                 "network_policy_allow_list",
+                "pod_security_boundary",
                 "service_mesh_mtls_strict",
                 "service_mesh_policy",
             }
@@ -102,6 +104,24 @@ class KubernetesExposureEvaluator(ProviderEvaluator):
                     "effect": "constrains",
                     "provider": self.provider,
                     "evidence": "Rendered NetworkPolicy allow-list constrains ingress",
+                }
+            )
+        if "nginx.ingress.kubernetes.io/auth" in text or "oauth2-proxy" in text or "external-auth" in text:
+            augmented.append(
+                {
+                    "kind": "ingress_controller_auth",
+                    "effect": "constrains",
+                    "provider": self.provider,
+                    "evidence": "Ingress controller authentication annotation is linked to the path",
+                }
+            )
+        if "podsecuritypolicy" in text or "pod_security" in text or "securitycontext" in text:
+            augmented.append(
+                {
+                    "kind": "pod_security_boundary",
+                    "effect": "constrains",
+                    "provider": self.provider,
+                    "evidence": "Pod security evidence constrains runtime behavior but does not prove network isolation",
                 }
             )
         return dedupe_objects(augmented)

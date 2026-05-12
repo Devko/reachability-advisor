@@ -348,6 +348,22 @@ def network_path_from_evidence(context: ContextEvidence) -> dict[str, Any]:
                 "evidence": "rendered NetworkPolicy denies all ingress",
             }
         )
+    for needle, kind, effect, evidence in (
+        ("public network disabled", "public_network_disabled", "blocks", "public network access is disabled"),
+        ("private endpoint", "private_endpoint", "blocks", "private endpoint evidence restricts public access"),
+        ("privatelink", "private_link_only", "blocks", "PrivateLink-only access is reported"),
+        ("vpc endpoint", "vpc_endpoint_only", "blocks", "VPC endpoint-only access is reported"),
+        ("internal ingress only", "internal_ingress_only", "blocks", "ingress is internal only"),
+        ("deny inbound", "deny_inbound", "blocks", "deny inbound rule is reported"),
+        ("explicit deny", "explicit_deny", "blocks", "explicit deny is reported"),
+        ("waf", "waf_or_firewall_policy", "constrains", "WAF/firewall policy is linked to the path"),
+        ("authorizer", "api_authorizer", "constrains", "API authorizer is linked to the path"),
+        ("authentication required", "auth_required", "constrains", "authentication is required on the path"),
+        ("source cidr", "source_cidr_restriction", "constrains", "source CIDR restriction is reported"),
+        ("source security group", "source_security_group_restriction", "constrains", "source security group restriction is reported"),
+    ):
+        if needle in evidence_text:
+            blockers.append({"kind": kind, "effect": effect, "evidence": evidence})
     exposure = str(context.exposure or "unknown").lower()
     return {
         "source": context.source,

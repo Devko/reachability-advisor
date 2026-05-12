@@ -22,7 +22,7 @@ def visual_graph_model(payload: dict[str, Any]) -> dict[str, Any]:
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, str]] = []
     positions: dict[str, dict[str, float]] = {}
-    y = 42.0
+    y = 78.0
     max_vulnerability_count = 0
 
     for asset in assets:

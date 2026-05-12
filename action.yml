@@ -84,6 +84,14 @@ inputs:
     description: Optional 0..1 gate for critical findings covered by external source analyzer evidence. Production defaults to 1.0.
     required: false
     default: ""
+  require-release-ready:
+    description: Set to true to fail when the release evidence readiness report contains blockers.
+    required: false
+    default: "false"
+  fail-on-readiness-warnings:
+    description: Set to true to fail when the release evidence readiness report contains warnings.
+    required: false
+    default: "false"
   policy:
     description: Runtime policy JSON path.
     required: false
@@ -229,6 +237,8 @@ runs:
         if [[ "${{ inputs.require-strong-source-for-critical }}" == "true" ]]; then args+=(--require-strong-source-for-critical); fi
         if [[ -n "${{ inputs.min-external-evidence-usable-ratio }}" ]]; then args+=(--min-external-evidence-usable-ratio "${{ inputs.min-external-evidence-usable-ratio }}"); fi
         if [[ -n "${{ inputs.min-critical-external-source-coverage }}" ]]; then args+=(--min-critical-external-source-coverage "${{ inputs.min-critical-external-source-coverage }}"); fi
+        if [[ "${{ inputs.require-release-ready }}" == "true" ]]; then args+=(--require-release-ready); fi
+        if [[ "${{ inputs.fail-on-readiness-warnings }}" == "true" ]]; then args+=(--fail-on-readiness-warnings); fi
         if [[ -n "${{ inputs.fail-on-tier }}" ]]; then args+=(--fail-on-tier "${{ inputs.fail-on-tier }}"); fi
 
         set +e

@@ -16,6 +16,7 @@ Target state:
 Implemented controls:
 
 - `source-evidence-plan` emits concrete Semgrep, CodeQL, and govulncheck commands for CI.
+- `source-evidence-pack` writes versioned Semgrep, CodeQL, and govulncheck assets plus the release-gate selector contract.
 - The plan JSON includes ecosystem profiles for npm/pnpm/Yarn, Maven/Gradle, PyPI/Poetry/pip, and Go modules.
 - `--analysis-profile production` requires external source evidence and usable selectors.
 - Production gates require `critical_external_evidence_coverage=1.0` unless a stricter user threshold is supplied.
@@ -74,9 +75,11 @@ Implemented controls:
 - `--analysis-profile production` rejects Terraform source mode without `--terraform-plan` and requires Terraform plan JSON or rendered Kubernetes manifests.
 - Artifact candidates include OCI image refs, Docker repo digests, GitHub Actions image hints, build metadata, Helm/Kustomize/Skaffold/Tilt/ko/Jib hints, Compose images, and scan-time aliases.
 - `--artifact-manifest` imports CI artifact identity when SBOM tooling drops image or digest metadata.
+- `artifact-manifest init` and `artifact-manifest validate` let CI create and check that manifest before scanning.
+- `rendered-iac-plan` writes the Terraform, Helm, and Kustomize render commands expected before a release scan.
 - `--mapping-out` records candidate source, strength, match method, match score, and mapping warnings.
 - `--readiness-out` and `evidence-profile` report missing release identity, missing SBOM paths, missing or weak workload matches, missing network paths, missing identity paths, low-confidence network or identity evidence, external source coverage, and unrendered IaC gaps.
-- Quality gates can enforce artifact match coverage, strong artifact identity coverage, and mapping warning failures.
+- Quality gates can enforce artifact match coverage, strong artifact identity coverage, mapping warning failures, readiness blockers, and readiness warnings.
 
 ## IDE integration
 
@@ -93,7 +96,8 @@ Implemented controls:
 - Release-gate preset maps to `analysis-profile=production` and adds `--require-strong-source-for-critical`.
 - The extension discovers common `reachability/` and `.reachability/` SBOM and Grype paths, filters diagnostics by tier and baseline, and opens selected finding evidence as JSON.
 - The extension validates missing profile inputs before a scan, passes artifact manifests, and provides commands to generate SBOM and source-evidence plans.
-- Helper tests cover profile resolution, profile validation, plan command generation, path discovery, repeated path handling, and tier filtering.
+- The evidence explorer webview shows finding cards, baseline state, source evidence, network paths, IAM context, effective path, scoring rationale, and raw evidence JSON from the last scan.
+- Helper tests cover profile resolution, profile validation, plan command generation, path discovery, repeated path handling, tier filtering, and evidence explorer rendering.
 
 ## Scoring calibration
 
@@ -101,6 +105,7 @@ Target state:
 
 - Benchmark snapshots cover expected tier distributions for public, internal, private, constrained, blocked, low-confidence, admin, sensitive, read-only, and no-role cases.
 - Low-confidence IAM/network evidence remains visible, but it is not scored the same as confirmed exposure.
+- Unknown network/IAM context ranks above confirmed internal/no-role context, below confirmed public or sensitive/admin context, and stays below urgent until stronger evidence resolves the uncertainty.
 - Network blockers can reduce exposure points or cap priority until the effective path is proven.
 
 Implemented controls:

@@ -79,14 +79,14 @@ class GoldenOutputRegressionTests(unittest.TestCase):
 
         self.assertEqual(len(findings["findings"]), 10)
         self.assertEqual(len(findings["remediations"]), 10)
-        self.assertEqual(_count_by(findings["findings"], "tier"), {"high": 4, "informational": 1, "low": 2, "medium": 2, "urgent": 1})
+        self.assertEqual(_count_by(findings["findings"], "tier"), {"high": 4, "low": 3, "medium": 2, "urgent": 1})
         self.assertEqual(
             [(item["artifact"]["name"], item["component"]["name"], item["tier"], item["max_score"]) for item in findings["remediations"][:5]],
             [
                 ("payments-api", "log4j-core", "urgent", 100.0),
                 ("orders-api", "requests", "high", 84.0),
                 ("audit-api", "jackson-databind", "high", 84.0),
-                ("notifier", "lodash", "high", 74.0),
+                ("notifier", "lodash", "high", 80.0),
                 ("inventory-api", "requests", "high", 68.0),
             ],
         )

@@ -33,6 +33,7 @@ function activate(context) {
   context.subscriptions.push(vscode.commands.registerCommand('reachabilityAdvisor.generateSbomPlan', () => generatePlan('sbom')));
   context.subscriptions.push(vscode.commands.registerCommand('reachabilityAdvisor.generateSourceEvidencePlan', () => generatePlan('source-evidence')));
   context.subscriptions.push(vscode.commands.registerCommand('reachabilityAdvisor.validateProfile', validateCurrentProfile));
+  context.subscriptions.push(vscode.commands.registerCommand('reachabilityAdvisor.openEvidenceExplorer', openEvidenceExplorer));
 }
 
 function deactivate() {
@@ -116,6 +117,9 @@ async function scanWorkspace() {
       const baselineLabel = baselinePath && fs.existsSync(baselinePath) ? 'baseline filtered' : 'no baseline';
       setStatus(`RA: ${profile.label}, ${diagnostics.length} findings`);
       vscode.window.showInformationMessage(`Reachability Advisor reported ${diagnostics.length} diagnostics (${profile.label}, ${baselineLabel}).`);
+      if (cfg.get('openExplorerAfterScan')) {
+        openEvidenceExplorer();
+      }
     } catch (err) {
       setStatus('RA: failed');
       vscode.window.showErrorMessage(`Reachability Advisor failed: ${err.message}`);
@@ -229,6 +233,24 @@ async function explainFinding() {
     language: 'json',
   });
   vscode.window.showTextDocument(doc, { preview: true });
+}
+
+async function openEvidenceExplorer() {
+  if (!lastDiagnostics.length) {
+    vscode.window.showInformationMessage('No Reachability Advisor diagnostics are loaded.');
+    return;
+  }
+  const panel = vscode.window.createWebviewPanel(
+    'reachabilityAdvisorEvidence',
+    'Reachability Advisor Evidence',
+    vscode.ViewColumn.Beside,
+    { enableScripts: true }
+  );
+  const cfg = vscode.workspace.getConfiguration('reachabilityAdvisor');
+  panel.webview.html = evidenceExplorerHtml(lastDiagnostics, {
+    profile: profileState(cfg).label,
+    minimumTier: cfg.get('diagnosticMinimumTier') || 'low',
+  });
 }
 
 async function validateCurrentProfile() {
@@ -410,6 +432,103 @@ function writeProfileValidation(validation) {
   }
 }
 
+function evidenceExplorerHtml(diagnostics, state) {
+  const rows = findingSummaryRows(diagnostics);
+  const payload = JSON.stringify({ rows, state }).replace(/</g, '\\u003c');
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body { margin: 0; font-family: ui-sans-serif, system-ui, "Segoe UI", sans-serif; color: #101828; background: #f6f8fb; }
+header { padding: 14px 16px; background: #111827; color: white; }
+h1 { margin: 0; font-size: 16px; }
+.meta { margin-top: 4px; color: #cbd5e1; font-size: 12px; }
+main { display: grid; grid-template-columns: minmax(260px, 42%) minmax(0, 1fr); min-height: calc(100vh - 58px); }
+.list, .detail { overflow: auto; padding: 12px; }
+.list { border-right: 1px solid #d7deea; background: white; }
+button.finding { width: 100%; text-align: left; margin: 0 0 8px; padding: 10px; border: 1px solid #d7deea; border-left: 6px solid #64748b; border-radius: 7px; background: #fbfcfe; color: #101828; cursor: pointer; }
+button.finding.urgent { border-left-color: #8a1f11; }
+button.finding.high { border-left-color: #c2410c; }
+button.finding.medium { border-left-color: #b7791f; }
+button.finding.low { border-left-color: #2563eb; }
+.title { font-weight: 700; overflow-wrap: anywhere; }
+.sub { margin-top: 4px; color: #667085; font-size: 12px; overflow-wrap: anywhere; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.chip { padding: 3px 7px; border-radius: 999px; background: #eef3f8; font-size: 11px; color: #344054; }
+.urgent,.high { color: #991b1b; }
+.detail h2 { margin: 0 0 12px; font-size: 18px; overflow-wrap: anywhere; }
+.kv { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 7px 10px; font-size: 13px; }
+.kv div:nth-child(odd) { color: #667085; }
+.kv div:nth-child(even), li { overflow-wrap: anywhere; }
+pre { white-space: pre-wrap; background: #111827; color: #e5e7eb; padding: 10px; border-radius: 7px; overflow: auto; }
+@media (max-width: 760px) { main { grid-template-columns: 1fr; } .list { border-right: 0; border-bottom: 1px solid #d7deea; } }
+</style>
+</head>
+<body>
+<header><h1>Reachability Advisor Evidence</h1><div class="meta">${escapeHtml(state.profile)} profile - ${rows.length} visible findings</div></header>
+<main><section class="list" id="list"></section><section class="detail" id="detail"></section></main>
+<script id="data" type="application/json">${payload}</script>
+<script>
+const data = JSON.parse(document.getElementById('data').textContent);
+const list = document.getElementById('list');
+const detail = document.getElementById('detail');
+function chip(value) { return '<span class="chip">' + escapeHtml(String(value || 'unknown')) + '</span>'; }
+function escapeHtml(value) { return String(value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;', "'":'&#39;'}[ch])); }
+function renderList() {
+  list.innerHTML = data.rows.map((row, index) => '<button class="finding ' + escapeHtml(row.tier) + '" data-index="' + index + '"><div class="title">' + escapeHtml(row.title) + '</div><div class="sub">' + escapeHtml(row.asset) + ' - score ' + escapeHtml(row.score) + '</div><div class="chips">' + row.tags.map(chip).join('') + '</div></button>').join('');
+  for (const button of list.querySelectorAll('button')) button.addEventListener('click', () => renderDetail(data.rows[Number(button.dataset.index)]));
+}
+function renderDetail(row) {
+  detail.innerHTML = '<h2>' + escapeHtml(row.title) + '</h2><div class="chips">' + row.tags.map(chip).join('') + '</div><h3>Summary</h3><div class="kv">' +
+    Object.entries(row.fields).map(([k,v]) => '<div>' + escapeHtml(k) + '</div><div>' + escapeHtml(Array.isArray(v) ? v.join(', ') : v) + '</div>').join('') +
+    '</div><h3>Evidence</h3><pre>' + escapeHtml(JSON.stringify(row.evidence, null, 2)) + '</pre>';
+}
+renderList();
+if (data.rows.length) renderDetail(data.rows[0]);
+</script>
+</body></html>`;
+}
+
+function findingSummaryRows(diagnostics) {
+  return diagnostics.map((item) => {
+    const evidence = item.evidence || {};
+    const context = item.context || {};
+    const source = item.source_reachability || item.source_evidence || {};
+    return {
+      key: item.finding_key,
+      title: `${item.code || item.vulnerability || 'finding'} in ${item.component || 'component'}`,
+      asset: item.artifact || 'unknown artifact',
+      tier: item.tier || 'informational',
+      score: item.score === undefined ? 'unknown' : item.score,
+      tags: [
+        item.tier || 'informational',
+        `network ${context.exposure || 'unknown'}`,
+        `IAM ${context.privilege || 'unknown'}`,
+        `source ${source.state || source.reachability || 'unknown'}`,
+      ],
+      fields: {
+        artifact: item.artifact,
+        component: item.component,
+        vulnerability: item.code,
+        tier: item.tier,
+        score: item.score,
+        confidence: item.confidence,
+        exposure: context.exposure,
+        privilege: context.privilege,
+        criticality: context.criticality,
+        source: source.state || source.reachability,
+      },
+      evidence,
+    };
+  });
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+}
+
 function planCommandArgs(kind, cfg, root) {
   const outputDir = path.join(root, '.reachability');
   if (kind === 'sbom') {
@@ -449,6 +568,8 @@ module.exports = {
   planCommandArgs,
   profileValidation,
   profileState,
+  evidenceExplorerHtml,
+  findingSummaryRows,
   pushRepeated,
   resolvePath,
 };

@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .artifacts import artifact_identity_proof, artifact_match_evidence
 from .models import Artifact
 from .terraform import (
     TerraformAnalysis,
@@ -221,6 +222,7 @@ def analyze_terraform_source(path: str | Path | None, artifacts: list[Artifact])
     audit = audit_hcl_project(path, artifacts=artifacts)
     analysis = TerraformAnalyzer(audit.synthetic_plan, artifacts, source_name=f"hcl:{Path(path).name}").analyze()
     coverage = analysis.coverage
+    _merge_hcl_module_matches(coverage, audit.modules, artifacts, audit.variables)
     coverage["source_mode"] = "hcl_static"
     coverage["hcl_audit"] = audit.to_json()
     # Preserve module/unresolved visibility gaps from the source-level report.
@@ -559,6 +561,75 @@ def _artifact_matches(resources: list[TerraformResource], artifacts: list[Artifa
     return []
 
 
+def _merge_hcl_module_matches(
+    coverage: dict[str, Any],
+    modules: tuple[HclBlock, ...],
+    artifacts: list[Artifact],
+    variables: dict[str, Any],
+) -> None:
+    module_matches = _module_artifact_matches(modules, artifacts, variables)
+    if not module_matches:
+        return
+    existing = [match for match in coverage.get("artifact_matches", []) or [] if isinstance(match, dict)]
+    seen = {
+        (str(match.get("artifact")), str(match.get("resource")), str(match.get("image")), str(match.get("match_method")))
+        for match in existing
+    }
+    for match in module_matches:
+        key = (str(match.get("artifact")), str(match.get("resource")), str(match.get("image")), str(match.get("match_method")))
+        if key in seen:
+            continue
+        existing.append(match)
+        seen.add(key)
+    coverage["artifact_matches"] = existing
+    matched_artifacts = sorted({str(match.get("artifact")) for match in existing if match.get("artifact")})
+    artifact_names = [artifact.name for artifact in artifacts]
+    coverage["matched_artifacts"] = matched_artifacts
+    coverage["unmatched_artifacts"] = [name for name in artifact_names if name not in set(matched_artifacts)]
+    summary = coverage.setdefault("summary", {})
+    if isinstance(summary, dict):
+        requested = len(artifacts)
+        summary["artifacts_requested"] = requested
+        summary["artifacts_matched"] = len(matched_artifacts)
+        summary["artifact_match_coverage"] = round(len(matched_artifacts) / requested, 4) if requested else 1.0
+
+
+def _module_artifact_matches(modules: tuple[HclBlock, ...], artifacts: list[Artifact], variables: dict[str, Any]) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    for block in modules:
+        for image_argument in _module_image_arguments(block, variables):
+            target = image_argument["value"]
+            for artifact in artifacts:
+                match = artifact_match_evidence(artifact, target)
+                if not match.matched:
+                    continue
+                matches.append(
+                    {
+                        "artifact": artifact.name,
+                        "resource": block.address,
+                        "type": "terraform_module",
+                        "provider": "terraform",
+                        "image": target,
+                        "match_method": match.method,
+                        "match_score": match.score,
+                        "match_confidence": match.confidence,
+                        "artifact_identity": artifact_identity_proof(artifact),
+                        "match_proof": match.to_json(),
+                        "source": f"{block.file}:{block.line}",
+                        "hcl_argument": image_argument["key"],
+                        "source_mode": "hcl_static",
+                    }
+                )
+    return matches
+
+
+def _module_image_arguments(block: HclBlock, variables: dict[str, Any]) -> list[dict[str, str]]:
+    return [
+        {"key": match.group(1), "value": str(_resolve_value(_parse_hcl_value(match.group(2)), variables))}
+        for match in IMAGE_KEY_RE.finditer(block.body)
+    ]
+
+
 def _block_row(block: HclBlock, variables: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         "kind": block.kind,
@@ -576,10 +647,7 @@ def _module_row(block: HclBlock, variables: dict[str, Any] | None = None) -> dic
     row = _block_row(block, variables)
     row["source"] = _resolve_value(_string_attr(block.body, "source"), variables or {})
     row["version"] = _resolve_value(_string_attr(block.body, "version"), variables or {})
-    row["image_like_arguments"] = [
-        {"key": match.group(1), "value": str(_resolve_value(_parse_hcl_value(match.group(2)), variables or {}))}
-        for match in IMAGE_KEY_RE.finditer(block.body)
-    ]
+    row["image_like_arguments"] = _module_image_arguments(block, variables or {})
     return row
 
 

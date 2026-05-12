@@ -64,6 +64,17 @@ jobs:
         with:
           terraform_wrapper: false
 
+      - name: Write rendered IaC command plan
+        run: |
+          reachability-advisor rendered-iac-plan \
+            --terraform-dir infra \
+            --helm-chart charts/app \
+            --helm-release app \
+            --helm-namespace default \
+            --kustomize-dir k8s/overlays/prod \
+            --out-md reachability/rendered-iac-plan.md \
+            --out-json reachability/rendered-iac-plan.json
+
       - name: Generate Terraform plan context
         run: |
           terraform -chdir=infra init -backend=false
@@ -77,13 +88,15 @@ jobs:
 
       - name: Generate source reachability evidence
         run: |
+          reachability-advisor source-evidence-pack \
+            --language javascript \
+            --output-dir reachability/source-evidence-pack
           reachability-advisor source-evidence-plan \
             --source-root . \
             --language javascript \
             --out-md reachability/source-evidence-plan.md \
             --out-json reachability/source-evidence-plan.json
-          reachability-advisor export-semgrep-rules --out reachability/semgrep-reachability.yml
-          semgrep scan --config reachability/semgrep-reachability.yml --json --output reachability/semgrep.json
+          semgrep scan --config reachability/source-evidence-pack/semgrep-reachability.yml --json --output reachability/semgrep.json
 
       - name: Run reachability prioritization
         run: |
@@ -104,6 +117,7 @@ jobs:
             --source-coverage-out reachability/source-coverage.json \
             --mapping-out reachability/mapping.json \
             --readiness-out reachability/readiness.json \
+            --require-release-ready \
             --min-critical-external-source-coverage 1.0 \
             --out reachability/findings.json \
             --evidence-graph-out reachability/evidence-graph.json \
@@ -176,6 +190,7 @@ The composite action installs the scanner from this repository. It accepts newli
           require-strong-source-for-critical: "true"
           min-external-evidence-usable-ratio: "0.8"
           min-critical-external-source-coverage: "1.0"
+          require-release-ready: "true"
           fail-on-mapping-warnings: "true"
           fail-on-new-tier: high
 
@@ -222,18 +237,15 @@ For release branches and deployment gates, scan the built artifact instead of th
 
       - name: Write CI artifact manifest
         run: |
-          cat > reachability/artifacts.json <<EOF
-          {
-            "artifacts": [
-              {
-                "name": "app",
-                "sbom": "sboms/app.cdx.json",
-                "image": "local/app:${{ github.sha }}",
-                "git_sha": "${{ github.sha }}"
-              }
-            ]
-          }
-          EOF
+          reachability-advisor artifact-manifest init \
+            --artifact app \
+            --sbom sboms/app.cdx.json \
+            --image local/app:${{ github.sha }} \
+            --git-sha "${{ github.sha }}" \
+            --out reachability/artifacts.json
+          reachability-advisor artifact-manifest validate \
+            --manifest reachability/artifacts.json \
+            --out reachability/artifact-manifest-validation.json
 
       - name: Generate Terraform plan context
         run: |
@@ -243,13 +255,15 @@ For release branches and deployment gates, scan the built artifact instead of th
 
       - name: Generate source reachability evidence
         run: |
+          reachability-advisor source-evidence-pack \
+            --language javascript \
+            --output-dir reachability/source-evidence-pack
           reachability-advisor source-evidence-plan \
             --source-root . \
             --language javascript \
             --out-md reachability/source-evidence-plan.md \
             --out-json reachability/source-evidence-plan.json
-          reachability-advisor export-semgrep-rules --out reachability/semgrep-reachability.yml
-          semgrep scan --config reachability/semgrep-reachability.yml --json --output reachability/semgrep.json
+          semgrep scan --config reachability/source-evidence-pack/semgrep-reachability.yml --json --output reachability/semgrep.json
 
       - name: Run release gate
         run: |
@@ -268,6 +282,7 @@ For release branches and deployment gates, scan the built artifact instead of th
             --source-coverage-out reachability/source-coverage.json \
             --mapping-out reachability/mapping.json \
             --readiness-out reachability/readiness.json \
+            --require-release-ready \
             --min-critical-external-source-coverage 1.0 \
             --out reachability/findings.json \
             --evidence-graph-out reachability/evidence-graph.json \
@@ -289,11 +304,12 @@ Use `--terraform-source infra` only for advisory feedback when a plan cannot be 
 5. Pass Terraform plan JSON for release gates.
 6. Pass rendered Kubernetes YAML/JSON when workloads are deployed through Kubernetes, Helm, or Kustomize.
 7. Pass `--artifact-manifest` when the SBOM does not preserve image digest or registry reference.
-8. Use `--analysis-profile production` for release gates.
-9. Fail critical findings that only have dependency-level source evidence or no matching external analyzer evidence.
-10. Write `--mapping-out`, `--source-coverage-out`, `--terraform-coverage-out`, `--kubernetes-coverage-out`, `--readiness-out`, and `--evidence-graph-out` when the related inputs are present.
-11. Upload SARIF to GitHub code scanning and upload JSON/Markdown/HTML artifacts for audit.
-12. Fail on `--fail-on-tier high` only when the team is ready to enforce the prioritized queue.
+8. Use `rendered-iac-plan` and `artifact-manifest validate` to make missing release inputs explicit before the scan.
+9. Use `--analysis-profile production` for release gates.
+10. Fail critical findings that only have dependency-level source evidence or no matching external analyzer evidence.
+11. Write `--mapping-out`, `--source-coverage-out`, `--terraform-coverage-out`, `--kubernetes-coverage-out`, `--readiness-out`, and `--evidence-graph-out` when the related inputs are present.
+12. Upload SARIF to GitHub code scanning and upload JSON/Markdown/HTML artifacts for audit.
+13. Fail on `--fail-on-tier high` only when the team is ready to enforce the prioritized queue.
 
 Terraform plan JSON can include sensitive values. Prefer not to upload it. Upload `terraform-coverage.json`, `kubernetes-coverage.json`, `source-coverage.json`, `mapping.json`, and `evidence-graph.json` instead.
 
@@ -340,15 +356,15 @@ Treat source-mode Terraform gaps as work to resolve before release gating.
 
 ## External Source Evidence
 
-The built-in source analyzer is fast and local. For higher source coverage, run a dedicated analyzer and import its result:
+The built-in source analyzer is fast and local. For release gates, run a dedicated analyzer and import its result:
 
 ```bash
-reachability-advisor export-semgrep-rules \
-  --reachability-rules reachability-rules.json \
-  --out reachability/semgrep-reachability.yml
+reachability-advisor source-evidence-pack \
+  --language javascript \
+  --output-dir reachability/source-evidence-pack
 
 semgrep scan \
-  --config reachability/semgrep-reachability.yml \
+  --config reachability/source-evidence-pack/semgrep-reachability.yml \
   --json \
   --output reachability/semgrep.json
 
@@ -373,7 +389,7 @@ reachability-advisor source-evidence-plan \
   --out-md reachability/source-evidence-plan.md
 ```
 
-`source-evidence-plan` emits CodeQL commands for JavaScript/TypeScript, Java/Kotlin, Python, and Go. It emits `govulncheck` only for Go. If no supported language or package-manager hint is supplied, it emits the generic Semgrep starter workflow and no CodeQL command.
+`source-evidence-pack` writes the maintained Semgrep rules, CodeQL suite file, govulncheck profile, and release-gate selector contract. `source-evidence-plan` emits CodeQL commands for JavaScript/TypeScript, Java/Kotlin, Python, and Go. It emits `govulncheck` only for Go. If no supported language or package-manager hint is supplied, it emits the generic Semgrep workflow and no CodeQL command.
 
 For CodeQL, pass SARIF output as `--source-evidence-in`. CodeQL `codeFlows` are imported as high-confidence data-flow evidence when the result or rule metadata includes a package, package URL, or vulnerability selector. Generic CodeQL query ids are retained as symbols and are not treated as vulnerability ids unless they look like CVE/GHSA/OSV-style ids.
 
@@ -420,6 +436,14 @@ reachability-advisor evidence-profile \
 ```
 
 The report names the missing release evidence: weak artifact identity, missing workload match, no network path, no identity path, external source coverage gaps, or unrendered Terraform/Kubernetes wrappers.
+
+To enforce the same report during `scan`, add:
+
+```bash
+--require-release-ready
+```
+
+Use `--fail-on-readiness-warnings` only after the pipeline has stable image digests, workload matches, and rendered IaC coverage.
 
 ## PR Delta Gate
 

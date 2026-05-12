@@ -27,7 +27,9 @@ class GcpExposureEvaluator(ProviderEvaluator):
                 "api_authorizer",
                 "auth_required",
                 "cloud_armor_policy",
+                "firewall_priority_unknown",
                 "iap_required",
+                "route_precedence_unknown",
                 "source_cidr_restriction",
                 "waf_or_firewall_policy",
             }
@@ -77,6 +79,24 @@ class GcpExposureEvaluator(ProviderEvaluator):
                     "effect": "constrains",
                     "provider": self.provider,
                     "evidence": "GCP Cloud Armor or backend security policy is linked to the path",
+                }
+            )
+        if "priority" in text and ("firewall" in text or "hierarchical" in text):
+            augmented.append(
+                {
+                    "kind": "firewall_priority_unknown",
+                    "effect": "constrains",
+                    "provider": self.provider,
+                    "evidence": "GCP firewall priority evidence is present and must be evaluated with hierarchy",
+                }
+            )
+        if "google_compute_route" in text or "route" in text:
+            augmented.append(
+                {
+                    "kind": "route_precedence_unknown",
+                    "effect": "constrains",
+                    "provider": self.provider,
+                    "evidence": "GCP route evidence is present; route precedence needs rendered confirmation",
                 }
             )
         exposure = str(network.get("exposure") or "").lower()

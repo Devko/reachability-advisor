@@ -107,12 +107,18 @@ grype sbom:sboms/payments-api.cdx.json -o json > vulns/payments-api.grype.json
 Generate an external source-evidence workflow for CI before the production scan:
 
 ```bash
+reachability-advisor source-evidence-pack \
+  --language javascript \
+  --output-dir reachability/source-evidence-pack
+
 reachability-advisor source-evidence-plan \
   --source-root . \
   --language javascript \
   --out-md reachability/source-evidence-plan.md \
   --out-json reachability/source-evidence-plan.json
 ```
+
+`source-evidence-pack` writes the maintained Semgrep rules, CodeQL suite file, govulncheck profile metadata, and release-gate selector contract. `source-evidence-plan` writes the commands that run those tools in CI.
 
 For source-only validation, Grype can also emit both sides of the handoff from the same directory scan:
 
@@ -211,7 +217,7 @@ SBOM artifact
   -> vulnerability intelligence
   -> source reachability evidence
   -> artifact identity candidates
-  -> Terraform workload match
+  -> Terraform or Kubernetes workload match
   -> exposure / identity / data context
   -> effective exposure path
   -> score, tier, and outputs
@@ -231,7 +237,7 @@ Verify the logic with:
 --mapping-out outputs/mapping.json
 ```
 
-The mapping report shows artifact candidates, candidate source/strength, source roots, Terraform match methods/scores, and warnings. See `docs/reachability_mapping.md`.
+The mapping report shows artifact candidates, candidate source/strength, source roots, deployment matches from Terraform and Kubernetes, provider-specific match methods/scores, and warnings. See `docs/reachability_mapping.md`.
 
 ## Artifact aliases
 
@@ -365,7 +371,7 @@ python scripts/run_external_grype_validation.py
 
 That summary currently covers Petclinic, the AWS ECS demo backend, and the Azure Chainlit app.
 
-For scale validation, run the complex app harness. It generates one SBOM and Grype report per service, merges vulnerability matches with artifact scope, runs source plus Terraform/Kubernetes context analysis, and emits the HTML graph. The corpus currently includes AWS Retail Store and Google Cloud Online Boutique:
+For scale validation, run the complex app harness. It generates one SBOM and Grype report per service, merges vulnerability matches with artifact scope, runs source plus Terraform/Kubernetes context analysis, and emits the HTML graph. The corpus currently includes AWS Retail Store, Google Cloud Online Boutique, Bank of Anthos, Azure AKS Store, and Instana Robot Shop:
 
 ```bash
 python scripts/run_complex_app_validation.py \
@@ -376,8 +382,11 @@ python scripts/run_complex_app_validation.py \
 Outputs are written to `outputs/external-complex/`, including schema-validated `benchmark.json` and `benchmark.md` for release-to-release drift checks.
 Local scale-test snapshot:
 
-- AWS Retail Store: 5 service SBOMs, 40 Grype matches, 40 findings, 24 remediation groups, 91 Terraform resources, and generated HTML graph.
-- Google Cloud Online Boutique: 10 service SBOMs, 38 Grype matches, 38 findings, 23 remediation groups, Kubernetes context with public frontend ingress and internal service hops, and generated HTML graph.
+- AWS Retail Store: 5 service SBOMs, 40 Grype matches, 40 findings, 24 remediation groups, 91 Terraform resources, 0.8 deployment artifact-match coverage, and generated HTML graph.
+- Google Cloud Online Boutique: 10 service SBOMs, 38 Grype matches, 38 findings, 23 remediation groups, 1.0 Kubernetes deployment artifact-match coverage, Kubernetes context with public frontend ingress and internal service hops, and generated HTML graph.
+- Bank of Anthos: 9 service SBOMs, 38 Grype matches, 38 findings, 27 remediation groups, 45 Terraform resources, 1.0 Kubernetes deployment artifact-match coverage, and generated HTML graph.
+- Azure AKS Store: 8 service SBOMs, 70 Grype matches, 70 findings, 28 remediation groups, 29 Terraform resources, 1.0 Kubernetes deployment artifact-match coverage, and generated HTML graph.
+- Instana Robot Shop: 8 service SBOMs, 1 Grype match, 1 finding, 1 remediation group, 1.0 Kubernetes deployment artifact-match coverage through Helm templates, and generated HTML graph. This case validates Helm-heavy matching rather than vulnerability volume.
 
 ## GitHub Actions pipeline
 
@@ -431,7 +440,7 @@ reachability-advisor compare \
 
 ## IDE integration
 
-The `ide/vscode` directory contains a VS Code extension wrapper. It discovers local scan inputs, invokes the Python CLI, filters diagnostics by tier or baseline, and opens finding evidence on demand. Security-sensitive logic stays in the Python CLI.
+The `ide/vscode` directory contains a VS Code extension. It discovers local scan inputs, invokes the Python CLI, filters diagnostics by tier or baseline, and opens an evidence explorer with source, network, IAM, baseline, and scoring details. Security-sensitive logic stays in the Python CLI.
 
 ## Supported evidence
 
@@ -442,13 +451,13 @@ The `ide/vscode` directory contains a VS Code extension wrapper. It discovers lo
 | Vulnerability input | Grype JSON, local JSON, and small OSV-Scanner-style JSON |
 | Source reachability | JVM, Node, Python, and Go rules with same-function input/sink evidence, bounded handler-to-sink paths, CycloneDX dependency-graph evidence, and package-manager manifest evidence for Maven/Gradle, npm/pnpm/Yarn, Poetry/requirements, and Go modules |
 | Custom source rules | `--reachability-rules` JSON and `export-semgrep-rules` starter YAML |
-| External source evidence | `--source-evidence-in` for Reachability Advisor JSON, Semgrep JSON, SARIF/CodeQL, and govulncheck JSONL. `source-evidence-plan` has maintained profiles for JavaScript/TypeScript, Java/Kotlin, Python, and Go. Gates reject artifact-only, unscoped, or critical-package coverage gaps |
+| External source evidence | `--source-evidence-in` for Reachability Advisor JSON, Semgrep JSON, SARIF/CodeQL, and govulncheck JSONL. `source-evidence-pack` writes maintained Semgrep/CodeQL/govulncheck assets; `source-evidence-plan` writes CI commands for JavaScript/TypeScript, Java/Kotlin, Python, and Go. Gates reject artifact-only, unscoped, or critical-package coverage gaps |
 | Terraform context | Primary deployment context. AWS, Azure, GCP, and Kubernetes plan/source support with coverage reporting, artifact matching, network graphing, typed path blockers, route/private-endpoint/firewall-tag hints, IAM allow/deny capability records, AWS `sts:AssumeRole` propagation, provider-specific effective exposure decisions, and IAM impact classification |
 | Kubernetes manifests | Rendered YAML/JSON workload, Service, Ingress, RBAC, and NetworkPolicy context with artifact matching and coverage reporting |
 | Artifact manifest | `--artifact-manifest` for CI-supplied image digests, registry refs, Git SHA, SBOM paths, Helm values images, Kustomize images, and Terraform image outputs |
 | Context JSON | Explicit override/enrichment keyed by artifact name |
 | Outputs | JSON with remediation groups and raw findings, unified effective exposure graph JSON, baseline JSON, PR delta JSON/Markdown, SARIF, diagnostics JSON, Markdown, interactive HTML, annotations, Terraform coverage JSON, Kubernetes coverage JSON, source coverage JSON, mapping JSON, readiness JSON |
-| CI quality gates | Built-in scan gates for artifact match coverage, strong artifact identity coverage, mapping warnings, source rule coverage, external evidence presence, external selector usability, critical external coverage, weak workload matches, low-confidence network/IAM evidence, and readiness blockers |
+| CI quality gates | Built-in scan gates for artifact match coverage, strong artifact identity coverage, mapping warnings, source rule coverage, external evidence presence, external selector usability, critical external coverage, weak workload matches, low-confidence network/IAM evidence, readiness blockers, and readiness warnings |
 
 ## Import/export contract
 
@@ -464,7 +473,7 @@ It verifies:
 - source-evidence imports: native Reachability Advisor JSON, Reachability Advisor findings JSON, Semgrep JSON/dataflow traces, SARIF/CodeQL code flows, and govulncheck JSONL;
 - deployment/context inputs: Terraform plan JSON, a synthetic no-cloud Terraform plan E2E fixture, Terraform source paths through `hcl-audit`, rendered Kubernetes YAML/JSON, context JSON, artifact aliases, and CI artifact manifests;
 - configuration inputs: custom reachability rules and runtime policy JSON;
-- exports: findings JSON, remediation groups, evidence graph JSON, baseline JSON, PR delta JSON/Markdown, SARIF, diagnostics JSON, PR summary Markdown, GitHub annotations, self-contained HTML graph, source coverage, Terraform coverage, Kubernetes coverage, mapping reports, readiness reports, HCL audit JSON/Markdown, SBOM plan JSON/Markdown, scoring benchmark JSON, complex benchmark JSON/Markdown, Semgrep starter rules, fixture validation, fixture run reports, and single-finding explanations.
+- exports: findings JSON, remediation groups, evidence graph JSON, baseline JSON, PR delta JSON/Markdown, SARIF, diagnostics JSON, PR summary Markdown, GitHub annotations, self-contained HTML graph, source coverage, Terraform coverage, Kubernetes coverage, mapping reports, readiness reports, HCL audit JSON/Markdown, SBOM plan JSON/Markdown, source-evidence pack/plan JSON, rendered-IaC plan JSON/Markdown, artifact-manifest validation JSON, scoring benchmark JSON, complex benchmark JSON/Markdown, Semgrep starter rules, fixture validation, fixture run reports, and single-finding explanations.
 - target-state documentation: [docs/maturity_targets.md](docs/maturity_targets.md).
 
 ## Run quality gates
@@ -482,7 +491,7 @@ make package
 Current validation snapshot:
 
 ```text
-Ran 469 tests: OK
+Ran 484 tests: OK
 Coverage: 93%
 Coverage gate: 93% passed
 Fixture packs: 9 passed, 0 failed
@@ -497,7 +506,7 @@ src/reachability_advisor/  Python package and CLI
 samples/                   Reproducible demo inputs, including multi-cloud Terraform plan
 fixtures/terraform/        Community Terraform fixture packs and harness inputs
 tests/                     Unit and workflow tests
-ide/vscode/                VS Code extension wrapper
+ide/vscode/                VS Code extension and evidence explorer
 docs/                      User, maintainer, algorithm, and governance docs
 schemas/                   Output and policy schema drafts
 .github/workflows/         CI and sample pipeline workflows

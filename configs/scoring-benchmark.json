@@ -143,15 +143,15 @@
     },
     {
       "id": "unknown-context-attacker-controlled",
-      "description": "Strong source evidence without deployment context should not be treated like a public finding.",
+      "description": "Strong source evidence without deployment context carries an uncertainty premium, but remains below urgent until deployment evidence proves public reachability or critical context.",
       "artifact": "unmapped-service",
       "component": {"name": "http-client", "version": "2.0.0", "scope": "runtime"},
       "vulnerability": {"id": "GHSA-http", "package_name": "http-client", "cvss": 7.5},
       "source": {"reachability": "attacker_controlled", "confidence": "high"},
       "context": {"exposure": "unknown", "environment": "unknown", "privilege": "unknown", "confidence": "low"},
-      "expected_tier": "medium",
-      "min_score": 40,
-      "max_score": 64
+      "expected_tier": "high",
+      "min_score": 65,
+      "max_score": 84
     },
     {
       "id": "dev-scope-weak-known-exploited",

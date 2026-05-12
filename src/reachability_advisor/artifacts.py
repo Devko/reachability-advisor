@@ -60,6 +60,33 @@ IMAGE_PROPERTY_KEYS = (
 
 IMAGE_DIGEST_RE = re.compile(r"sha256:[a-f0-9]{32,64}", re.IGNORECASE)
 TOKEN_RE = re.compile(r"[^a-z0-9]+")
+SYMBOLIC_IMAGE_EXPRESSION_TOKENS = {
+    "artifact",
+    "artifacts",
+    "container",
+    "containers",
+    "default",
+    "digest",
+    "id",
+    "image",
+    "images",
+    "local",
+    "module",
+    "name",
+    "output",
+    "ref",
+    "repo",
+    "repository",
+    "result",
+    "service",
+    "services",
+    "tag",
+    "url",
+    "uri",
+    "value",
+    "values",
+    "var",
+}
 
 
 @dataclass(frozen=True)
@@ -288,6 +315,10 @@ def artifact_match_evidence(artifact: Artifact, target: str | None, *, allow_nam
                 score = 58
                 method = "repository-leaf"
                 reasons.append("repository leaf matched artifact/image leaf")
+            elif allow_name_only and _symbolic_image_expression_match(candidate_image, cleaned_target):
+                score = 68
+                method = "symbolic-image-expression"
+                reasons.append("Terraform image expression token matched artifact image repository token")
         elif allow_name_only and _token_equal(candidate_l, target_l):
             score = 52
             method = "name"
@@ -353,6 +384,34 @@ def _tokenize(value: str) -> tuple[str, ...]:
     if ":" in cleaned.rsplit("/", 1)[-1]:
         cleaned = cleaned.rsplit(":", 1)[0]
     return tuple(token for token in TOKEN_RE.split(cleaned) if token)
+
+
+def _symbolic_image_expression_match(candidate_image: NormalizedImage, target: str) -> bool:
+    """Match unresolved IaC image expressions to strong artifact image names.
+
+    Terraform source mode often sees values such as
+    ``module.container_images.result.cart.url`` rather than the rendered image
+    string.  This is weaker than a real plan match, but stronger than matching
+    the artifact display name: the target is in an image field and shares a
+    service-specific token with the SBOM's strong image reference.
+    """
+
+    if not candidate_image.repository_leaf:
+        return False
+    if _candidate_strength(candidate_image.raw) not in {"image_reference", "digest"}:
+        return False
+    target_tokens = _meaningful_symbolic_tokens(target)
+    if not target_tokens:
+        return False
+    image_tokens = set(_tokenize(candidate_image.repository_leaf)) - SYMBOLIC_IMAGE_EXPRESSION_TOKENS
+    return bool(image_tokens & target_tokens)
+
+
+def _meaningful_symbolic_tokens(value: str) -> set[str]:
+    tokens = set(_tokenize(value))
+    if not tokens & {"module", "var", "local", "result", "output", "image", "images", "url", "uri"}:
+        return set()
+    return {token for token in tokens if token not in SYMBOLIC_IMAGE_EXPRESSION_TOKENS and len(token) > 2}
 
 
 def _candidate_strength(value: str) -> str:

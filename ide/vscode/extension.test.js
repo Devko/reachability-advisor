@@ -67,4 +67,25 @@ const sourcePlan = extension.planCommandArgs('source-evidence', cfg({}), root);
 assert.strictEqual(sourcePlan.args[0], 'source-evidence-plan');
 assert.strictEqual(sourcePlan.markdownPath, path.join(root, '.reachability', 'source-evidence-plan.md'));
 
+const evidenceDiagnostics = [
+  {
+    finding_key: 'api|pkg|CVE',
+    code: 'CVE-TEST',
+    artifact: 'api',
+    component: 'pkg',
+    tier: 'high',
+    score: 77,
+    confidence: 'medium',
+    context: { exposure: 'public', privilege: 'sensitive', criticality: 'high' },
+    source_reachability: { state: 'attacker_controlled' },
+    evidence: { network_paths: [{ exposure: 'public' }] },
+  },
+];
+const evidenceRows = extension.findingSummaryRows(evidenceDiagnostics);
+assert.strictEqual(evidenceRows[0].title, 'CVE-TEST in pkg');
+assert.ok(evidenceRows[0].tags.includes('network public'));
+const explorerHtml = extension.evidenceExplorerHtml(evidenceDiagnostics, { profile: 'release gate' });
+assert.ok(explorerHtml.includes('Reachability Advisor Evidence'));
+assert.ok(explorerHtml.includes('CVE-TEST in pkg'));
+
 console.log('VS Code extension helper tests passed');

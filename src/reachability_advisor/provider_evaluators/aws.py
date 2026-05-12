@@ -16,9 +16,11 @@ class AwsExposureEvaluator(ProviderEvaluator):
                 "internal_ingress_only",
                 "internal_only_endpoint",
                 "lambda_function_url_disabled",
+                "network_acl_deny",
                 "private_endpoint",
                 "private_link_only",
                 "public_network_disabled",
+                "route_blackhole",
                 "vpc_endpoint_only",
             }
         ),
@@ -27,8 +29,11 @@ class AwsExposureEvaluator(ProviderEvaluator):
                 "api_authorizer",
                 "api_key_required",
                 "auth_required",
+                "elb_listener_auth",
                 "cloudfront_function_auth",
                 "lambda_function_url_aws_iam",
+                "nacl_rule_order_unknown",
+                "route_table_precedence_unknown",
                 "source_cidr_restriction",
                 "source_security_group_restriction",
                 "source_vpce_condition",
@@ -119,6 +124,51 @@ class AwsExposureEvaluator(ProviderEvaluator):
                     "effect": "constrains",
                     "provider": self.provider,
                     "evidence": "AWS API authorizer evidence is linked to the path",
+                }
+            )
+        if "authenticate_oidc" in text or "authenticate_cognito" in text:
+            augmented.append(
+                {
+                    "kind": "elb_listener_auth",
+                    "effect": "constrains",
+                    "provider": self.provider,
+                    "evidence": "AWS load balancer listener authentication action is linked to the path",
+                }
+            )
+        if "network_acl" in text and "deny" in text:
+            augmented.append(
+                {
+                    "kind": "network_acl_deny",
+                    "effect": "blocks",
+                    "provider": self.provider,
+                    "evidence": "AWS network ACL deny evidence is linked to the path",
+                }
+            )
+        elif "network_acl" in text or "nacl" in text:
+            augmented.append(
+                {
+                    "kind": "nacl_rule_order_unknown",
+                    "effect": "constrains",
+                    "provider": self.provider,
+                    "evidence": "AWS NACL evidence is present but rule ordering must be evaluated",
+                }
+            )
+        if "blackhole" in text or "route target unavailable" in text:
+            augmented.append(
+                {
+                    "kind": "route_blackhole",
+                    "effect": "blocks",
+                    "provider": self.provider,
+                    "evidence": "AWS route target is unavailable or blackholed",
+                }
+            )
+        elif "route_table" in text or "aws_route" in text:
+            augmented.append(
+                {
+                    "kind": "route_table_precedence_unknown",
+                    "effect": "constrains",
+                    "provider": self.provider,
+                    "evidence": "AWS route evidence is present; precedence needs rendered edge confirmation",
                 }
             )
         exposure = str(network.get("exposure") or "").lower()

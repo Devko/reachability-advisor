@@ -402,12 +402,14 @@ HTML_TEMPLATE = r"""<!doctype html>
 <title>Reachability Advisor Visual Report</title>
 <style>
 :root {
-  --bg: #f6f8fb;
+  --bg: #f5f7fb;
   --panel: #ffffff;
   --ink: #101828;
   --muted: #667085;
-  --line: #d8dee8;
-  --soft: #eef2f7;
+  --line: #d7deea;
+  --soft: #eef3f8;
+  --canvas: #f8fafd;
+  --canvas-line: rgba(99, 116, 139, .13);
   --urgent: #8a1f11;
   --high: #c2410c;
   --medium: #b7791f;
@@ -423,15 +425,17 @@ body {
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--ink);
   background: var(--bg);
+  text-rendering: optimizeLegibility;
 }
 header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 16px 20px;
-  background: #111827;
+  padding: 14px 20px;
+  background: linear-gradient(135deg, #111827 0%, #172033 100%);
   color: white;
+  border-bottom: 1px solid rgba(255,255,255,.08);
 }
 h1 {
   margin: 0;
@@ -451,23 +455,27 @@ h1 {
   justify-content: flex-end;
 }
 .stat {
-  padding: 7px 9px;
-  background: rgba(255,255,255,.09);
-  border: 1px solid rgba(255,255,255,.15);
+  padding: 7px 10px;
+  background: rgba(255,255,255,.08);
+  border: 1px solid rgba(255,255,255,.16);
   border-radius: 6px;
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 .toolbar {
   display: grid;
   grid-template-columns: minmax(250px, 1fr) 140px 150px 130px auto auto auto auto;
   gap: 8px;
-  padding: 12px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .04);
+  position: relative;
+  z-index: 2;
 }
 input, select, button {
   height: 34px;
-  border: 1px solid #c8d0dc;
+  border: 1px solid #c9d2df;
   background: white;
   color: var(--ink);
   border-radius: 6px;
@@ -477,10 +485,11 @@ input, select, button {
 }
 button {
   cursor: pointer;
-  background: #17202a;
+  background: #162033;
   color: white;
-  border-color: #17202a;
+  border-color: #162033;
   min-width: 74px;
+  font-weight: 650;
 }
 button.secondary {
   background: white;
@@ -500,25 +509,28 @@ label.check input {
 }
 .layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 390px;
-  min-height: calc(100vh - 111px);
+  grid-template-columns: minmax(0, 1fr) 410px;
+  min-height: calc(100vh - 105px);
 }
 .graph-shell {
   position: relative;
   min-width: 0;
   overflow: hidden;
   background:
-    linear-gradient(#e9eef5 1px, transparent 1px),
-    linear-gradient(90deg, #e9eef5 1px, transparent 1px);
-  background-size: 32px 32px;
+    radial-gradient(circle at 24px 24px, rgba(37,99,235,.06) 0, rgba(37,99,235,0) 240px),
+    linear-gradient(var(--canvas-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--canvas-line) 1px, transparent 1px),
+    var(--canvas);
+  background-size: 100% 100%, 36px 36px, 36px 36px, 100% 100%;
 }
 #graph {
   width: 100%;
-  height: calc(100vh - 111px);
+  height: calc(100vh - 105px);
   min-height: 560px;
   position: relative;
   overflow: hidden;
   cursor: grab;
+  user-select: none;
 }
 #graph.dragging { cursor: grabbing; }
 #surface {
@@ -545,20 +557,25 @@ label.check input {
   border: 1px solid var(--line);
   border-left: 8px solid var(--info);
   border-radius: 8px;
-  box-shadow: 0 8px 18px rgba(16, 24, 40, .10);
+  box-shadow: 0 10px 24px rgba(16, 24, 40, .10), 0 1px 2px rgba(16, 24, 40, .08);
   overflow: hidden;
   cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  contain: layout paint;
 }
 .card.selected {
   outline: 3px solid #111827;
   outline-offset: 2px;
+  box-shadow: 0 16px 34px rgba(16, 24, 40, .18), 0 0 0 1px rgba(17,24,39,.08);
 }
 .card .top {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
   align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 12px 12px 8px;
+  gap: 12px;
+  padding: 12px 14px 9px;
+  min-width: 0;
 }
 .asset-card .top {
   background: #f8fafc;
@@ -589,6 +606,15 @@ label.check input {
   font-weight: 700;
   font-size: 15px;
   line-height: 1.25;
+  overflow: hidden;
+}
+.title-main {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .sub {
   margin-top: 3px;
@@ -596,25 +622,38 @@ label.check input {
   font-size: 12px;
   line-height: 1.35;
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .body {
-  padding: 0 12px 12px;
+  padding: 0 14px 14px;
+  min-height: 0;
+  overflow: hidden;
+  flex: 1;
 }
 .row {
   display: grid;
-  grid-template-columns: 84px minmax(0, 1fr);
-  gap: 6px;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 8px;
   margin-top: 7px;
   font-size: 12px;
   line-height: 1.35;
+  min-width: 0;
 }
 .row .label {
   color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .chips {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+}
+.top > .chips {
+  max-width: 178px;
+  justify-content: flex-end;
 }
 .chip {
   display: inline-flex;
@@ -626,6 +665,10 @@ label.check input {
   background: var(--soft);
   color: #344054;
   white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
 }
 .chip.urgent, .chip.high { background: #fee2e2; color: #991b1b; }
 .chip.medium { background: #fef3c7; color: #92400e; }
@@ -643,8 +686,22 @@ label.check input {
 .vuln-card .title {
   font-size: 14px;
 }
+.vuln-card .top > .chips {
+  max-width: 158px;
+}
+.vuln-card .sub,
+.path-card .sub,
+.entry-card .sub {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .vuln-card .body {
   padding-top: 0;
+}
+.asset-card .body {
+  padding-top: 9px;
 }
 .path-card .body .sub,
 .vuln-card .body .sub {
@@ -653,20 +710,35 @@ label.check input {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+.lane-label {
+  position: absolute;
+  height: 28px;
+  padding: 6px 10px;
+  border: 1px solid #d7deea;
+  border-radius: 999px;
+  background: rgba(255,255,255,.86);
+  color: #475467;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  box-shadow: 0 4px 14px rgba(16,24,40,.08);
+  pointer-events: none;
+}
 .edge {
   fill: none;
   stroke: #94a3b8;
   stroke-width: 2;
-  opacity: .85;
+  opacity: .82;
   stroke-linecap: round;
   stroke-linejoin: round;
+  marker-end: url(#edge-arrow);
 }
 .edge.network {
   stroke: #475569;
-  stroke-width: 2.4;
+  stroke-width: 2.6;
 }
 .edge.vulnerability {
-  opacity: .76;
+  opacity: .72;
 }
 .edge.entry {
   stroke-dasharray: 7 5;
@@ -675,6 +747,11 @@ label.check input {
 .edge.high { stroke: var(--high); stroke-width: 2.6; }
 .edge.medium { stroke: var(--medium); }
 .edge.low { stroke: var(--low); }
+.edge.active {
+  opacity: 1;
+  stroke-width: 3.4;
+  filter: drop-shadow(0 1px 3px rgba(16,24,40,.28));
+}
 aside {
   border-left: 1px solid var(--line);
   background: var(--panel);
@@ -712,17 +789,20 @@ aside {
 .details h2, .finding-list h2 {
   margin: 0 0 10px;
   font-size: 14px;
+  overflow-wrap: anywhere;
 }
 .empty {
   color: var(--muted);
   font-size: 13px;
+  line-height: 1.45;
 }
 .kv {
   display: grid;
-  grid-template-columns: 105px minmax(0, 1fr);
+  grid-template-columns: 116px minmax(0, 1fr);
   gap: 5px 8px;
   font-size: 12px;
   margin: 8px 0;
+  line-height: 1.45;
 }
 .kv div:nth-child(odd) {
   color: var(--muted);
@@ -744,14 +824,18 @@ aside {
 .item-title {
   font-size: 13px;
   font-weight: 650;
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
   gap: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .item-meta {
   margin-top: 5px;
   font-size: 12px;
   color: var(--muted);
+  overflow-wrap: anywhere;
+  line-height: 1.35;
 }
 ul {
   margin: 6px 0 0 17px;
@@ -843,20 +927,22 @@ for (const path of DATA.networkPaths || []) {
 for (const paths of networkPathsByAssetId.values()) {
   paths.sort((a, b) => ((exposureRank[b.exposure] ?? 0) - (exposureRank[a.exposure] ?? 0)) || ((tierRank[b.tier] ?? 0) - (tierRank[a.tier] ?? 0)) || ((b.score || 0) - (a.score || 0)));
 }
-const entryWidth = 180;
-const entryHeight = 88;
-const pathWidth = 248;
-const pathHeight = 140;
-const assetWidth = 360;
-const assetHeight = 260;
-const vulnWidth = 430;
-const vulnHeight = 94;
-const rowGap = 54;
-const vulnGap = 14;
-const entryX = 42;
-const pathX = 262;
-const assetX = 552;
-const vulnX = 970;
+const entryWidth = 210;
+const entryHeight = 96;
+const pathWidth = 290;
+const pathHeight = 152;
+const assetWidth = 410;
+const assetHeight = 292;
+const vulnWidth = 500;
+const vulnHeight = 112;
+const rowGap = 64;
+const vulnGap = 16;
+const entryX = 56;
+const pathX = 318;
+const assetX = 660;
+const vulnX = 1130;
+const laneY = 28;
+const firstRowY = 78;
 const graph = document.getElementById("graph");
 const surface = document.getElementById("surface");
 const edgesSvg = document.getElementById("edges");
@@ -963,8 +1049,9 @@ function render() {
   const visibleNetworkIds = new Set(visibleNetworkPaths.flatMap(path => [path.id, `${path.id}:entry`]));
   const layout = layoutCards(visibleAssets, visibleVulns);
 
-  edgesSvg.replaceChildren(...renderEdges(visibleAssets, visibleVulns, visibleNetworkPaths, layout));
+  edgesSvg.replaceChildren(renderEdgeDefs(), ...renderEdges(visibleAssets, visibleVulns, visibleNetworkPaths, layout));
   cards.replaceChildren(
+    ...renderLaneLabels(),
     ...visibleNetworkPaths.map(path => renderEntryCard(path, layout.entries.get(path.id))),
     ...visibleNetworkPaths.map(path => renderNetworkPathCard(path, layout.networkPaths.get(path.id))),
     ...visibleAssets.map(asset => renderAssetCard(asset, layout.assets.get(asset.id))),
@@ -993,7 +1080,7 @@ function layoutCards(assets, vulnerabilities) {
     if (!visibleVulnerabilitiesByAssetId.has(vuln.assetId)) visibleVulnerabilitiesByAssetId.set(vuln.assetId, []);
     visibleVulnerabilitiesByAssetId.get(vuln.assetId).push(vuln);
   }
-  let y = 42;
+  let y = firstRowY;
   let maxVulnCount = 0;
   for (const asset of assets) {
     const networkPath = primaryNetworkPath(asset);
@@ -1018,6 +1105,43 @@ function layoutCards(assets, vulnerabilities) {
     maxVulnCount,
   };
   return {entries: entryPositions, networkPaths: networkPathPositions, assets: assetPositions, vulnerabilities: vulnerabilityPositions};
+}
+
+function renderLaneLabels() {
+  return [
+    laneLabel("Entry", entryX, laneY, entryWidth),
+    laneLabel("Network path", pathX, laneY, pathWidth),
+    laneLabel("Asset", assetX, laneY, assetWidth),
+    laneLabel("Vulnerabilities", vulnX, laneY, vulnWidth),
+  ];
+}
+
+function laneLabel(value, x, y, width) {
+  const label = document.createElement("div");
+  label.className = "lane-label";
+  label.style.left = `${x}px`;
+  label.style.top = `${y}px`;
+  label.style.width = `${width}px`;
+  label.textContent = value;
+  return label;
+}
+
+function renderEdgeDefs() {
+  const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+  const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
+  marker.setAttribute("id", "edge-arrow");
+  marker.setAttribute("viewBox", "0 0 10 10");
+  marker.setAttribute("refX", "8");
+  marker.setAttribute("refY", "5");
+  marker.setAttribute("markerWidth", "6");
+  marker.setAttribute("markerHeight", "6");
+  marker.setAttribute("orient", "auto-start-reverse");
+  const arrow = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  arrow.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
+  arrow.setAttribute("fill", "#64748b");
+  marker.appendChild(arrow);
+  defs.appendChild(marker);
+  return defs;
 }
 
 function renderEdges(assets, vulnerabilities, networkPaths, layout) {
@@ -1050,6 +1174,7 @@ function edgePath(x1, y1, x2, y2, className, sourceId, targetId) {
   path.dataset.edgeSource = sourceId;
   path.dataset.edgeTarget = targetId;
   path.setAttribute("d", `M ${x1} ${y1} C ${x1 + 42} ${y1}, ${x2 - 42} ${y2}, ${x2} ${y2}`);
+  markActiveEdge(path, sourceId, targetId);
   return path;
 }
 
@@ -1058,8 +1183,17 @@ function fanEdgePath(x1, y1, busX, x2, y2, className, sourceId, targetId) {
   path.setAttribute("class", className);
   path.dataset.edgeSource = sourceId;
   path.dataset.edgeTarget = targetId;
-  path.setAttribute("d", `M ${x1} ${y1} L ${busX} ${y1} L ${busX} ${y2} L ${x2} ${y2}`);
+  path.setAttribute("d", `M ${x1} ${y1} C ${busX} ${y1}, ${busX} ${y2}, ${x2} ${y2}`);
+  markActiveEdge(path, sourceId, targetId);
   return path;
+}
+
+function markActiveEdge(path, sourceId, targetId) {
+  if (!selected) return;
+  const selectedIds = new Set([selected.id, selected.assetId, selected.findingKey].filter(Boolean));
+  if (selectedIds.has(sourceId) || selectedIds.has(targetId)) {
+    path.classList.add("active");
+  }
 }
 
 function primaryNetworkPath(asset) {
@@ -1132,7 +1266,7 @@ function assetBody(asset) {
 
 function renderVulnerabilityCard(vuln, position) {
   const card = createCard("vuln-card", vuln.tier, position, vuln);
-  const subtitle = `${vuln.component}@${vuln.componentVersion} | code ${vuln.codeExposure} | network ${vuln.exposure} | IAM ${vuln.privilege}`;
+  const subtitle = `${compactComponent(vuln.component, vuln.componentVersion)} | code ${vuln.codeExposure} | ${vuln.exposure} network | ${vuln.privilege} IAM`;
   card.append(
     cardTop(vuln.label, [priorityChip(vuln.tier), scoreChip(vuln.score), vuln.knownExploited ? tag("known exploited", "urgent") : null], subtitle),
     vulnBody(vuln)
@@ -1174,7 +1308,10 @@ function cardTop(titleText, chipsValue, subtitle) {
   top.className = "top";
   const titleWrap = document.createElement("div");
   titleWrap.className = "title";
-  titleWrap.textContent = titleText;
+  const titleMain = document.createElement("div");
+  titleMain.className = "title-main";
+  titleMain.textContent = titleText;
+  titleWrap.append(titleMain);
   if (subtitle) {
     const sub = document.createElement("div");
     sub.className = "sub";
@@ -1191,14 +1328,15 @@ function contextRow(label, values) {
   const labelEl = document.createElement("div");
   labelEl.className = "label";
   labelEl.textContent = label;
-  row.append(labelEl, chips(values && values.length ? values : ["unknown"]));
+  row.append(labelEl, chips(values && values.length ? values : ["unknown"], 5));
   return row;
 }
 
-function chips(values) {
+function chips(values, maxItems = 8) {
   const wrap = document.createElement("div");
   wrap.className = "chips";
-  for (const value of (values || []).filter(Boolean).slice(0, 8)) {
+  const filtered = (values || []).filter(Boolean);
+  for (const value of filtered.slice(0, maxItems)) {
     const data = chipValue(value);
     if (!data.text) continue;
     const chip = document.createElement("span");
@@ -1206,7 +1344,19 @@ function chips(values) {
     chip.textContent = data.text;
     wrap.appendChild(chip);
   }
+  if (filtered.length > maxItems) {
+    const more = document.createElement("span");
+    more.className = "chip count";
+    more.textContent = `+${filtered.length - maxItems}`;
+    wrap.appendChild(more);
+  }
   return wrap;
+}
+
+function compactComponent(component, version) {
+  const value = `${component || "unknown"}@${version || "unknown"}`;
+  if (value.length <= 74) return value;
+  return `${value.slice(0, 34)}...${value.slice(-30)}`;
 }
 
 function chipValue(value) {

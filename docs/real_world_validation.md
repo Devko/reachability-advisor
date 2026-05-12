@@ -126,12 +126,15 @@ The script writes `outputs/external-grype/summary.json` and `summary.md`. Curren
 - source reachability;
 - the interactive HTML graph.
 
-The corpus currently contains two scale cases:
+The corpus currently contains five scale cases:
 
 | Case | Coverage |
 |---|---|
 | `aws-retail-store-sample-app` | Java, Go, and Node/TypeScript services plus AWS Terraform for ECS/EKS/App Runner-style deployment paths. It stresses artifact matching, source reachability, IAM/network context, and dense graph rendering. |
 | `google-online-boutique` | Ten Google Online Boutique microservices across Go, Python, Node.js, C#, and Java. It uses Kubernetes manifests to prove public frontend ingress and internal service hops, while Terraform source provides the GKE infrastructure surface. |
+| `bank-of-anthos` | Nine GKE banking services with digest-pinned rendered Kubernetes manifests and Terraform/GKE infrastructure. It proves Kubernetes artifact matching, public frontend ingress, and internal service paths. |
+| `azure-aks-store-demo` | Eight AKS services across Go, Node.js, frontend, and Python/AI code with Terraform and rendered Kubernetes manifests. It validates Azure/Kubernetes workload matching and public LoadBalancer plus internal service evidence. |
+| `instana-robot-shop` | Eight polyglot services with Helm-heavy Kubernetes templates. It is a parser and artifact-matching scale case, not a vulnerability-volume benchmark, because source scanning currently yields only one Grype match. |
 
 Run the full corpus locally with existing checkouts and Grype DB:
 
@@ -149,16 +152,21 @@ Run a single case by adding `--case <case-id>`. If a checkout does not exist and
 - Kubernetes manifest context at `outputs/external-complex/<case>/kubernetes-context.json` and Kubernetes coverage at `outputs/external-complex/<case>/kubernetes-coverage.json` when the case defines a manifest;
 - Reachability Advisor findings, mapping, source coverage, Terraform coverage, Kubernetes coverage, and HTML graph under `outputs/external-complex/<case>/`;
 - aggregate `summary.json` and `summary.md` under `outputs/external-complex/`;
-- benchmark `benchmark.json` and `benchmark.md` under `outputs/external-complex/` with aggregate and per-case finding, remediation, source-reachability, exposure, privilege, Terraform-match, and expectation metrics.
+- benchmark `benchmark.json` and `benchmark.md` under `outputs/external-complex/` with aggregate and per-case finding, remediation, source-reachability, exposure, privilege, Terraform/Kubernetes deployment-match, and expectation metrics.
 
 Use `--refresh` to regenerate SBOM/vulnerability files. Use `--skip-grype` to reuse already generated SBOM/Grype files without invoking Grype.
 
-Current complex snapshot, using the cached local Grype outputs regenerated on 2026-05-11:
+Current complex snapshot, using the cached local Grype outputs regenerated on 2026-05-12:
 
-| Case | Status | SBOMs | Grype matches | Findings | Services with findings | Terraform resources | Artifact match coverage |
-|---|---|---:|---:|---:|---:|---:|---:|
-| `aws-retail-store-sample-app` | passed | 5 | 40 | 40 | 2 | 91 | 0.4 |
-| `google-online-boutique` | passed | 10 | 38 | 38 | 5 | 5 | 0.0 |
+| Case | Status | SBOMs | Grype matches | Findings | Services with findings | Terraform resources | Deployment match | Terraform match | Kubernetes match |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `aws-retail-store-sample-app` | passed | 5 | 40 | 40 | 2 | 91 | 0.8 | 0.8 | 0.0 |
+| `google-online-boutique` | passed | 10 | 38 | 38 | 5 | 5 | 1.0 | 0.0 | 1.0 |
+| `bank-of-anthos` | passed | 9 | 38 | 38 | 4 | 45 | 1.0 | 0.0 | 1.0 |
+| `azure-aks-store-demo` | passed | 8 | 70 | 70 | 7 | 29 | 1.0 | 0.0 | 1.0 |
+| `instana-robot-shop` | passed | 8 | 1 | 1 | 1 | 0 | 1.0 | 0.0 | 1.0 |
+
+Aggregate: 5 cases, 40 service SBOMs, 187 Grype matches, 187 findings, 103 remediation groups, 170 Terraform resources, and 39 deployment artifact matches.
 
 The current scoring snapshot does not promote these complex cases to high or
 urgent without stronger source evidence. AWS Retail's highest finding is medium:
@@ -166,7 +174,9 @@ internal catalog exposure with sensitive IAM context, but `no source rule` for
 the vulnerable Docker package. Online Boutique's highest finding is medium:
 internal shippingservice exposure with `import observed` for gRPC.
 
-The low artifact match coverage is expected for source-only Terraform in this repository set. Many deployable image identities flow through modules, unresolved locals, or Kubernetes manifests. The report exposes that gap while validating Grype parsing, source reachability, Terraform resource classification, Kubernetes service exposure, IAM/network context for matched services, and the HTML graph.
+AWS Retail still has one unmatched UI artifact because the static HCL source path does not render every ECS/EKS child workload. Online Boutique, Bank of Anthos, AKS Store, and Robot Shop reach full deployment matching through Kubernetes manifests. The report keeps Terraform and Kubernetes match coverage separate so source-only Terraform limitations remain visible.
+
+OpenTelemetry Demo is a good future candidate, but it is not enabled in the passing corpus yet because the repository's primary local deployment artifact is Docker Compose. Adding it should follow Docker Compose or rendered Kubernetes support, otherwise the case would validate SBOM/source scale without deployment exposure.
 
 Use `benchmark.json` for drift checks between releases. It is intentionally separate from `summary.json`: the summary is a run log, while the benchmark is the compact metric surface to compare over time. The benchmark shape is covered by `schemas/complex-benchmark.schema.json` and the release validation contract.
 

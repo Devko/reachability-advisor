@@ -65,6 +65,81 @@ class ArtifactManifestEntry:
         return {key: value for key, value in values.items() if value}
 
 
+def create_artifact_manifest_payload(
+    artifacts: list[str],
+    *,
+    image: str | None = None,
+    digest: str | None = None,
+    registry_ref: str | None = None,
+    git_sha: str | None = None,
+    sbom: str | None = None,
+    signed: bool = False,
+) -> dict[str, Any]:
+    """Create a CI artifact manifest skeleton with shared metadata."""
+
+    if not artifacts:
+        raise ArtifactManifestError("at least one artifact name is required")
+    rows = []
+    for artifact in artifacts:
+        name = str(artifact).strip()
+        if not name:
+            raise ArtifactManifestError("artifact names must not be empty")
+        rows.append(
+            {
+                "name": name,
+                **_optional_field("sbom_path", sbom),
+                **_optional_field("image_ref", image),
+                **_optional_field("image_digest", digest),
+                **_optional_field("registry_ref", registry_ref),
+                **_optional_field("git_sha", git_sha),
+            }
+        )
+    return {
+        "schema_version": "1.0",
+        "kind": "reachability-advisor-artifact-manifest",
+        "signed": signed,
+        "artifacts": rows,
+    }
+
+
+def write_artifact_manifest(path: str | Path, payload: dict[str, Any]) -> None:
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def validate_artifact_manifest(path: str | Path) -> dict[str, Any]:
+    """Validate a manifest and return actionable identity coverage details."""
+
+    entries = load_artifact_manifest(path)
+    rows = []
+    for entry in entries:
+        values = entry.identity_values()
+        strong = bool(values.get("ci:registry_ref") or values.get("ci:image:digest") or values.get("ci:image"))
+        rows.append(
+            {
+                "name": entry.name,
+                "strong_identity": strong,
+                "has_digest": bool(values.get("ci:image:digest") or "@" in str(values.get("ci:registry_ref") or "")),
+                "has_sbom_path": bool(entry.sbom),
+                "signed": entry.signed,
+                "identity_keys": sorted(values),
+            }
+        )
+    return {
+        "schema_version": "1.0",
+        "status": "ready" if rows and all(row["strong_identity"] for row in rows) else "warning",
+        "summary": {
+            "artifacts": len(rows),
+            "strong_identity": sum(1 for row in rows if row["strong_identity"]),
+            "with_digest": sum(1 for row in rows if row["has_digest"]),
+            "with_sbom_path": sum(1 for row in rows if row["has_sbom_path"]),
+            "signed": sum(1 for row in rows if row["signed"]),
+        },
+        "artifacts": rows,
+    }
+
+
 def load_artifact_manifest(path: str | Path) -> list[ArtifactManifestEntry]:
     manifest_path = Path(path)
     try:
@@ -164,9 +239,16 @@ def _optional_string(value: Any) -> str | None:
     return text or None
 
 
+def _optional_field(key: str, value: str | None) -> dict[str, str]:
+    return {key: value} if value else {}
+
+
 __all__ = [
     "ArtifactManifestError",
     "ArtifactManifestEntry",
     "apply_artifact_manifests",
+    "create_artifact_manifest_payload",
     "load_artifact_manifest",
+    "validate_artifact_manifest",
+    "write_artifact_manifest",
 ]

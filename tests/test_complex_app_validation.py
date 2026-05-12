@@ -54,6 +54,11 @@ class ComplexAppValidationScriptTests(unittest.TestCase):
         self.assertEqual(statuses["min_findings"], "passed")
         self.assertEqual(statuses["html_report"], "passed")
 
+    def test_relative_cli_path_uses_uri_safe_separators(self) -> None:
+        module = _load_script()
+        path = module.ROOT / "external_corpus" / "worktrees" / "sample" / "src"
+        self.assertEqual(module._relative_cli_path(path), "external_corpus/worktrees/sample/src")
+
     def test_advisor_summary_separates_finding_and_remediation_tier_counts(self) -> None:
         module = _load_script()
         with tempfile.TemporaryDirectory() as tmp:
@@ -160,6 +165,62 @@ spec:
         self.assertIn("context network path: public", data["artifacts"]["frontend"]["evidence"][0])
         self.assertIn("frontend-external", data["artifacts"]["checkoutservice"]["evidence"][0])
 
+    def test_kubernetes_manifest_list_generates_context(self) -> None:
+        module = _load_script()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            checkout = root / "checkout"
+            checkout.mkdir()
+            (checkout / "frontend.yaml").write_text(
+                """
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+spec:
+  selector:
+    matchLabels:
+      app: frontend
+""".strip(),
+                encoding="utf-8",
+            )
+            (checkout / "frontend-service.yaml").write_text(
+                """
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+spec:
+  type: LoadBalancer
+  selector:
+    app: frontend
+""".strip(),
+                encoding="utf-8",
+            )
+            summary = module._generate_kubernetes_context(
+                {
+                    "kubernetes_manifest": ["frontend.yaml", "frontend-service.yaml"],
+                    "workloads": [{"artifact": "frontend"}],
+                },
+                checkout,
+                [{"artifact": "frontend", "status": "passed"}],
+                root / "out",
+            )
+
+        self.assertEqual(summary["status"], "passed")
+        self.assertEqual(len(summary["manifests"]), 2)
+        self.assertEqual(summary["exposure_counts"], {"public": 1})
+
+    def test_case_manifest_paths_accepts_optional_and_list_values(self) -> None:
+        module = _load_script()
+        checkout = Path("checkout")
+        self.assertEqual(module._case_manifest_paths({}, checkout), [])
+        self.assertEqual(module._case_manifest_paths({"kubernetes_manifest": "app.yaml"}, checkout), [checkout / "app.yaml"])
+        self.assertEqual(
+            module._case_manifest_paths({"kubernetes_manifest": ["app.yaml", "extra.yaml"]}, checkout),
+            [checkout / "app.yaml", checkout / "extra.yaml"],
+        )
+
     def test_benchmark_snapshot_aggregates_scale_metrics(self) -> None:
         module = _load_script()
         benchmark = module._benchmark_snapshot(
@@ -182,7 +243,9 @@ spec:
                             "remediation_count": 3,
                             "services_with_findings": 2,
                             "terraform_resources": 7,
+                            "deployment_artifacts_matched": 2,
                             "terraform_artifacts_matched": 1,
+                            "kubernetes_artifacts_matched": 1,
                             "mapping_warnings": 1,
                             "tier_counts": {"medium": 3, "high": 1},
                             "remediation_tier_counts": {"medium": 2, "high": 1},
@@ -216,7 +279,9 @@ spec:
 
         self.assertEqual(benchmark["aggregate"]["sbom_count"], 3)
         self.assertEqual(benchmark["aggregate"]["finding_count"], 5)
+        self.assertEqual(benchmark["aggregate"]["deployment_artifacts_matched"], 2)
         self.assertEqual(benchmark["aggregate"]["terraform_artifacts_matched"], 1)
+        self.assertEqual(benchmark["aggregate"]["kubernetes_artifacts_matched"], 1)
         self.assertEqual(benchmark["aggregate"]["tier_counts"], {"high": 1, "low": 1, "medium": 3})
         self.assertEqual(benchmark["aggregate"]["remediation_tier_counts"], {"high": 1, "low": 1, "medium": 2})
         self.assertEqual(benchmark["aggregate"]["privilege_counts"], {"none": 1, "sensitive": 1})

@@ -27,8 +27,11 @@ class AzureExposureEvaluator(ProviderEvaluator):
                 "api_authorizer",
                 "app_service_auth",
                 "auth_required",
+                "application_gateway_auth",
                 "firewall_policy",
                 "front_door_waf",
+                "nsg_priority_unknown",
+                "route_table_precedence_unknown",
                 "source_cidr_restriction",
                 "waf_or_firewall_policy",
             }
@@ -114,6 +117,33 @@ class AzureExposureEvaluator(ProviderEvaluator):
                     "effect": "constrains",
                     "provider": self.provider,
                     "evidence": "Azure Front Door or Application Gateway WAF evidence is linked to the path",
+                }
+            )
+        if "application_gateway" in text and ("authentication" in text or "auth" in text):
+            augmented.append(
+                {
+                    "kind": "application_gateway_auth",
+                    "effect": "constrains",
+                    "provider": self.provider,
+                    "evidence": "Azure Application Gateway authentication evidence is linked to the path",
+                }
+            )
+        if "network_security_rule" in text or "nsg" in text:
+            augmented.append(
+                {
+                    "kind": "nsg_priority_unknown",
+                    "effect": "constrains",
+                    "provider": self.provider,
+                    "evidence": "Azure NSG evidence is present; priority order must be evaluated",
+                }
+            )
+        if "route_table" in text or "azurerm_route" in text:
+            augmented.append(
+                {
+                    "kind": "route_table_precedence_unknown",
+                    "effect": "constrains",
+                    "provider": self.provider,
+                    "evidence": "Azure route-table evidence is present; route precedence needs rendered confirmation",
                 }
             )
         return dedupe_objects(augmented)

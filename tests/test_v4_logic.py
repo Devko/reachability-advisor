@@ -163,6 +163,13 @@ class ArtifactIdentityTests(unittest.TestCase):
         self.assertEqual(match.method, "exact-reference")
         self.assertEqual(match.confidence, "high")
 
+    def test_artifact_match_symbolic_image_expression_uses_strong_image_identity(self) -> None:
+        artifact = Artifact(name="cart", reference="public.ecr.aws/aws-containers/retail-store-sample-cart:1.5.0")
+        match = artifact_match_evidence(artifact, "module.container_images.result.cart.url")
+        self.assertTrue(match.matched)
+        self.assertEqual(match.method, "symbolic-image-expression")
+        self.assertEqual(match.confidence, "medium")
+
     def test_artifact_match_digest_beats_tag(self) -> None:
         digest = "sha256:" + "b" * 64
         artifact = Artifact(name="app", reference=f"repo/app:old@{digest}")
@@ -825,6 +832,32 @@ class MappingAndSbomPlanTests(unittest.TestCase):
         self.assertIsNone(store.best_for("app", Component(name="left-pad"), vuln))
         self.assertIsNotNone(store.best_for("app", Component(name="left-pad", purl="pkg:npm/left-pad@1.0.0"), vuln))
 
+    def test_external_source_evidence_purl_selector_matches_without_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "source-evidence.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "evidence": [
+                            {
+                                "purl": "pkg:npm/left-pad",
+                                "state": "function_reachable",
+                                "confidence": "high",
+                                "source": "semgrep",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            store = load_external_source_evidence([path])
+
+        evidence = store.best_for("app", Component(name="left-pad", purl="pkg:npm/left-pad@1.0.0"), VulnerabilityRecord(id="GHSA-leftpad", package_name="left-pad"))
+        self.assertIsNotNone(evidence)
+        assert evidence is not None
+        self.assertEqual(evidence.evidence_source, "semgrep")
+        self.assertEqual(evidence.diagnostics[0]["code"], "external_selector_purl_normalized")
+
     def test_external_source_evidence_ranks_selector_and_provider_strength(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "source-evidence.json"
@@ -1321,6 +1354,29 @@ class MappingAndSbomPlanTests(unittest.TestCase):
         report = build_mapping_report([sbom], {}, {"artifact_matches": [], "unmatched_artifacts": ["payments-api"], "summary": {}})
         warnings = report["artifacts"][0]["mapping_warnings"]
         self.assertGreaterEqual(len(warnings), 3)
+
+    def test_mapping_report_counts_kubernetes_deployment_matches(self) -> None:
+        sbom = SbomDocument(path=Path("frontend.cdx.json"), artifact=Artifact(name="frontend", reference="ghcr.io/acme/frontend:1"), components=[])
+        kubernetes = {
+            "artifact_matches": [
+                {
+                    "artifact": "frontend",
+                    "resource": "kubernetes_deployment.frontend",
+                    "provider": "kubernetes",
+                    "match_score": 100,
+                    "match_method": "exact-reference",
+                }
+            ],
+            "unmatched_artifacts": [],
+            "summary": {"artifact_match_coverage": 1.0},
+        }
+
+        report = build_mapping_report([sbom], {}, {"artifact_matches": [], "unmatched_artifacts": ["frontend"], "summary": {}}, kubernetes)
+
+        self.assertEqual(report["summary"]["artifact_match_coverage"], 1.0)
+        self.assertEqual(report["summary"]["artifacts_with_kubernetes_matches"], 1)
+        self.assertEqual(report["artifacts"][0]["deployment_matched"], True)
+        self.assertEqual(report["artifacts"][0]["kubernetes_matches"][0]["provider"], "kubernetes")
 
     def test_cli_scan_writes_mapping_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

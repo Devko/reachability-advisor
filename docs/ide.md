@@ -1,10 +1,10 @@
 # IDE Integration
 
-The `ide/vscode` directory contains a VS Code extension wrapper that invokes the CLI and loads diagnostics from `--diagnostics-out`.
+The `ide/vscode` directory contains a VS Code extension that invokes the CLI, loads diagnostics from `--diagnostics-out`, and opens a finding evidence explorer.
 
 ## Design
 
-Scan logic stays in the Python CLI so CI and IDE runs use the same code path. The extension only handles editor integration.
+Scan logic stays in the Python CLI so CI and IDE runs use the same code path. The extension handles editor integration, profile validation, diagnostics, baseline filtering, and local evidence browsing.
 
 ## Extension behavior
 
@@ -15,9 +15,10 @@ Scan logic stays in the Python CLI so CI and IDE runs use the same code path. Th
 5. Filter diagnostics by minimum tier.
 6. If a baseline is configured, run `reachability-advisor compare` and keep only new or worsened findings.
 7. Publish diagnostics with related source and network evidence.
-8. Open the selected finding evidence with `Reachability Advisor: Explain Finding`.
-9. Generate SBOM and source-evidence plans from VS Code commands.
-10. Show the active profile in the status bar: advisory or release gate.
+8. Open the selected finding as JSON with `Reachability Advisor: Explain Finding`.
+9. Open `Reachability Advisor: Open Evidence Explorer` for searchable finding cards, baseline state, source evidence, network paths, IAM context, and score rationale.
+10. Generate SBOM and source-evidence plans from VS Code commands.
+11. Show the active profile in the status bar: advisory or release gate.
 
 ## Settings
 
@@ -35,7 +36,8 @@ Scan logic stays in the Python CLI so CI and IDE runs use the same code path. Th
   "reachabilityAdvisor.context": "reachability-context.json",
   "reachabilityAdvisor.sourceRootArtifact": "app",
   "reachabilityAdvisor.baseline": "reachability-baseline.json",
-  "reachabilityAdvisor.diagnosticMinimumTier": "medium"
+  "reachabilityAdvisor.diagnosticMinimumTier": "medium",
+  "reachabilityAdvisor.openExplorerAfterScan": true
 }
 ```
 
@@ -46,6 +48,18 @@ Commands:
 - `Reachability Advisor: Validate Profile` reports missing SBOM, vulnerability JSON, external source evidence, rendered deployment evidence, and artifact manifest warnings.
 - `Reachability Advisor: Generate SBOM Plan` writes `.reachability/sbom-plan.md` and `.reachability/sbom-plan.json`.
 - `Reachability Advisor: Generate Source Evidence Plan` writes `.reachability/source-evidence-plan.md` and `.reachability/source-evidence-plan.json`.
+- `Reachability Advisor: Open Evidence Explorer` opens the last scan result in a webview. It does not rescan.
+
+## Evidence Explorer
+
+The explorer is a local webview backed by the last diagnostics payload. It shows:
+
+- profile state and active minimum tier;
+- one row per finding with tier, score, artifact, component, vulnerability, baseline status, and source state;
+- selected-finding details for source exposure, network exposure, IAM impact, effective path, and score rationale;
+- raw evidence JSON for audit and issue handoff.
+
+Use it for triage. Use CI artifacts from the same CLI run as the release record.
 
 ## Diagnostic severity mapping
 

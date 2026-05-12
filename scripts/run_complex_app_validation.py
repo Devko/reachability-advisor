@@ -47,9 +47,9 @@ def _root_path(value: str | Path) -> Path:
 def _relative_cli_path(path: Path) -> str:
     resolved = path.resolve()
     try:
-        return str(resolved.relative_to(ROOT.resolve()))
+        return resolved.relative_to(ROOT.resolve()).as_posix()
     except ValueError:
-        return str(resolved)
+        return resolved.as_posix()
 
 
 def _safe_name(value: str) -> str:
@@ -234,6 +234,19 @@ def _run_hcl_audit(terraform_source: Path, case_out: Path) -> dict[str, Any]:
     }
 
 
+def _case_manifest_paths(case: dict[str, Any], checkout: Path) -> list[Path]:
+    manifest_value = case.get("kubernetes_manifest")
+    if not manifest_value:
+        return []
+    values = manifest_value if isinstance(manifest_value, list) else [manifest_value]
+    paths: list[Path] = []
+    for value in values:
+        if not isinstance(value, str) or not value.strip():
+            continue
+        paths.append(checkout / value)
+    return paths
+
+
 def _strip_yaml_value(value: str) -> str:
     value = value.strip()
     if value.startswith(("'", '"')) and value.endswith(("'", '"')) and len(value) >= 2:
@@ -329,12 +342,12 @@ def _max_exposure(values: list[str]) -> str:
 
 
 def _generate_kubernetes_context(case: dict[str, Any], checkout: Path, workload_rows: list[dict[str, Any]], case_out: Path) -> dict[str, Any] | None:
-    manifest_name = case.get("kubernetes_manifest")
-    if not manifest_name:
+    manifest_paths = _case_manifest_paths(case, checkout)
+    if not manifest_paths:
         return None
-    manifest = checkout / str(manifest_name)
-    if not manifest.exists():
-        return {"status": "missing", "path": str(manifest), "contexts": 0}
+    missing = [path for path in manifest_paths if not path.exists()]
+    if missing:
+        return {"status": "missing", "paths": [str(path) for path in missing], "contexts": 0}
 
     passed_artifacts = {str(row["artifact"]) for row in workload_rows if row.get("status") == "passed"}
     artifacts: list[Artifact] = []
@@ -346,7 +359,7 @@ def _generate_kubernetes_context(case: dict[str, Any], checkout: Path, workload_
         artifacts.append(Artifact(name=artifact, properties={"reachability:aliases": aliases} if aliases else {}))
 
     analysis = analyze_kubernetes_manifests(
-        [manifest],
+        manifest_paths,
         artifacts,
         infer_lateral_from_public_entry=bool(case.get("infer_cluster_lateral_from_public_entry")),
     )
@@ -368,7 +381,8 @@ def _generate_kubernetes_context(case: dict[str, Any], checkout: Path, workload_
     return {
         "status": "passed",
         "path": str(output),
-        "manifest": str(manifest),
+        "manifest": str(manifest_paths[0]) if len(manifest_paths) == 1 else [str(path) for path in manifest_paths],
+        "manifests": [str(path) for path in manifest_paths],
         "workloads": len(context["artifacts"]),
         "services": summary.get("service_resources", 0),
         "service_matches": summary.get("artifacts_matched", 0),
@@ -383,10 +397,11 @@ def _run_advisor(
     merged_vulns: Path,
     case_out: Path,
     context_path: Path | None = None,
-    kubernetes_manifest: Path | None = None,
+    kubernetes_manifests: list[Path] | None = None,
     infer_kubernetes_lateral: bool = False,
 ) -> dict[str, Any]:
-    terraform_source = checkout / str(case["terraform_source"])
+    terraform_source_value = case.get("terraform_source")
+    terraform_source = checkout / str(terraform_source_value) if terraform_source_value else None
     findings_out = case_out / "findings.json"
     markdown_out = case_out / "summary.md"
     html_out = case_out / "reachability-graph.html"
@@ -400,18 +415,18 @@ def _run_advisor(
             args.extend(["--sbom", str(row["sbom"])])
     if context_path:
         args.extend(["--context", str(context_path)])
-    if kubernetes_manifest:
-        args.extend(["--kubernetes-manifest", str(kubernetes_manifest), "--kubernetes-coverage-out", str(kubernetes_coverage_out)])
+    kubernetes_manifests = kubernetes_manifests or []
+    if kubernetes_manifests:
+        for manifest in kubernetes_manifests:
+            args.extend(["--kubernetes-manifest", str(manifest)])
+        args.extend(["--kubernetes-coverage-out", str(kubernetes_coverage_out)])
         if infer_kubernetes_lateral:
             args.append("--kubernetes-infer-lateral")
+    args.extend(["--vulns", str(merged_vulns)])
+    if terraform_source:
+        args.extend(["--terraform-source", str(terraform_source), "--terraform-coverage-out", str(coverage_out)])
     args.extend(
         [
-            "--vulns",
-            str(merged_vulns),
-            "--terraform-source",
-            str(terraform_source),
-            "--terraform-coverage-out",
-            str(coverage_out),
             "--source-coverage-out",
             str(source_coverage_out),
             "--mapping-out",
@@ -486,10 +501,14 @@ def _advisor_summary(advisor: dict[str, Any]) -> dict[str, Any]:
         "privilege_counts": _count_by(contexts, "privilege"),
         "terraform_resources": coverage_summary.get("total_resources", 0),
         "terraform_semantic_coverage": coverage_summary.get("semantic_classification_coverage"),
-        "terraform_artifact_match_coverage": coverage_summary.get("artifact_match_coverage"),
-        "terraform_artifacts_matched": coverage_summary.get("artifacts_matched", 0),
-        "mapping_warnings": len(mapping_doc.get("warnings") or []),
-        "mapping_artifacts_with_matches": mapping_summary.get("artifacts_with_terraform_matches", 0),
+        "deployment_artifact_match_coverage": mapping_summary.get("artifact_match_coverage"),
+        "deployment_artifacts_matched": mapping_summary.get("artifacts_with_deployment_matches", 0),
+        "terraform_artifact_match_coverage": mapping_summary.get("terraform_match_coverage", coverage_summary.get("artifact_match_coverage")),
+        "terraform_artifacts_matched": mapping_summary.get("artifacts_with_terraform_matches", coverage_summary.get("artifacts_matched", 0)),
+        "kubernetes_artifact_match_coverage": mapping_summary.get("kubernetes_match_coverage"),
+        "kubernetes_artifacts_matched": mapping_summary.get("artifacts_with_kubernetes_matches", 0),
+        "mapping_warnings": mapping_summary.get("mapping_warnings_count", len(mapping_doc.get("warnings") or [])),
+        "mapping_artifacts_with_matches": mapping_summary.get("artifacts_with_deployment_matches", 0),
         "top_remediations": [
             {
                 "artifact": item.get("artifact", {}).get("name"),
@@ -547,7 +566,9 @@ def _benchmark_snapshot(report: dict[str, Any]) -> dict[str, Any]:
         "remediation_count": 0,
         "services_with_findings": 0,
         "terraform_resources": 0,
+        "deployment_artifacts_matched": 0,
         "terraform_artifacts_matched": 0,
+        "kubernetes_artifacts_matched": 0,
         "mapping_warnings": 0,
         "tier_counts": {},
         "remediation_tier_counts": {},
@@ -570,8 +591,12 @@ def _benchmark_snapshot(report: dict[str, Any]) -> dict[str, Any]:
             "remediation_count": metrics.get("remediation_count", 0),
             "services_with_findings": metrics.get("services_with_findings", 0),
             "terraform_resources": metrics.get("terraform_resources", 0),
+            "deployment_artifacts_matched": metrics.get("deployment_artifacts_matched", 0),
+            "deployment_artifact_match_coverage": metrics.get("deployment_artifact_match_coverage"),
             "terraform_artifacts_matched": metrics.get("terraform_artifacts_matched", 0),
             "terraform_artifact_match_coverage": metrics.get("terraform_artifact_match_coverage"),
+            "kubernetes_artifacts_matched": metrics.get("kubernetes_artifacts_matched", 0),
+            "kubernetes_artifact_match_coverage": metrics.get("kubernetes_artifact_match_coverage"),
             "mapping_warnings": metrics.get("mapping_warnings", 0),
             "tier_counts": metrics.get("tier_counts", {}),
             "remediation_tier_counts": metrics.get("remediation_tier_counts", {}),
@@ -589,7 +614,9 @@ def _benchmark_snapshot(report: dict[str, Any]) -> dict[str, Any]:
             "remediation_count",
             "services_with_findings",
             "terraform_resources",
+            "deployment_artifacts_matched",
             "terraform_artifacts_matched",
+            "kubernetes_artifacts_matched",
             "mapping_warnings",
         ):
             aggregate[key] += int(metrics.get(key) or 0)
@@ -628,17 +655,22 @@ def _write_benchmark_markdown(benchmark: dict[str, Any], path: Path) -> None:
         f"| Remediation groups | {aggregate.get('remediation_count', 0)} |",
         f"| Services with findings | {aggregate.get('services_with_findings', 0)} |",
         f"| Terraform resources | {aggregate.get('terraform_resources', 0)} |",
+        f"| Deployment artifacts matched | {aggregate.get('deployment_artifacts_matched', 0)} |",
+        f"| Terraform artifacts matched | {aggregate.get('terraform_artifacts_matched', 0)} |",
+        f"| Kubernetes artifacts matched | {aggregate.get('kubernetes_artifacts_matched', 0)} |",
         "",
         "## Cases",
         "",
-        "| Case | Status | SBOMs | Matches | Findings | Services | Terraform resources | Terraform matches | Expectation failures |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|",
+        "| Case | Status | SBOMs | Matches | Findings | Services | Terraform resources | Deployment matches | Terraform matches | Kubernetes matches | Expectation failures |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in benchmark["cases"]:
         lines.append(
             f"| `{row.get('id')}` | {row.get('status')} | {row.get('sbom_count', 0)} | {row.get('vulnerability_matches', 0)} | "
             f"{row.get('finding_count', 0)} | {row.get('services_with_findings', 0)} | {row.get('terraform_resources', 0)} | "
+            f"{row.get('deployment_artifacts_matched', 0)} | "
             f"{row.get('terraform_artifacts_matched', 0)} | "
+            f"{row.get('kubernetes_artifacts_matched', 0)} | "
             f"{row.get('expectations_failed', 0)} |"
         )
     lines.append("")
@@ -659,8 +691,9 @@ def _run_case(case: dict[str, Any], args: argparse.Namespace, grype: Path | None
     }
     try:
         checkout = _clone_or_reuse(case, _root_path(args.worktrees), args.no_clone)
-        terraform_source = checkout / str(case["terraform_source"])
-        if not terraform_source.exists():
+        terraform_source_value = case.get("terraform_source")
+        terraform_source = checkout / str(terraform_source_value) if terraform_source_value else None
+        if terraform_source and not terraform_source.exists():
             raise FileNotFoundError(f"Terraform source does not exist: {terraform_source}")
         if grype is None and not args.skip_grype:
             row.update({"status": "skipped", "error": "grype executable was not found"})
@@ -685,18 +718,18 @@ def _run_case(case: dict[str, Any], args: argparse.Namespace, grype: Path | None
 
         merged_vulns = case_out / "merged-grype.json"
         merged_summary = _merge_grype_reports(passed_workloads, merged_vulns)
-        hcl_summary = _run_hcl_audit(terraform_source, case_out)
+        hcl_summary = _run_hcl_audit(terraform_source, case_out) if terraform_source else None
         kubernetes_context = _generate_kubernetes_context(case, checkout, passed_workloads, case_out)
-        kubernetes_manifest = checkout / str(case["kubernetes_manifest"]) if case.get("kubernetes_manifest") else None
-        if kubernetes_manifest and not kubernetes_manifest.exists():
-            kubernetes_manifest = None
+        kubernetes_manifests = _case_manifest_paths(case, checkout)
+        if any(not manifest.exists() for manifest in kubernetes_manifests):
+            kubernetes_manifests = []
         advisor = _run_advisor(
             case,
             checkout,
             passed_workloads,
             merged_vulns,
             case_out,
-            kubernetes_manifest=kubernetes_manifest,
+            kubernetes_manifests=kubernetes_manifests,
             infer_kubernetes_lateral=bool(case.get("infer_cluster_lateral_from_public_entry")),
         )
         advisor_metrics = _advisor_summary(advisor)
@@ -714,7 +747,7 @@ def _run_case(case: dict[str, Any], args: argparse.Namespace, grype: Path | None
             {
                 "status": status,
                 "checkout": str(checkout),
-                "terraform_source": str(terraform_source),
+                "terraform_source": str(terraform_source) if terraform_source else None,
                 "workloads": workload_rows,
                 "merged_vulnerabilities": merged_summary,
                 "hcl_audit": hcl_summary,
@@ -755,7 +788,9 @@ def _write_case_markdown(row: dict[str, Any], path: Path) -> None:
                 f"| Services with findings | {metrics.get('services_with_findings', 0)} |",
                 f"| Terraform resources | {metrics.get('terraform_resources', 0)} |",
                 f"| Terraform semantic coverage | {metrics.get('terraform_semantic_coverage')} |",
+                f"| Deployment artifact match coverage | {metrics.get('deployment_artifact_match_coverage')} |",
                 f"| Terraform artifact match coverage | {metrics.get('terraform_artifact_match_coverage')} |",
+                f"| Kubernetes artifact match coverage | {metrics.get('kubernetes_artifact_match_coverage')} |",
                 "",
             ]
         )
@@ -798,15 +833,17 @@ def _write_aggregate_markdown(report: dict[str, Any], path: Path) -> None:
     lines = [
         "# Complex App Validation Summary",
         "",
-        "| Case | Status | Workloads | Grype matches | Findings | Services | Terraform resources | Artifact match |",
-        "|---|---|---:|---:|---:|---:|---:|---:|",
+        "| Case | Status | Workloads | Grype matches | Findings | Services | Terraform resources | Deployment match | Terraform match | Kubernetes match |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in report["cases"]:
         metrics = row.get("metrics") or {}
         lines.append(
             f"| `{row['id']}` | {row['status']} | {metrics.get('sbom_count', 0)} | {metrics.get('vulnerability_matches', 0)} | "
             f"{metrics.get('finding_count', 0)} | {metrics.get('services_with_findings', 0)} | {metrics.get('terraform_resources', 0)} | "
-            f"{metrics.get('terraform_artifact_match_coverage')} |"
+            f"{metrics.get('deployment_artifact_match_coverage')} | "
+            f"{metrics.get('terraform_artifact_match_coverage')} | "
+            f"{metrics.get('kubernetes_artifact_match_coverage')} |"
         )
     lines.extend(["", "Outputs are written below `outputs/external-complex/<case-id>/`.", ""])
     path.write_text("\n".join(lines), encoding="utf-8")

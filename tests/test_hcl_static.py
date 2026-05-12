@@ -242,6 +242,24 @@ class HclStaticCoverageBoostTests(unittest.TestCase):
         self.assertTrue(is_public_exposure(resources[0]))
         self.assertIn("ghcr.io/acme/app:1", find_image_references(resources[1].values))
 
+    def test_hcl_static_module_image_argument_counts_as_mapping_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "main.tf").write_text(
+                '''
+                module "cart_service" {
+                  source          = "./service"
+                  container_image = module.container_images.result.cart.url
+                }
+                ''',
+                encoding="utf-8",
+            )
+            analysis = analyze_terraform_source(root, [Artifact(name="carts", reference="public.ecr.aws/aws-containers/retail-store-sample-cart:1.5.0")])
+
+        self.assertEqual(analysis.coverage["summary"]["artifact_match_coverage"], 1.0)
+        self.assertEqual(analysis.coverage["artifact_matches"][0]["resource"], "module.cart_service")
+        self.assertEqual(analysis.coverage["artifact_matches"][0]["match_method"], "symbolic-image-expression")
+
     def test_hcl_static_preserves_security_group_reference_as_lateral_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

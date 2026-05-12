@@ -67,6 +67,8 @@ Same-function attacker control is the baseline. The analyzer also builds one sou
 
 Use `--source-coverage-out` to review source files and package-manager manifests scanned, skipped files, state counts, dependency-graph evidence, manifest evidence, and imported external evidence. Use `--source-evidence-in` to import stronger Semgrep, SARIF, govulncheck, or native evidence.
 
+External evidence selectors can use a component name, vulnerability ID, or package URL. Package URL selectors are matched by ecosystem, namespace, and package name; versions and qualifiers may differ because Semgrep, CodeQL, and govulncheck often emit versionless package identities. The selected finding includes an `external_selector_purl_normalized` diagnostic when this normalization is used.
+
 Supported built-in rule families:
 
 | Ecosystem | Examples |
@@ -117,16 +119,19 @@ Artifact-to-workload matching uses conservative evidence scores:
 | `digest` | 96 | Image digests match. |
 | `repository-tag` | 90 | Repository and tag match. |
 | `repository` | 72 | Repository matches; tag/digest missing or different. |
+| `symbolic-image-expression` | 68 | Terraform source fallback found an image expression such as `module.images.result.cart.url` whose service token matches a strong SBOM image reference. |
 | `repository-leaf` | 58 | Last path segment matches. |
 | `name` / `artifact-name` | 45-52 | Weak name-only match. |
 
 Low-confidence matches remain visible and do not become high-confidence evidence. Terraform coverage rows include `match_proof`, `candidate_source`, and `candidate_strength` so reviewers can see whether the match came from a digest, image reference, repository/tag, alias, or weak name fallback.
 
+`symbolic-image-expression` exists for static Terraform source mode only. It is useful for early feedback when module outputs are not rendered yet, but release gates should still prefer Terraform plan JSON or rendered Kubernetes manifests with real image references.
+
 Terraform context also combines network reachability and IAM. Provider network adapters record route, private endpoint, VPC connector, firewall target, firewall priority, and NSG allow/deny signals. These signals are only useful when the graph can link them to a workload path.
 
 The analyzer links workload identities to IAM policies where the plan exposes task roles, instance profiles, service accounts, managed identities, or role assignments. It records impact classes such as `data_access`, `network_control`, `iam_escalation`, and `compute_control`. Capability records include action, scope, condition keys, effective risk, and risk multiplier. Scoped or conditional critical permissions remain important, but they score lower than broad unconditioned critical permissions. Impacts raise context criticality only after considering whether the workload is public, external, internal, or private.
 
-Rendered Kubernetes manifests supplied through `--kubernetes-manifest` add direct workload, Service, Ingress, and RBAC evidence. They are useful when Terraform contains only a Helm release or kubectl wrapper and cannot expose the rendered child resources. The Kubernetes analyzer emits a separate `--kubernetes-coverage-out` report.
+Rendered Kubernetes manifests supplied through `--kubernetes-manifest` add direct workload, Service, Ingress, RBAC, NetworkPolicy, and artifact-match evidence. They are useful when Terraform contains only a Helm release or kubectl wrapper and cannot expose the rendered child resources. The Kubernetes analyzer emits a separate `--kubernetes-coverage-out` report. The mapping report combines Terraform and Kubernetes matches into `deployment_matches`, while keeping `terraform_matches` and `kubernetes_matches` separate for audit.
 
 ## Step 6: mapping report
 
@@ -146,9 +151,10 @@ The report includes:
 - artifact candidates from SBOM metadata and aliases;
 - artifact identity candidate source and strength;
 - whether a source root exists;
-- Terraform matches with method, score, confidence, and proof;
-- warnings for missing source roots, weak artifact identity, or no Terraform match;
-- Terraform coverage summary.
+- deployment matches from Terraform and Kubernetes with method, score, confidence, and proof;
+- provider-specific `terraform_matches` and `kubernetes_matches`;
+- warnings for missing source roots, weak artifact identity, or no deployment match;
+- Terraform and Kubernetes coverage summaries.
 
 ## Non-goals
 

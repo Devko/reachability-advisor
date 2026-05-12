@@ -254,7 +254,7 @@ Terraform plan JSON is the deployment-context source for release gates. Context 
 }
 ```
 
-Missing context is `unknown`; it is not isolation evidence.
+Missing context is `unknown`; it is not isolation evidence. Unknown network or IAM context gets an uncertainty premium so it ranks above confirmed internal/no-role context, but below confirmed public or sensitive/admin context. It is still capped below `urgent` until stronger deployment, network, IAM, or exploit evidence proves the effective path.
 
 ## Scoring
 
@@ -273,6 +273,8 @@ score = severity
 
 Context impact is not fully additive. `admin`, `sensitive`, `data_access`, `network_control`, `iam_escalation`, and high asset criticality can describe the same blast radius, so the scorer takes the strongest one instead of stacking all of them. IAM capability records are normalized before scoring, and the strongest capability contributes through the same impact table as aggregate `iam_impacts` after applying its `risk_multiplier`. The provider-specific `effective_exposure` decision drives blocker and low-confidence gates. Low-confidence IAM and network paths remain evidence, but caps prevent them from behaving like confirmed exposure. The JSON finding includes `scoring.dimensions[]` for each point contribution and `scoring.gates[]` for caps such as weak source evidence, private/no-ingress context, low-confidence IAM/network evidence, network blockers, and the urgent gate.
 
+Default exposure weights are deliberately ordered as public, external, unknown, internal, private/no ingress. Default privilege weights are admin, sensitive, unknown, limited, none. This means missing evidence is treated as a risk to close, not as a safe state. The model does not use absolute worst case for unknowns because that would make missing Terraform/Kubernetes/IAM evidence indistinguishable from confirmed internet exposure with admin rights.
+
 Priority gates prevent weakly actionable findings from crossing high-severity thresholds only because several small signals add up:
 
 - dev/test dependencies without source usage are capped below `medium`;
@@ -281,7 +283,7 @@ Priority gates prevent weakly actionable findings from crossing high-severity th
 - import-only evidence is capped below `high` unless it is public/external and has critical context;
 - private/no-ingress findings without exploit signal or critical context are capped below `high`;
 - confirmed network blockers cap non-exploited findings below `high`;
-- constrained or unknown blocker semantics keep non-exploited findings below `urgent`;
+- constrained or unknown network semantics keep non-exploited findings below `urgent`;
 - low-confidence IAM or network evidence keeps non-exploited findings below `urgent`;
 - `urgent` requires known exploitation, high EPSS, a request-controlled public/external path, or critical reachable context.
 
@@ -294,6 +296,7 @@ The default model is meant to separate these common cases:
 | Public request-controlled vulnerable code path plus sensitive/admin context | `urgent` |
 | Public request-controlled vulnerable code path without critical context | `high` |
 | Internal/lateral request-controlled vulnerable code path | `high` when severity is high enough |
+| Unknown deployment or IAM context with request-controlled code | `high` when severity is high enough, but below `urgent` until the path is proven |
 | Function/API usage with no proven attacker-controlled path | usually `medium` |
 | Import-only, SBOM-only, or no-rule evidence | usually `low` or `medium`, depending on severity and context |
 | Private/no-ingress workload without exploit signal or critical context | below `high` |

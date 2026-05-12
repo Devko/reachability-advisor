@@ -17,6 +17,7 @@ from .models import (
     SourceLocation,
     VulnerabilityRecord,
 )
+from .purl import parse_purl
 
 VULNERABILITY_ID_RE = re.compile(r"^(CVE-\d{4}-\d+|GHSA-[a-z0-9-]+|GO-\d{4}-\d+|OSV-\d+|PYSEC-\d{4}-\d+)", re.IGNORECASE)
 
@@ -61,7 +62,7 @@ class ExternalSourceEvidenceStore:
     records: list[ExternalSourceEvidenceRecord] = field(default_factory=list)
 
     def best_for(self, artifact: str, component: Component, vulnerability: VulnerabilityRecord) -> SourceEvidence | None:
-        candidates: list[ExternalSourceEvidenceRecord] = []
+        candidates: list[tuple[ExternalSourceEvidenceRecord, dict[str, Any] | None]] = []
         component_names = {component.name.lower(), component.display_name.lower()}
         if component.purl:
             component_names.add(component.purl.lower())
@@ -71,10 +72,12 @@ class ExternalSourceEvidenceStore:
                 continue
             if record.vulnerability and record.vulnerability.lower() not in vuln_ids:
                 continue
+            purl_diagnostic = None
             if record.package_purl:
                 if not component.purl:
                     continue
-                if record.package_purl.lower() != component.purl.lower():
+                purl_matches, purl_diagnostic = _package_purl_selector_matches(record.package_purl, component.purl)
+                if not purl_matches:
                     continue
             if record.component and record.component.lower() not in component_names:
                 continue
@@ -82,10 +85,11 @@ class ExternalSourceEvidenceStore:
                 # Artifact names only narrow the service. They do not prove
                 # which SBOM dependency the external analyzer result applies to.
                 continue
-            candidates.append(record)
+            candidates.append((record, purl_diagnostic))
         if not candidates:
             return None
-        return max(candidates, key=_record_rank).evidence
+        selected, purl_diagnostic = max(candidates, key=lambda item: _record_rank(item[0]))
+        return _evidence_with_diagnostic(selected.evidence, purl_diagnostic)
 
     def provider_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
@@ -219,6 +223,44 @@ def _provider_trust(record: ExternalSourceEvidenceRecord) -> int:
 
 def _provider_name(record: ExternalSourceEvidenceRecord) -> str:
     return str(record.provider or record.evidence.evidence_source or "unknown")
+
+
+def _package_purl_selector_matches(record_purl: str, component_purl: str) -> tuple[bool, dict[str, Any] | None]:
+    if record_purl.lower() == component_purl.lower():
+        return True, None
+    record_parsed = parse_purl(record_purl)
+    component_parsed = parse_purl(component_purl)
+    if not record_parsed or not component_parsed:
+        return False, None
+    if (record_parsed.ptype or "").lower() != (component_parsed.ptype or "").lower():
+        return False, None
+    if (record_parsed.namespace or "").lower() != (component_parsed.namespace or "").lower():
+        return False, None
+    if (record_parsed.name or "").lower() != (component_parsed.name or "").lower():
+        return False, None
+    return True, {
+        "code": "external_selector_purl_normalized",
+        "severity": "info",
+        "message": "External source evidence package URL matched the SBOM package identity after ignoring version or qualifiers.",
+        "detail": {"evidence_purl": record_purl, "component_purl": component_purl},
+    }
+
+
+def _evidence_with_diagnostic(evidence: SourceEvidence, diagnostic: dict[str, Any] | None) -> SourceEvidence:
+    if diagnostic is None:
+        return evidence
+    diagnostics = [diagnostic, *evidence.diagnostics]
+    return SourceEvidence(
+        reachability=evidence.reachability,
+        confidence=evidence.confidence,
+        language=evidence.language,
+        reason=evidence.reason,
+        locations=evidence.locations,
+        matched_symbols=evidence.matched_symbols,
+        dependency_path=evidence.dependency_path,
+        evidence_source=evidence.evidence_source,
+        diagnostics=diagnostics,
+    )
 
 
 def _state(value: Any, default: Reachability = Reachability.FUNCTION_REACHABLE) -> Reachability:

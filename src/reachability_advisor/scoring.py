@@ -67,13 +67,13 @@ class ScorePolicy:
         default_factory=lambda: {"runtime": 0.0, "test": -18.0, "dev": -18.0, "development": -18.0, "provided": -8.0, "optional": -8.0}
     )
     exposure_points: dict[str, float] = field(
-        default_factory=lambda: {"public": 14.0, "external": 10.0, "internal": 5.0, "private": 0.0, "none": 0.0, "unknown": 0.0}
+        default_factory=lambda: {"public": 14.0, "external": 10.0, "unknown": 8.0, "internal": 5.0, "private": 0.0, "none": 0.0}
     )
     environment_points: dict[str, float] = field(
         default_factory=lambda: {"prod": 4.0, "production": 4.0, "staging": 2.0, "dev": 0.0, "development": 0.0, "unknown": 0.0}
     )
     privilege_points: dict[str, float] = field(
-        default_factory=lambda: {"admin": 16.0, "sensitive": 10.0, "limited": 3.0, "none": 0.0, "unknown": 0.0}
+        default_factory=lambda: {"admin": 16.0, "sensitive": 10.0, "unknown": 6.0, "limited": 3.0, "none": 0.0}
     )
     criticality_points: dict[str, float] = field(
         default_factory=lambda: {"high": 13.0, "medium": 6.0, "low": 1.0, "unknown": 0.0}
@@ -91,7 +91,7 @@ class ScorePolicy:
 
 
 DEFAULT_POLICY = ScorePolicy()
-SCORING_MODEL_VERSION = "2026-05-11"
+SCORING_MODEL_VERSION = "2026-05-12"
 
 
 def _severity_score(vulnerability: VulnerabilityRecord, policy: ScorePolicy) -> tuple[float, str]:

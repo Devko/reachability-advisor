@@ -154,6 +154,259 @@
         "Static HCL mode records the Terraform surface, but Kubernetes manifests provide the primary service exposure evidence for this sample.",
         "Grype results depend on the local vulnerability database snapshot used by the validation runner."
       ]
+    },
+    {
+      "id": "bank-of-anthos",
+      "name": "Google Cloud Bank of Anthos",
+      "repo": "https://github.com/GoogleCloudPlatform/bank-of-anthos.git",
+      "web": "https://github.com/GoogleCloudPlatform/bank-of-anthos",
+      "worktree": "bank-of-anthos",
+      "terraform_source": "iac",
+      "kubernetes_manifest": "kubernetes-manifests",
+      "infer_cluster_lateral_from_public_entry": true,
+      "why_selected": "GKE banking microservice sample with Java, Python, Node.js, PostgreSQL services, rendered Kubernetes manifests with digest-pinned images, Terraform/GKE infrastructure, public frontend ingress, and internal service-to-service paths.",
+      "workloads": [
+        {
+          "artifact": "frontend",
+          "source": "src/frontend",
+          "aliases": [
+            "us-central1-docker.pkg.dev/bank-of-anthos-ci/bank-of-anthos/frontend:v0.6.9",
+            "us-central1-docker.pkg.dev/bank-of-anthos-ci/bank-of-anthos/frontend:v0.6.9@sha256:70d8db0c0d9edfd9c40e3508265d3addf007187ed30a2c48cd7f30d40e428f13"
+          ]
+        },
+        {
+          "artifact": "userservice",
+          "source": "src/accounts/userservice",
+          "aliases": [
+            "us-central1-docker.pkg.dev/bank-of-anthos-ci/bank-of-anthos/userservice:v0.6.9",
+            "us-central1-docker.pkg.dev/bank-of-anthos-ci/bank-of-anthos/userservice:v0.6.9@sha256:5e2357fb2e429588b2afa497afc6e948b87f050481041b273f1c8b97003620c2"
+          ]
+        },
+        {
+          "artifact": "contacts",
+          "source": "src/accounts/contacts",
+          "aliases": [
+            "us-central1-docker.pkg.dev/bank-of-anthos-ci/bank-of-anthos/contacts:v0.6.9",
+            "us-central1-docker.pkg.dev/bank-of-anthos-ci/bank-of-anthos/contacts:v0.6.9@sha256:986fda4ca6779ef6f2a98c43c38beb1959118d3001ebb138f3dcb0a274b6a68e"
+          ]
+        },
+        {
+          "artifact": "accounts-db",
+          "source": "src/accounts/accounts-db",
+          "aliases": [
+            "us-central1-docker.pkg.dev/bank-of-anthos-ci/bank-of-anthos/accounts-db:v0.6.9",
+            "us-central1-docker.pkg.dev/bank-of-anthos-ci/bank-of-anthos/accounts-db:v0.6.9@sha256:2be5f41ac8b9bdeafeef6f7b23b08990846e4d3c3abdb5223b9441472d3d43d8"
+          ]
+        },
+        {
+          "artifact": "balancereader",
+          "source": "src/ledger/balancereader",
+          "aliases": [
+            "us-central1-docker.pkg.dev/bank-of-anthos-ci/bank-of-anthos/balancereader:v0.6.9",
+            "us-central1-docker.pkg.dev/bank-of-anthos-ci/bank-of-anthos/balancereader:v0.6.9@sha256:6e4b48918d624f17653f230b53bbddf6c23da45606a89297d2eec72a46c830f9"
+          ]
+        },
+        {
+          "artifact": "ledgerwriter",
+          "source": "src/ledger/ledgerwriter",
+          "aliases": [
+            "us-central1-docker.pkg.dev/bank-of-anthos-ci/bank-of-anthos/ledgerwriter:v0.6.9",
+            "us-central1-docker.pkg.dev/bank-of-anthos-ci/bank-of-anthos/ledgerwriter:v0.6.9@sha256:72509132f868a3d592cb734a7bd410b1bf69d55d38c413279b18e8265f9d98f8"
+          ]
+        },
+        {
+          "artifact": "ledger-db",
+          "source": "src/ledger/ledger-db",
+          "aliases": [
+            "us-central1-docker.pkg.dev/bank-of-anthos-ci/bank-of-anthos/ledger-db:v0.6.9",
+            "us-central1-docker.pkg.dev/bank-of-anthos-ci/bank-of-anthos/ledger-db:v0.6.9@sha256:60bac57e17b83e3ecb28557f22edd16cce15abe80bcbe8a9b240455e3f4666f4"
+          ]
+        },
+        {
+          "artifact": "transactionhistory",
+          "source": "src/ledger/transactionhistory",
+          "aliases": [
+            "us-central1-docker.pkg.dev/bank-of-anthos-ci/bank-of-anthos/transactionhistory:v0.6.9",
+            "us-central1-docker.pkg.dev/bank-of-anthos-ci/bank-of-anthos/transactionhistory:v0.6.9@sha256:1fa3150e4d43d2645ce8a76640050c3a1aeeec1bc0731dbb2957f8db7a27f321"
+          ]
+        },
+        {
+          "artifact": "loadgenerator",
+          "source": "src/loadgenerator",
+          "aliases": [
+            "us-central1-docker.pkg.dev/bank-of-anthos-ci/bank-of-anthos/loadgenerator:v0.6.9",
+            "us-central1-docker.pkg.dev/bank-of-anthos-ci/bank-of-anthos/loadgenerator:v0.6.9@sha256:a95600a753cad11b89ed53026ed49abefd830126b8574881659cc74cdc27d1a2"
+          ]
+        }
+      ],
+      "expectations": {
+        "min_sboms": 9,
+        "min_vulnerability_matches": 10,
+        "min_findings": 10,
+        "min_services_with_findings": 2,
+        "min_terraform_resources": 10
+      },
+      "expected_limitations": [
+        "Rendered Kubernetes manifests provide the primary artifact-to-workload evidence; Terraform source records the GKE and IAM surface but does not render deployment manifests.",
+        "Kubernetes service-to-service context is inferred from manifests, not from live mesh telemetry.",
+        "Grype results depend on the local vulnerability database snapshot used by the validation runner."
+      ]
+    },
+    {
+      "id": "azure-aks-store-demo",
+      "name": "Azure AKS Store Demo",
+      "repo": "https://github.com/Azure-Samples/aks-store-demo.git",
+      "web": "https://github.com/Azure-Samples/aks-store-demo",
+      "worktree": "aks-store-demo",
+      "terraform_source": "infra/terraform",
+      "kubernetes_manifest": [
+        "aks-store-all-in-one.yaml",
+        "ai-service.yaml"
+      ],
+      "infer_cluster_lateral_from_public_entry": true,
+      "why_selected": "Azure AKS sample with Node.js, Go, JavaScript frontend, Python/AI service, Terraform and Bicep infrastructure, public LoadBalancer services, and internal service dependencies.",
+      "workloads": [
+        {
+          "artifact": "order-service",
+          "source": "src/order-service",
+          "aliases": ["ghcr.io/azure-samples/aks-store-demo/order-service:2.1.0"]
+        },
+        {
+          "artifact": "makeline-service",
+          "source": "src/makeline-service",
+          "aliases": ["ghcr.io/azure-samples/aks-store-demo/makeline-service:2.1.0"]
+        },
+        {
+          "artifact": "product-service",
+          "source": "src/product-service",
+          "aliases": ["ghcr.io/azure-samples/aks-store-demo/product-service:2.1.0"]
+        },
+        {
+          "artifact": "store-front",
+          "source": "src/store-front",
+          "aliases": ["ghcr.io/azure-samples/aks-store-demo/store-front:2.1.0"]
+        },
+        {
+          "artifact": "store-admin",
+          "source": "src/store-admin",
+          "aliases": ["ghcr.io/azure-samples/aks-store-demo/store-admin:2.1.0"]
+        },
+        {
+          "artifact": "virtual-customer",
+          "source": "src/virtual-customer",
+          "aliases": ["ghcr.io/azure-samples/aks-store-demo/virtual-customer:2.1.0"]
+        },
+        {
+          "artifact": "virtual-worker",
+          "source": "src/virtual-worker",
+          "aliases": ["ghcr.io/azure-samples/aks-store-demo/virtual-worker:2.1.0"]
+        },
+        {
+          "artifact": "ai-service",
+          "source": "src/ai-service",
+          "aliases": ["ghcr.io/azure-samples/aks-store-demo/ai-service:2.1.0"]
+        }
+      ],
+      "expectations": {
+        "min_sboms": 8,
+        "min_vulnerability_matches": 5,
+        "min_findings": 5,
+        "min_services_with_findings": 2,
+        "min_terraform_resources": 5
+      },
+      "expected_limitations": [
+        "The sample includes Bicep and Terraform; the validation harness uses Terraform plus rendered Kubernetes manifests for release-grade evidence.",
+        "AKS public and internal paths are inferred from Service objects, not from a live Azure load balancer or network policy state.",
+        "Grype results depend on the local vulnerability database snapshot used by the validation runner."
+      ]
+    },
+    {
+      "id": "instana-robot-shop",
+      "name": "Instana Robot Shop",
+      "repo": "https://github.com/instana/robot-shop.git",
+      "web": "https://github.com/instana/robot-shop",
+      "worktree": "robot-shop",
+      "kubernetes_manifest": "K8s/helm/templates",
+      "infer_cluster_lateral_from_public_entry": true,
+      "why_selected": "Polyglot microservice sample with Node.js, Java, Python, Go, databases, queues, and Helm Kubernetes templates. It is useful for validating source/SBOM scale, Helm-heavy manifest parsing, and public web-to-internal service paths.",
+      "workloads": [
+        {
+          "artifact": "web",
+          "source": "web",
+          "aliases": [
+            "robotshop/rs-web:latest",
+            "robotshop/rs-web:2.1.0"
+          ]
+        },
+        {
+          "artifact": "catalogue",
+          "source": "catalogue",
+          "aliases": [
+            "robotshop/rs-catalogue:latest",
+            "robotshop/rs-catalogue:2.1.0"
+          ]
+        },
+        {
+          "artifact": "user",
+          "source": "user",
+          "aliases": [
+            "robotshop/rs-user:latest",
+            "robotshop/rs-user:2.1.0"
+          ]
+        },
+        {
+          "artifact": "cart",
+          "source": "cart",
+          "aliases": [
+            "robotshop/rs-cart:latest",
+            "robotshop/rs-cart:2.1.0"
+          ]
+        },
+        {
+          "artifact": "shipping",
+          "source": "shipping",
+          "aliases": [
+            "robotshop/rs-shipping:latest",
+            "robotshop/rs-shipping:2.1.0"
+          ]
+        },
+        {
+          "artifact": "ratings",
+          "source": "ratings",
+          "aliases": [
+            "robotshop/rs-ratings:latest",
+            "robotshop/rs-ratings:2.1.0"
+          ]
+        },
+        {
+          "artifact": "payment",
+          "source": "payment",
+          "aliases": [
+            "robotshop/rs-payment:latest",
+            "robotshop/rs-payment:2.1.0"
+          ]
+        },
+        {
+          "artifact": "dispatch",
+          "source": "dispatch",
+          "aliases": [
+            "robotshop/rs-dispatch:latest",
+            "robotshop/rs-dispatch:2.1.0"
+          ]
+        }
+      ],
+      "expectations": {
+        "min_sboms": 8,
+        "min_vulnerability_matches": 1,
+        "min_findings": 1,
+        "min_services_with_findings": 1
+      },
+      "expected_limitations": [
+        "This case intentionally exercises Helm templates without a Terraform source tree; release-grade use should prefer rendered manifests.",
+        "The source scan currently produces low vulnerability volume, so this is a Helm/microservice matching case rather than a vulnerability-scale case.",
+        "Helm conditional branches are parsed statically, so service exposure should be treated as validation evidence for parser coverage, not as a live cluster proof.",
+        "Grype results depend on the local vulnerability database snapshot used by the validation runner."
+      ]
     }
   ]
 }

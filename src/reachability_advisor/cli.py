@@ -10,7 +10,13 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .artifact_manifest import ArtifactManifestError, apply_artifact_manifests
+from .artifact_manifest import (
+    ArtifactManifestError,
+    apply_artifact_manifests,
+    create_artifact_manifest_payload,
+    validate_artifact_manifest,
+    write_artifact_manifest,
+)
 from .baseline import (
     baseline_as_findings_json,
     create_baseline_from_findings,
@@ -33,6 +39,11 @@ from .hcl_static import (
     analyze_terraform_source,
     audit_hcl_project,
     render_hcl_audit_markdown,
+)
+from .iac_render import (
+    recommend_iac_render_commands,
+    render_iac_render_plan_markdown,
+    write_iac_render_plan_json,
 )
 from .kubernetes import (
     KubernetesManifestError,
@@ -64,6 +75,7 @@ from .source import (
     parse_source_roots,
     semgrep_rules_yaml,
 )
+from .source_evidence_pack import write_source_evidence_pack
 from .source_evidence_plan import (
     recommend_source_evidence_commands,
     render_source_evidence_plan_markdown,
@@ -126,6 +138,8 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--html-out", help="Self-contained interactive HTML graph report output path.")
     scan.add_argument("--annotations-out", help="GitHub Actions workflow-command annotations output path.")
     scan.add_argument("--readiness-out", help="Write release evidence readiness report JSON.")
+    scan.add_argument("--require-release-ready", action="store_true", help="Exit 10 when release evidence readiness reports blockers.")
+    scan.add_argument("--fail-on-readiness-warnings", action="store_true", help="Exit 10 when release readiness contains warnings as well as blockers.")
     scan.add_argument("--limit", type=int, default=20, help="Maximum rows printed to stdout.")
     scan.add_argument("--no-table", action="store_true", help="Do not print stdout table.")
     scan.add_argument("--fail-on-tier", choices=[tier.value for tier in Tier], help="Exit 10 when any non-excepted finding reaches this tier.")
@@ -172,6 +186,7 @@ def build_parser() -> argparse.ArgumentParser:
     readiness.add_argument("--findings", help="Findings JSON from --out.")
     readiness.add_argument("--out", help="Write readiness JSON.")
     readiness.add_argument("--fail-on-blockers", action="store_true", help="Exit 10 when readiness blockers are present.")
+    readiness.add_argument("--fail-on-warnings", action="store_true", help="Exit 10 when readiness warnings are present.")
 
     init_policy = sub.add_parser("init-policy", help="Write an example runtime policy JSON.")
     init_policy.add_argument("--out", required=True)
@@ -192,6 +207,39 @@ def build_parser() -> argparse.ArgumentParser:
     source_plan.add_argument("--package-manager", choices=["npm", "pnpm", "yarn", "maven", "gradle", "pypi", "poetry", "pip", "go", "golang"], help="Package manager/ecosystem hint.")
     source_plan.add_argument("--out-json", help="Write command plan JSON.")
     source_plan.add_argument("--out-md", help="Write command plan Markdown.")
+
+    source_pack = sub.add_parser("source-evidence-pack", help="Write maintained Semgrep, CodeQL, and govulncheck source evidence assets.")
+    source_pack.add_argument("--output-dir", default="reachability/source-evidence-pack", help="Directory for the generated evidence pack.")
+    source_pack.add_argument("--language", choices=["javascript", "typescript", "java", "python", "go", "golang"], help="Primary language profile.")
+    source_pack.add_argument("--package-manager", choices=["npm", "pnpm", "yarn", "maven", "gradle", "pypi", "poetry", "pip", "go", "golang"], help="Package manager/ecosystem hint.")
+    source_pack.add_argument("--json", action="store_true", help="Print pack manifest JSON.")
+
+    artifact_manifest = sub.add_parser("artifact-manifest", help="Create or validate CI artifact identity manifests.")
+    artifact_manifest_sub = artifact_manifest.add_subparsers(dest="artifact_manifest_command", required=True)
+    artifact_manifest_init = artifact_manifest_sub.add_parser("init", help="Write an artifact identity manifest skeleton.")
+    artifact_manifest_init.add_argument("--artifact", action="append", required=True, help="Artifact/service name. Repeat for multiple artifacts.")
+    artifact_manifest_init.add_argument("--image", help="Built image reference.")
+    artifact_manifest_init.add_argument("--digest", help="Built image digest, for example sha256:...")
+    artifact_manifest_init.add_argument("--registry-ref", help="Repository digest reference, for example registry/app@sha256:...")
+    artifact_manifest_init.add_argument("--git-sha", help="Git revision used to build the artifact.")
+    artifact_manifest_init.add_argument("--sbom", help="SBOM path when the same path applies to the artifact.")
+    artifact_manifest_init.add_argument("--signed", action="store_true", help="Mark the manifest as signed by the CI workflow.")
+    artifact_manifest_init.add_argument("--out", required=True, help="Manifest output path.")
+    artifact_manifest_validate = artifact_manifest_sub.add_parser("validate", help="Validate artifact identity manifest coverage.")
+    artifact_manifest_validate.add_argument("--manifest", required=True)
+    artifact_manifest_validate.add_argument("--out", help="Write validation JSON.")
+    artifact_manifest_validate.add_argument("--fail-on-warning", action="store_true", help="Exit 10 unless every artifact has strong identity.")
+
+    iac_plan = sub.add_parser("rendered-iac-plan", help="Print helper commands for Terraform plan JSON and rendered Kubernetes manifests.")
+    iac_plan.add_argument("--terraform-dir", help="Terraform root/module directory to plan.")
+    iac_plan.add_argument("--helm-chart", help="Helm chart path to render.")
+    iac_plan.add_argument("--helm-release", default="app", help="Helm release name for template rendering.")
+    iac_plan.add_argument("--helm-namespace", default="default", help="Helm namespace for template rendering.")
+    iac_plan.add_argument("--helm-values", action="append", default=[], help="Helm values file. Repeatable.")
+    iac_plan.add_argument("--kustomize-dir", help="Kustomize overlay directory to render.")
+    iac_plan.add_argument("--output-dir", default="reachability", help="Output directory used in generated commands.")
+    iac_plan.add_argument("--out-json", help="Write command plan JSON.")
+    iac_plan.add_argument("--out-md", help="Write command plan Markdown.")
 
     hcl_audit = sub.add_parser("hcl-audit", help="Audit Terraform .tf source coverage without running Terraform.")
     hcl_audit.add_argument("--path", required=True, help="Terraform source directory or .tf file.")
@@ -372,7 +420,7 @@ def run_scan(args: argparse.Namespace) -> int:
         external_source_evidence=external_source_evidence,
     )
     findings = apply_exceptions(findings, runtime_policy)
-    mapping_report = build_mapping_report(sboms, source_roots, terraform_coverage)
+    mapping_report = build_mapping_report(sboms, source_roots, terraform_coverage, kubernetes_coverage)
     if args.artifact_manifest:
         mapping_report["artifact_manifest"] = artifact_manifest_report
     metadata = {
@@ -422,20 +470,28 @@ def run_scan(args: argparse.Namespace) -> int:
         out = Path(args.mapping_out)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(mapping_report, indent=2), encoding="utf-8")
-    if args.readiness_out:
-        readiness = release_readiness_report(
+    readiness_report = None
+    if args.readiness_out or args.require_release_ready or args.fail_on_readiness_warnings:
+        readiness_report = release_readiness_report(
             mapping_report=mapping_report,
             source_coverage=source_coverage,
             terraform_coverage=terraform_coverage,
             kubernetes_coverage=kubernetes_coverage,
             findings=findings,
         )
+    if args.readiness_out and readiness_report is not None:
         out = Path(args.readiness_out)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(readiness, indent=2), encoding="utf-8")
+        out.write_text(json.dumps(readiness_report, indent=2), encoding="utf-8")
     if not args.no_table:
         print(render_table(findings, args.limit))
     quality_failures = _quality_gate_failures(args, mapping_report, source_coverage)
+    if readiness_report is not None:
+        readiness_summary = readiness_report.get("summary", {}) if isinstance(readiness_report.get("summary"), dict) else {}
+        if args.require_release_ready and int(readiness_summary.get("blockers") or 0) > 0:
+            quality_failures.append(f"release readiness has {readiness_summary.get('blockers')} blocker(s)")
+        if args.fail_on_readiness_warnings and int(readiness_summary.get("warnings") or 0) > 0:
+            quality_failures.append(f"release readiness has {readiness_summary.get('warnings')} warning(s)")
     for failure in quality_failures:
         print(f"Reachability Advisor quality gate failed: {failure}", file=sys.stderr)
     if quality_failures:
@@ -576,6 +632,9 @@ def run_evidence_profile(args: argparse.Namespace) -> int:
     if args.fail_on_blockers and report.get("status") == "blocked":
         print(f"Reachability Advisor evidence profile failed: {report['summary']['blockers']} blocker(s).", file=sys.stderr)
         return 10
+    if args.fail_on_warnings and int(report.get("summary", {}).get("warnings") or 0) > 0:
+        print(f"Reachability Advisor evidence profile failed: {report['summary']['warnings']} warning(s).", file=sys.stderr)
+        return 10
     return 0
 
 
@@ -641,6 +700,68 @@ def run_source_evidence_plan(args: argparse.Namespace) -> int:
     markdown = render_source_evidence_plan_markdown(commands)
     if args.out_json:
         write_source_evidence_plan_json(args.out_json, commands)
+    if args.out_md:
+        out = Path(args.out_md)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(markdown, encoding="utf-8")
+    if not args.out_json and not args.out_md:
+        print(markdown)
+    return 0
+
+
+def run_source_evidence_pack(args: argparse.Namespace) -> int:
+    pack = write_source_evidence_pack(
+        args.output_dir,
+        language=args.language,
+        package_manager=args.package_manager,
+    )
+    if args.json:
+        print(json.dumps(pack.to_json(), indent=2))
+    else:
+        print(f"Wrote source evidence pack to {pack.root}")
+        for path in pack.files:
+            print(path)
+    return 0
+
+
+def run_artifact_manifest(args: argparse.Namespace) -> int:
+    if args.artifact_manifest_command == "init":
+        payload = create_artifact_manifest_payload(
+            args.artifact,
+            image=args.image,
+            digest=args.digest,
+            registry_ref=args.registry_ref,
+            git_sha=args.git_sha,
+            sbom=args.sbom,
+            signed=args.signed,
+        )
+        write_artifact_manifest(args.out, payload)
+        return 0
+    if args.artifact_manifest_command == "validate":
+        report = validate_artifact_manifest(args.manifest)
+        if args.out:
+            out = Path(args.out)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        else:
+            print(json.dumps(report, indent=2))
+        return 10 if args.fail_on_warning and report.get("status") != "ready" else 0
+    raise UserFacingError(f"unknown artifact-manifest command: {args.artifact_manifest_command}", 2)
+
+
+def run_rendered_iac_plan(args: argparse.Namespace) -> int:
+    commands = recommend_iac_render_commands(
+        terraform_dir=args.terraform_dir,
+        helm_chart=args.helm_chart,
+        helm_release=args.helm_release,
+        helm_namespace=args.helm_namespace,
+        helm_values=args.helm_values,
+        kustomize_dir=args.kustomize_dir,
+        output_dir=args.output_dir,
+    )
+    markdown = render_iac_render_plan_markdown(commands)
+    if args.out_json:
+        write_iac_render_plan_json(args.out_json, commands)
     if args.out_md:
         out = Path(args.out_md)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -719,6 +840,12 @@ def main(argv: list[str] | None = None) -> int:
             return run_sbom_plan(args)
         if args.command == "source-evidence-plan":
             return run_source_evidence_plan(args)
+        if args.command == "source-evidence-pack":
+            return run_source_evidence_pack(args)
+        if args.command == "artifact-manifest":
+            return run_artifact_manifest(args)
+        if args.command == "rendered-iac-plan":
+            return run_rendered_iac_plan(args)
         if args.command == "fixtures":
             return run_fixtures(args)
         if args.command == "hcl-audit":
