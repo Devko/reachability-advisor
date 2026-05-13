@@ -80,6 +80,15 @@ def release_readiness_report(
                 "message": f"critical external source evidence coverage is {critical_external:.4f}; expected 1.0",
             }
         )
+    raw_query_family = source_summary.get("critical_query_family_coverage")
+    critical_query_family = float(raw_query_family) if raw_query_family is not None else 1.0
+    if critical_query_family < 1.0:
+        blockers.append(
+            {
+                "kind": "critical_source_query_family_coverage",
+                "message": f"critical source query-family coverage is {critical_query_family:.4f}; expected 1.0",
+            }
+        )
 
     for gap in _visibility_gaps(terraform_coverage):
         kind = str(gap.get("type") or gap.get("reason") or "visibility_gap")
@@ -99,6 +108,7 @@ def release_readiness_report(
             "warnings": len(warnings),
             "artifacts": len(artifact_rows),
             "critical_external_evidence_coverage": critical_external,
+            "critical_query_family_coverage": critical_query_family,
             "terraform_resources": terraform_summary.get("total_resources", 0),
             "kubernetes_resources": kubernetes_summary.get("total_resources", 0),
             "artifacts_missing_release_identity": sum(1 for artifact in artifact_rows if "image digest or exact image reference" in artifact["missing"]),

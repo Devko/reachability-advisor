@@ -18,7 +18,7 @@ from reachability_advisor.iac_render import (
     recommend_iac_render_commands,
     render_iac_render_plan_markdown,
 )
-from reachability_advisor.models import Artifact, SbomDocument
+from reachability_advisor.models import Artifact, Component, SbomDocument
 from reachability_advisor.readiness import load_release_readiness_inputs, release_readiness_report
 from reachability_advisor.scoring_benchmark import run_scoring_benchmark
 from reachability_advisor.source_evidence_pack import write_source_evidence_pack
@@ -28,6 +28,8 @@ from reachability_advisor.source_evidence_plan import (
     source_evidence_profile,
     write_source_evidence_plan_json,
 )
+from reachability_advisor.source_query_assets import SEMGREP_QUERY_RULES, query_pack_sample_coverage
+from reachability_advisor.source_query_families import QUERY_PACKS, query_family_ids_for_component
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -130,6 +132,47 @@ class ArtifactManifestTests(unittest.TestCase):
         self.assertEqual(report["summary"]["with_digest"], 1)
         self.assertTrue(report["artifacts"][0]["signed"])
 
+    def test_strict_provenance_requires_release_identity_digest_and_signature(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            weak_path = root / "weak.json"
+            weak_path.write_text(
+                json.dumps({"artifacts": [{"name": "api", "image": "ghcr.io/acme/api:${VERSION}", "git_sha": "not-a-sha"}]}),
+                encoding="utf-8",
+            )
+            strong_path = root / "strong.json"
+            digest = "sha256:" + "d" * 64
+            strong_path.write_text(
+                json.dumps(
+                    {
+                        "attestation": {"issuer": "ci"},
+                        "artifacts": [
+                            {
+                                "name": "api",
+                                "sbom": "sboms/api.cdx.json",
+                                "image": "ghcr.io/acme/api:1.0.0",
+                                "registry_ref": f"ghcr.io/acme/api@{digest}",
+                                "git_sha": "abcdef1234567890",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            weak = validate_artifact_manifest(weak_path, strict_provenance=True)
+            strong = validate_artifact_manifest(strong_path, strict_provenance=True)
+
+        self.assertEqual(weak["status"], "blocked")
+        weak_blockers = {item["kind"] for item in weak["artifacts"][0]["provenance_blockers"]}
+        self.assertIn("missing_image_digest", weak_blockers)
+        self.assertIn("missing_sbom_path", weak_blockers)
+        self.assertIn("invalid_git_sha", weak_blockers)
+        self.assertIn("missing_signature_marker", weak_blockers)
+        self.assertIn("unresolved_image_expression", weak_blockers)
+        self.assertEqual(strong["status"], "ready")
+        self.assertEqual(strong["summary"]["provenance_blockers"], 0)
+
 
 class ReadinessTests(unittest.TestCase):
     def test_readiness_reports_blockers_warnings_and_rendering_gaps(self) -> None:
@@ -159,6 +202,16 @@ class ReadinessTests(unittest.TestCase):
         self.assertIn("unrendered_or_opaque_iac", blocker_kinds)
         self.assertIn("unrendered_or_opaque_kubernetes", blocker_kinds)
         self.assertEqual(report["warnings"][0]["kind"], "identity_effective_access_evidence")
+
+    def test_readiness_blocks_missing_critical_query_family_coverage(self) -> None:
+        report = release_readiness_report(
+            mapping_report={"artifacts": []},
+            source_coverage={"summary": {"critical_external_evidence_coverage": 1.0, "critical_query_family_coverage": 0.5}},
+        )
+
+        self.assertEqual(report["status"], "blocked")
+        self.assertIn("critical_source_query_family_coverage", {item["kind"] for item in report["blockers"]})
+        self.assertEqual(report["summary"]["critical_query_family_coverage"], 0.5)
 
     def test_readiness_reports_weak_matches_and_low_confidence_paths(self) -> None:
         report = release_readiness_report(
@@ -315,9 +368,63 @@ class SourceEvidencePlanTests(unittest.TestCase):
             self.assertEqual(manifest["kind"], "reachability-advisor-source-evidence-pack")
             self.assertEqual(manifest["profile"]["name"], "go")
             self.assertTrue((pack.root / "semgrep-reachability.yml").exists())
+            self.assertTrue((pack.root / "semgrep" / "profiles" / "npm.yml").exists())
+            self.assertTrue((pack.root / "semgrep" / "profiles" / "maven-gradle.yml").exists())
+            self.assertTrue((pack.root / "semgrep" / "profiles" / "python.yml").exists())
+            self.assertTrue((pack.root / "semgrep" / "profiles" / "go.yml").exists())
             self.assertTrue((pack.root / "codeql" / "reachability-suite.qls").exists())
+            self.assertTrue((pack.root / "codeql" / "profiles" / "npm" / "qlpack.yml").exists())
+            self.assertTrue((pack.root / "codeql" / "profiles" / "maven-gradle" / "reachability-suite.qls").exists())
             self.assertTrue((pack.root / "govulncheck" / "reachability-govulncheck.json").exists())
+            self.assertTrue((pack.root / "govulncheck" / "profiles-go.json").exists())
             self.assertEqual(manifest["release_gate"]["critical_external_evidence_coverage"], 1.0)
+            self.assertEqual(manifest["release_gate"]["critical_query_family_coverage"], 1.0)
+            self.assertTrue((pack.root / "query-packs" / "http-client.json").exists())
+            self.assertTrue((pack.root / "semgrep" / "query-packs" / "http-client.yml").exists())
+            self.assertTrue((pack.root / "codeql" / "query-packs" / "http-client" / "reachability-suite.qls").exists())
+            self.assertTrue((pack.root / "codeql" / "query-packs" / "http-client" / "metadata.json").exists())
+            self.assertIn("http-client", {query_pack["id"] for query_pack in manifest["query_packs"]})
+            self.assertEqual({profile["name"] for profile in manifest["profiles"]}, {"npm", "maven-gradle", "python", "go"})
+            http_semgrep = (pack.root / "semgrep" / "query-packs" / "http-client.yml").read_text(encoding="utf-8")
+            http_codeql = (pack.root / "codeql" / "query-packs" / "http-client" / "reachability-suite.qls").read_text(encoding="utf-8")
+            self.assertIn("reachability.http-client.python.requests", http_semgrep)
+            self.assertIn("query_families", http_semgrep)
+            self.assertIn("py/request-forgery", http_codeql)
+
+    def test_query_family_catalog_covers_expected_sample_apps(self) -> None:
+        expectations = json.loads((ROOT / "fixtures" / "source-vulnerable-apps" / "coverage-expectations.json").read_text(encoding="utf-8"))
+        declared_samples = {sample for pack in QUERY_PACKS for sample in pack.expected_samples}
+        declared_families = {pack.id for pack in QUERY_PACKS}
+        for sample in expectations["samples"]:
+            self.assertTrue((ROOT / "fixtures" / "source-vulnerable-apps" / sample["path"]).exists())
+            self.assertIn(sample["id"], declared_samples)
+            for component in sample["components"]:
+                families = set(
+                    query_family_ids_for_component(
+                        Component(
+                            name=component["name"],
+                            group=component.get("group"),
+                            purl=component.get("purl"),
+                        )
+                    )
+                )
+                self.assertTrue(set(component["expected_query_families"]).issubset(families), component)
+
+        coverage = query_pack_sample_coverage(expectations, ROOT / "fixtures" / "source-vulnerable-apps")
+        self.assertEqual(coverage["summary"]["coverage"], 1.0)
+
+        for public_case in expectations["pinned_public_cases"]:
+            self.assertRegex(public_case["repository"], r"^[^/]+/[^/]+$")
+            self.assertRegex(public_case["url"], r"^https://github\.com/[^/]+/[^/]+$")
+            self.assertRegex(public_case["commit"], r"^[0-9a-f]{40}$")
+            self.assertTrue(public_case["query_families"])
+            self.assertTrue(set(public_case["query_families"]).issubset(declared_families), public_case)
+
+    def test_each_query_family_has_maintained_semgrep_and_codeql_assets(self) -> None:
+        for pack in QUERY_PACKS:
+            with self.subTest(pack=pack.id):
+                self.assertGreater(len(SEMGREP_QUERY_RULES.get(pack.id, ())), 0)
+                self.assertGreater(len(pack.codeql_queries), 0)
 
 
 class RenderedIacPlanTests(unittest.TestCase):

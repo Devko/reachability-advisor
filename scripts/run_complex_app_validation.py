@@ -24,6 +24,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from reachability_advisor.benchmark_snapshots import validate_benchmark_snapshots  # noqa: E402
 from reachability_advisor.cli import main as advisor_main  # noqa: E402
 from reachability_advisor.hcl_static import (  # noqa: E402
     audit_hcl_project,
@@ -879,7 +880,14 @@ def run(args: argparse.Namespace) -> int:
     benchmark = _benchmark_snapshot(report)
     _write_json(outdir / "benchmark.json", benchmark)
     _write_benchmark_markdown(benchmark, outdir / "benchmark.md")
+    benchmark_regression_failed = False
+    if args.benchmark_expectations:
+        regression_report = validate_benchmark_snapshots(benchmark, _root_path(args.benchmark_expectations))
+        _write_json(outdir / "benchmark-regression.json", regression_report)
+        benchmark_regression_failed = regression_report.get("status") != "passed"
     print(f"Summary written to {outdir / 'summary.json'}")
+    if benchmark_regression_failed and args.fail_on_benchmark_regression:
+        return 2
     if report["failed_count"] or (args.strict and report["skipped_count"]):
         return 2
     return 0
@@ -898,6 +906,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-grype", action="store_true", help="Reuse existing SBOM and Grype JSON files only.")
     parser.add_argument("--no-clone", action="store_true", help="Do not clone missing repositories.")
     parser.add_argument("--strict", action="store_true", help="Return non-zero on skipped cases as well as failed cases.")
+    parser.add_argument("--benchmark-expectations", help="Validate generated benchmark.json against checked-in tier snapshot expectations.")
+    parser.add_argument("--fail-on-benchmark-regression", action="store_true", help="Return non-zero when benchmark snapshot validation fails.")
     return parser
 
 

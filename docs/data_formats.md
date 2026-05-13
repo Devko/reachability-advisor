@@ -5,7 +5,7 @@ Reachability Advisor reads local files and writes local artifacts. The scanner d
 Release-gate inputs:
 
 - CycloneDX SBOM JSON;
-- Grype JSON or normalized vulnerability JSON;
+- Grype JSON, OSV-style JSON, or normalized vulnerability JSON;
 - source-root mappings;
 - external source evidence from Semgrep, CodeQL/SARIF, govulncheck, or native JSON;
 - Terraform plan JSON and/or rendered Kubernetes manifests;
@@ -69,6 +69,7 @@ reachability-advisor scan \
 The Grype adapter reads `matches[]`, normalizes the matched artifact package,
 matched vulnerable version, severity, CVSS, EPSS when present, fixed versions,
 aliases, and references, then the normal source/deployment scoring pipeline runs.
+Each finding also carries `vulnerability.intelligence`, a normalized record with source attribution and timestamps. The scanner does not fetch those feeds. It preserves what the supplied Grype, OSV, VEX, KEV, EPSS, or local metadata already contains.
 
 When several per-service Grype reports are merged into one input, stamp each
 match with `reachability_advisor.artifact` to keep matches scoped to the SBOM
@@ -106,6 +107,52 @@ Local vulnerability format:
       "summary": "Short description"
     }
   ]
+}
+```
+
+Source-attributed intelligence can be supplied directly in the local format:
+
+```json
+{
+  "vulnerabilities": [
+    {
+      "id": "CVE-2024-0001",
+      "package": {"name": "demo-lib", "purl": "pkg:npm/demo-lib"},
+      "severity": "high",
+      "cvss": 8.8,
+      "epss": {"score": 0.73, "percentile": 0.98, "date": "2026-05-12", "source": "first-epss"},
+      "kev": {"known_exploited": true, "date_added": "2026-05-01", "source": "cisa-kev"},
+      "vex": {"status": "affected", "justification": "reachable_code", "source": "vendor-vex"},
+      "fix": {"state": "fixed", "versions": ["1.2.3"], "source": "vendor-advisory"},
+      "sources": [
+        {"name": "internal-vuln-feed", "type": "normalized", "retrieved_at": "2026-05-13T00:00:00Z"}
+      ]
+    }
+  ]
+}
+```
+
+Normalized finding output uses this shape:
+
+```json
+{
+  "vulnerability": {
+    "id": "CVE-2024-0001",
+    "epss": 0.73,
+    "known_exploited": true,
+    "fixed_versions": ["1.2.3"],
+    "intelligence": {
+      "schema_version": "1.0",
+      "id": "CVE-2024-0001",
+      "package": {"name": "demo-lib", "purl": "pkg:npm/demo-lib"},
+      "epss": {"score": 0.73, "percentile": 0.98, "date": "2026-05-12", "source": "first-epss"},
+      "kev": {"known_exploited": true, "date_added": "2026-05-01", "source": "cisa-kev"},
+      "vex": {"status": "affected", "justification": "reachable_code", "source": "vendor-vex"},
+      "fix": {"available": true, "state": "fixed", "versions": ["1.2.3"], "source": "vendor-advisory"},
+      "timestamps": {"observed_at": "2026-05-13T00:00:00Z", "kev_date_added": "2026-05-01"},
+      "sources": [{"name": "internal-vuln-feed", "type": "normalized", "retrieved_at": "2026-05-13T00:00:00Z"}]
+    }
+  }
 }
 ```
 
@@ -155,6 +202,7 @@ Use `--source-evidence-in` to import source evidence from another analyzer. The 
       "vulnerability": "GHSA-example",
       "state": "attacker_controlled",
       "confidence": "high",
+      "query_family": "http-client",
       "reason": "Semgrep taint trace links request query to requests.get",
       "tool": "semgrep",
       "locations": [{"path": "src/api.py", "line": 42, "column": 12}]
@@ -163,7 +211,7 @@ Use `--source-evidence-in` to import source evidence from another analyzer. The 
 }
 ```
 
-`component`, `purl`, and `vulnerability` are matching selectors. `artifact` narrows a selector match to one SBOM artifact. Provide at least one `component`, `purl`, or `vulnerability` selector besides the evidence state. Imported evidence can upgrade the built-in result; it does not downgrade stronger built-in evidence.
+`component`, `purl`, and `vulnerability` are matching selectors. `artifact` narrows a selector match to one SBOM artifact. Provide at least one `component`, `purl`, or `vulnerability` selector besides the evidence state. For production critical findings, include `query_family` or `query_families` when the package maps to a maintained query pack such as `http-client`, `logging`, `deserialization`, `template-engine`, `archive-file-io`, `auth-token-crypto`, or `web-handler`. Imported evidence can upgrade the built-in result; it does not downgrade stronger built-in evidence.
 
 Supported imported formats:
 
@@ -184,28 +232,50 @@ Generated with `source-evidence-pack --output-dir`.
 {
   "schema_version": "1.0",
   "kind": "reachability-advisor-source-evidence-pack",
-  "version": "2026-05-12",
+  "version": "2026-05-13",
   "profile": {
     "name": "javascript-typescript",
     "ecosystems": ["npm", "pnpm", "yarn"],
     "tools": ["semgrep", "codeql"],
     "critical_package_families": ["http clients", "template engines"]
   },
+  "profiles": [
+    {"name": "npm", "ecosystems": ["npm", "pnpm", "yarn"]},
+    {"name": "maven-gradle", "ecosystems": ["maven", "gradle"]},
+    {"name": "python", "ecosystems": ["pypi", "poetry", "pip"]},
+    {"name": "go", "ecosystems": ["go", "golang"]}
+  ],
+  "query_packs": [
+    {"id": "http-client", "ecosystems": ["npm", "pypi", "maven", "go"]},
+    {"id": "logging", "ecosystems": ["maven", "npm"]},
+    {"id": "deserialization", "ecosystems": ["npm", "pypi", "maven", "go"]}
+  ],
   "files": [
     "reachability/source-evidence-pack/semgrep-reachability.yml",
+    "reachability/source-evidence-pack/semgrep/profiles/npm.yml",
+    "reachability/source-evidence-pack/semgrep/profiles/maven-gradle.yml",
+    "reachability/source-evidence-pack/semgrep/profiles/python.yml",
+    "reachability/source-evidence-pack/semgrep/profiles/go.yml",
+    "reachability/source-evidence-pack/query-packs/http-client.json",
+    "reachability/source-evidence-pack/semgrep/query-packs/http-client.yml",
+    "reachability/source-evidence-pack/codeql/query-packs/http-client/reachability-suite.qls",
+    "reachability/source-evidence-pack/codeql/query-packs/http-client/metadata.json",
     "reachability/source-evidence-pack/codeql/reachability-suite.qls",
+    "reachability/source-evidence-pack/codeql/profiles/npm/qlpack.yml",
     "reachability/source-evidence-pack/govulncheck/reachability-govulncheck.json"
   ],
   "release_gate": {
     "requires_external_evidence": true,
     "critical_external_evidence_coverage": 1.0,
+    "critical_query_family_coverage": 1.0,
+    "requires_relevant_query_family": true,
     "rejects_dependency_only_critical_source": true,
     "selector_contract": "artifact plus package URL, component, or vulnerability selector"
   }
 }
 ```
 
-The pack is local project scaffolding. It writes maintained Semgrep metadata rules, a CodeQL suite that points to the upstream security queries, govulncheck profile metadata, and a manifest that states the release-gate evidence contract.
+The pack is local project scaffolding. It writes maintained Semgrep metadata rules per package family, ecosystem-specific Semgrep profiles, package-family query pack metadata, CodeQL suite/profile files that run upstream security queries and preserve SARIF path evidence, govulncheck profile metadata, and a manifest that states the release-gate evidence contract. The repository also carries checked-in vulnerable sample apps and pinned public repository commits under `fixtures/source-vulnerable-apps/`; tests measure whether maintained family assets cover the expected local samples.
 
 ## Source coverage JSON
 
@@ -227,7 +297,11 @@ Generated with `--source-coverage-out`.
     "findings_with_package_specific_rule": 8,
     "findings_with_rule_gap": 1,
     "findings_with_weak_source_evidence": 2,
+    "critical_findings_requiring_query_family": 4,
+    "critical_findings_with_required_query_family": 3,
+    "critical_findings_missing_query_family": 1,
     "source_rule_coverage": 0.9167,
+    "critical_query_family_coverage": 0.75,
     "external_evidence_usable_ratio": 0.6667,
     "external_evidence_selected_ratio": 0.5833,
     "analysis_profile": "production",
@@ -320,6 +394,16 @@ Schema draft: `schemas/runtime-policy.schema.json`.
           "impact": "data_access",
           "decision": "allowed",
           "confidence": "medium",
+          "identity_policy": {
+            "Statement": [
+              {"Effect": "Allow", "Action": "secretsmanager:GetSecretValue", "Resource": "arn:aws:secretsmanager:*:*:secret:payments-*"}
+            ]
+          },
+          "permissions_boundary": {
+            "Statement": [
+              {"Effect": "Allow", "Action": "secretsmanager:GetSecretValue", "Resource": "arn:aws:secretsmanager:*:*:secret:payments-prod-*"}
+            ]
+          },
           "blockers": [{"kind": "scoped_resource", "evidence": "policy resource scope is constrained"}]
         }
       ],
@@ -341,6 +425,36 @@ Schema draft: `schemas/runtime-policy.schema.json`.
 ```
 
 Generated findings and evidence graphs include `effective_exposure`. Terraform plan and rendered Kubernetes inputs generate this record during analysis. External context files may also provide it directly.
+
+`network_paths[]` may carry provider resources or an explicit provider network graph instead of only a label and hop list. When structured resources are present, provider evaluators build typed graph edges first and attach precedence evidence. Examples include AWS route/NACL/security-group records, Azure NSG rules, GCP firewall rules, and Kubernetes NetworkPolicy or service-mesh policy records. If the upstream renderer already has explicit links, use `network_graph.edges` or `network_edges`. Each edge uses `from`, `to`, and `type` or `kind`; provider evaluators solve a path from `entry` to `target` and evaluate each edge by type. Supported edge types include AWS `route`, `security_group`, `network_acl`, `load_balancer`, `api_gateway`, `serverless_url`, `waf`, and `private_endpoint`; Azure `network_security_group`, `route`, `gateway`, `access_restriction`, `auth`, `waf`, and `private_endpoint`; GCP `firewall`, `route`, `iap`, `cloud_armor`, `private_endpoint`, `serverless_ingress`, and `vpc_connector`; and Kubernetes `ingress`, `network_policy`, `service_mesh`, and `pod_security`. The solved path is emitted as `network.network_graph` with per-edge state, blockers, unknowns, `precedence`, `precedence_reason`, and `resource_graph.precedence_rules`.
+
+```json
+{
+  "network_paths": [
+    {
+      "provider": "aws",
+      "exposure": "public",
+      "entry": "internet",
+      "target": "aws_ecs_service.api",
+      "network_graph": {
+        "edges": [
+          {"from": "internet", "to": "aws_route.public", "type": "route", "destination_cidr_block": "0.0.0.0/0", "gateway_id": "igw-123"},
+          {"from": "aws_route.public", "to": "aws_security_group.api", "type": "security_group", "cidr_blocks": ["10.0.0.0/8"]},
+          {"from": "aws_security_group.api", "to": "aws_ecs_service.api", "type": "load_balancer"}
+        ]
+      },
+      "network_acls": {
+        "ingress": [
+          {"id": "acl-deny", "rule_number": 90, "rule_action": "deny", "cidr_block": "0.0.0.0/0"},
+          {"id": "acl-allow", "rule_number": 100, "rule_action": "allow", "cidr_block": "0.0.0.0/0"}
+        ]
+      }
+    }
+  ]
+}
+```
+
+`effective_access[]` can include structured provider policy documents. Supported keys are AWS `identity_policy`, `resource_policy`, `permissions_boundary`, `service_control_policy`, `session_policy`, and `trust_policy`; Azure `role_assignment`, `role_definition`, `deny_assignment`, and `resource_policy`; GCP `iam_policy`, `deny_policy`, `principal_access_boundary`, `organization_policy`, and `resource_policy`; and Kubernetes `rules`, `role`, `cluster_role`, `role_binding`, and `cluster_role_binding`. Azure and GCP also expand a small catalog of common built-in role names when the document has a role name but no expanded permission list. The provider policy engine parses those documents into statement ASTs and evaluates principal, action, resource, and condition matches before selecting the effective identity decision. Runtime values for conditional policies can be supplied under `condition_context` or `request_context`. Conditional allows remain `constrained_allow`; unsatisfied conditions do not match; unknown conditions are reported as blockers and unknowns. The selected result is written under `identity.policy_evaluation` and mirrored in `identity.effective_access_model`.
 
 ```json
 {
@@ -365,7 +479,31 @@ Generated findings and evidence graphs include `effective_exposure`. Terraform p
     "impact": "data_access",
     "policy_layer": "identity_policy",
     "decision_basis": "allowed",
-    "provider_decision_basis": "constrained_by:scoped_resource"
+    "provider_decision_basis": "constrained_by:scoped_resource",
+    "evaluation_order": [
+      {"step": "explicit_deny", "state": "not_observed"},
+      {"step": "identity_and_resource_policy_allow", "state": "matched"},
+      {"step": "conditions_and_scope", "state": "matched"},
+      {"step": "effective_decision", "state": "constrained_allow"}
+    ],
+    "effective_access_model": {
+      "authorization_model": "aws_iam",
+      "identity": "aws_iam_role.payments",
+      "action": "secretsmanager:GetSecretValue",
+      "policy_layer": "identity_policy",
+      "decision": "constrained_allow",
+      "policy_engine": "aws.structured_policy",
+      "policy_evaluation": {
+        "decision": "constrained_allow",
+        "policy_layer": "permissions_boundary",
+        "matched_statements": [],
+        "condition_keys": []
+      },
+      "resource_scope": "scoped",
+      "blocking_reasons": [],
+      "constraints": ["scoped_resource"],
+      "conditions": []
+    }
   },
   "edges": []
 }
@@ -569,7 +707,7 @@ Passed with `--artifact-manifest`. Use it when the build knows the image digest 
 }
 ```
 
-`signature` is recorded as a marker only. Reachability Advisor does not cryptographically verify it.
+`signature`, `attestation`, `slsa`, or `sigstore_bundle` are recorded as provenance markers only. Reachability Advisor does not cryptographically verify them.
 
 Schema draft: `schemas/artifact-manifest.schema.json`.
 
@@ -588,10 +726,11 @@ reachability-advisor artifact-manifest init \
 reachability-advisor artifact-manifest validate \
   --manifest reachability/artifacts.json \
   --out reachability/artifact-manifest-validation.json \
+  --strict-provenance \
   --fail-on-warning
 ```
 
-Validation reports whether each artifact has a strong image reference or digest, an SBOM path, Git identity, and a signature marker.
+Validation reports whether each artifact has a strong image reference or digest, an SBOM path, Git identity, and a signature marker. `--strict-provenance` blocks release use unless each artifact has digest-level identity, an SBOM path, a valid Git SHA, no unresolved image expression, and a signature or attestation marker. `scan --require-artifact-provenance` applies the same gate to all `--artifact-manifest` inputs.
 
 ## Rendered IaC plan JSON
 
@@ -635,10 +774,11 @@ Generated with `--readiness-out` or `evidence-profile`.
   "schema_version": "1.0",
   "status": "blocked",
   "summary": {
-    "blockers": 1,
+    "blockers": 2,
     "warnings": 0,
     "artifacts": 1,
     "critical_external_evidence_coverage": 0.0,
+    "critical_query_family_coverage": 0.0,
     "artifacts_missing_release_identity": 1,
     "artifacts_missing_workload_match": 0,
     "artifacts_missing_network_path": 0,
@@ -648,6 +788,10 @@ Generated with `--readiness-out` or `evidence-profile`.
     {
       "kind": "critical_source_coverage",
       "message": "critical external source evidence coverage is 0.0000; expected 1.0"
+    },
+    {
+      "kind": "critical_source_query_family_coverage",
+      "message": "critical source query-family coverage is 0.0000; expected 1.0"
     }
   ],
   "warnings": [],
@@ -665,7 +809,7 @@ Generated with `--readiness-out` or `evidence-profile`.
 }
 ```
 
-The report lists missing image digest or exact image reference, missing SBOM path, missing or weak deployment workload match, missing network path evidence, missing identity/effective-access evidence, low-confidence network or identity evidence, critical source coverage gaps, and unrendered Terraform or Kubernetes evidence.
+The report lists missing image digest or exact image reference, missing SBOM path, missing or weak deployment workload match, missing network path evidence, missing identity/effective-access evidence, low-confidence network or identity evidence, critical source coverage gaps, critical query-family coverage gaps, and unrendered Terraform or Kubernetes evidence.
 
 Schema draft: `schemas/readiness.schema.json`.
 
@@ -723,9 +867,48 @@ The main scan output is:
 
 `context.iam_capabilities[]` is the per-resource IAM view behind `privilege` and `iam_impacts`. Each capability records an action, effect, policy layer, impact class, access class, resource references when known, resource scope (`scoped`, `wildcard`, or `unknown`), IAM condition keys when present, provider, source resource, and evidence string. This is useful when a role is not admin but still grants critical rights such as secret reads, network mutation, workload mutation, or role passing.
 
-`context.effective_access[]` records the workload identity/resource/action decision used by scoring. It includes `decision`, `decision_basis`, `policy_layer`, `confidence`, blockers, target resources, and the underlying Terraform evidence. Matching explicit denies mark allow records as `denied_by_explicit_deny`.
+`context.effective_access[]` records the workload identity/resource/action decision used by scoring. It includes `decision`, `decision_basis`, `policy_layer`, `confidence`, blockers, target resources, and the underlying Terraform or rendered manifest evidence. When structured provider policy documents are present, provider engines evaluate deny precedence, boundaries, trust, inherited scope, conditions, resource policies, and workload identity constraints before record selection. Matching explicit denies mark allow records as `denied_by_explicit_deny`. The provider evaluator selects the effective record and writes `identity.evaluation_order`, `identity.policy_evaluation`, and `identity.effective_access_model` in each `effective_exposure[]` result.
 
 Schema draft: `schemas/findings.schema.json`.
+
+## Real-app benchmark snapshot JSON
+
+`scripts/run_complex_app_validation.py` writes `benchmark.json` for the scale corpus. Snapshot expectations live in `fixtures/benchmarks/real-app-tier-snapshots.json`.
+
+```json
+{
+  "schema_version": "1.0",
+  "snapshots": [
+    {
+      "id": "external-complex-aggregate",
+      "expected_tier_counts": {
+        "urgent": 0,
+        "high": 1,
+        "medium": 105,
+        "low": 69,
+        "informational": 12
+      },
+      "regression_limits": {
+        "max_count_by_tier": {"urgent": 0, "high": 2, "high_or_urgent": 2},
+        "max_ratio_by_tier": {"high_or_urgent": 0.02}
+      }
+    }
+  ]
+}
+```
+
+Validate a new scale run:
+
+```bash
+reachability-advisor benchmark-snapshots \
+  --benchmark outputs/external-complex/benchmark.json \
+  --expectations fixtures/benchmarks/real-app-tier-snapshots.json \
+  --out outputs/external-complex/benchmark-regression.json
+```
+
+The validator checks aggregate and per-case tier distributions, total finding drift, expected case status, and configured high/urgent limits. It is intentionally a regression guard against over-prioritization, not a replacement for reviewing the underlying findings.
+
+Schema draft: `schemas/benchmark-snapshots.schema.json`.
 
 ## Evidence graph JSON
 

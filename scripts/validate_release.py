@@ -265,6 +265,8 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
     for policy_config in sorted((ROOT / "configs").glob("policy*.json")):
         check(f"runtime policy {policy_config.name}", policy_config, "runtime-policy.schema.json")
     check("scoring benchmark corpus", ROOT / "configs" / "scoring-benchmark.json", "scoring-benchmark.schema.json")
+    benchmark_expectations = ROOT / "fixtures" / "benchmarks" / "real-app-tier-snapshots.json"
+    check("real-app benchmark snapshot expectations", benchmark_expectations, "benchmark-snapshots.schema.json")
     for fixture in sorted((ROOT / "fixtures" / "terraform" / "packs").glob("*/fixture.json")):
         check(f"fixture pack {fixture.parent.name}", fixture, "fixture-pack.schema.json")
 
@@ -300,6 +302,47 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
         raise ReleaseCheckError("scoring benchmark failed")
     scoring_benchmark.write_text(json.dumps(scoring_report, indent=2), encoding="utf-8")
     checks.append({"name": "generated scoring benchmark", "status": "passed", "document": str(scoring_benchmark)})
+
+    benchmark_snapshot_actual = out_dir / "benchmark-snapshot-actual.json"
+    benchmark_snapshot_report = out_dir / "benchmark-snapshot-report.json"
+    benchmark_expectation_data = load_json(benchmark_expectations)
+    aggregate_counts = benchmark_expectation_data["snapshots"][0]["expected_tier_counts"]
+    benchmark_snapshot_actual.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "generated_at": "release-validation",
+                "corpus": "external_corpus/complex_app_cases.json",
+                "aggregate": {"finding_count": sum(aggregate_counts.values()), "tier_counts": aggregate_counts},
+                "cases": [
+                    {
+                        "id": snapshot["case_id"],
+                        "status": "passed",
+                        "finding_count": sum(snapshot["expected_tier_counts"].values()),
+                        "tier_counts": snapshot["expected_tier_counts"],
+                    }
+                    for snapshot in benchmark_expectation_data["snapshots"]
+                    if snapshot.get("case_id")
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    run_cli(
+        [
+            "benchmark-snapshots",
+            "--benchmark",
+            str(benchmark_snapshot_actual),
+            "--expectations",
+            str(benchmark_expectations),
+            "--out",
+            str(benchmark_snapshot_report),
+        ]
+    )
+    if require_json(benchmark_snapshot_report).get("status") != "passed":
+        raise ReleaseCheckError("benchmark snapshot regression check failed")
+    checks.append({"name": "real-app benchmark snapshot regression gate", "status": "passed", "document": str(benchmark_snapshot_report)})
 
     hcl_audit = out_dir / "hcl-audit.json"
     hcl_audit_md = out_dir / "hcl-audit.md"

@@ -86,6 +86,7 @@ def build_evidence_graph(findings: list[Finding], metadata: dict[str, Any] | Non
                 "cvss": finding.vulnerability.cvss,
                 "epss": finding.vulnerability.epss,
                 "known_exploited": finding.vulnerability.known_exploited,
+                "intelligence": finding.vulnerability.intelligence,
                 "summary": finding.vulnerability.summary,
             },
         )

@@ -9,6 +9,7 @@ Kubernetes matching.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -108,33 +109,56 @@ def write_artifact_manifest(path: str | Path, payload: dict[str, Any]) -> None:
     out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def validate_artifact_manifest(path: str | Path) -> dict[str, Any]:
+def validate_artifact_manifest(path: str | Path, *, strict_provenance: bool = False) -> dict[str, Any]:
     """Validate a manifest and return actionable identity coverage details."""
 
     entries = load_artifact_manifest(path)
-    rows = []
+    rows: list[dict[str, Any]] = []
     for entry in entries:
         values = entry.identity_values()
         strong = bool(values.get("ci:registry_ref") or values.get("ci:image:digest") or values.get("ci:image"))
+        has_digest = _has_digest(values)
+        has_git_sha = bool(entry.git_sha)
+        valid_git_sha = _valid_git_sha(entry.git_sha)
+        blockers = _strict_provenance_blockers(
+            entry,
+            values,
+            strong_identity=strong,
+            has_digest=has_digest,
+            valid_git_sha=valid_git_sha,
+        ) if strict_provenance else []
         rows.append(
             {
                 "name": entry.name,
                 "strong_identity": strong,
-                "has_digest": bool(values.get("ci:image:digest") or "@" in str(values.get("ci:registry_ref") or "")),
+                "has_digest": has_digest,
                 "has_sbom_path": bool(entry.sbom),
+                "has_git_sha": has_git_sha,
+                "valid_git_sha": valid_git_sha,
                 "signed": entry.signed,
+                "strict_provenance": "ready" if not blockers else "blocked",
+                "provenance_blockers": blockers,
                 "identity_keys": sorted(values),
             }
         )
+    blockers_count = sum(len(row["provenance_blockers"]) for row in rows)
+    if strict_provenance:
+        status = "ready" if rows and blockers_count == 0 else "blocked"
+    else:
+        status = "ready" if rows and all(row["strong_identity"] for row in rows) else "warning"
     return {
         "schema_version": "1.0",
-        "status": "ready" if rows and all(row["strong_identity"] for row in rows) else "warning",
+        "status": status,
+        "strict_provenance": strict_provenance,
         "summary": {
             "artifacts": len(rows),
             "strong_identity": sum(1 for row in rows if row["strong_identity"]),
             "with_digest": sum(1 for row in rows if row["has_digest"]),
             "with_sbom_path": sum(1 for row in rows if row["has_sbom_path"]),
+            "with_git_sha": sum(1 for row in rows if row["has_git_sha"]),
+            "with_valid_git_sha": sum(1 for row in rows if row["valid_git_sha"]),
             "signed": sum(1 for row in rows if row["signed"]),
+            "provenance_blockers": blockers_count,
         },
         "artifacts": rows,
     }
@@ -151,7 +175,7 @@ def load_artifact_manifest(path: str | Path) -> list[ArtifactManifestEntry]:
     raw_items = data.get("artifacts")
     if not isinstance(raw_items, list):
         raise ArtifactManifestError(f"{manifest_path}: artifacts must be a list")
-    signed = bool(data.get("signature") or data.get("signed"))
+    signed = bool(data.get("signature") or data.get("signed") or data.get("attestation") or data.get("slsa") or data.get("sigstore_bundle"))
     entries = []
     for index, item in enumerate(raw_items):
         if not isinstance(item, dict):
@@ -175,7 +199,7 @@ def load_artifact_manifest(path: str | Path) -> list[ArtifactManifestEntry]:
                 aliases=aliases,
                 properties=properties,
                 manifest_path=manifest_path,
-                signed=signed or bool(item.get("signature") or item.get("signed")),
+                signed=signed or bool(item.get("signature") or item.get("signed") or item.get("attestation") or item.get("slsa") or item.get("sigstore_bundle")),
             )
         )
     return entries
@@ -241,6 +265,46 @@ def _optional_string(value: Any) -> str | None:
 
 def _optional_field(key: str, value: str | None) -> dict[str, str]:
     return {key: value} if value else {}
+
+
+def _has_digest(values: dict[str, str]) -> bool:
+    registry_ref = values.get("ci:registry_ref") or ""
+    digest = values.get("ci:image:digest") or ""
+    return _valid_digest(digest) or "@sha256:" in registry_ref
+
+
+def _valid_digest(value: str | None) -> bool:
+    return bool(value and re.fullmatch(r"sha256:[0-9a-fA-F]{64}", value.strip()))
+
+
+def _valid_git_sha(value: str | None) -> bool:
+    return bool(value and re.fullmatch(r"[0-9a-fA-F]{7,64}", value.strip()))
+
+
+def _strict_provenance_blockers(
+    entry: ArtifactManifestEntry,
+    values: dict[str, str],
+    *,
+    strong_identity: bool,
+    has_digest: bool,
+    valid_git_sha: bool,
+) -> list[dict[str, str]]:
+    blockers: list[dict[str, str]] = []
+    if not strong_identity:
+        blockers.append({"kind": "missing_artifact_identity", "message": "artifact has no image, digest, or registry reference"})
+    if not has_digest:
+        blockers.append({"kind": "missing_image_digest", "message": "strict provenance requires sha256 image digest or repository digest reference"})
+    if not entry.sbom:
+        blockers.append({"kind": "missing_sbom_path", "message": "strict provenance requires the SBOM path used for the release artifact"})
+    if not entry.git_sha:
+        blockers.append({"kind": "missing_git_sha", "message": "strict provenance requires the source Git revision"})
+    elif not valid_git_sha:
+        blockers.append({"kind": "invalid_git_sha", "message": "git_sha must be a hexadecimal revision prefix or full hash"})
+    if not entry.signed:
+        blockers.append({"kind": "missing_signature_marker", "message": "strict provenance requires a signed, signature, attestation, or SLSA marker"})
+    if values.get("ci:image") and "${" in str(values.get("ci:image")):
+        blockers.append({"kind": "unresolved_image_expression", "message": "image reference still contains an unresolved expression"})
+    return blockers
 
 
 __all__ = [

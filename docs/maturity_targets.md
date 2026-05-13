@@ -16,10 +16,11 @@ Target state:
 Implemented controls:
 
 - `source-evidence-plan` emits concrete Semgrep, CodeQL, and govulncheck commands for CI.
-- `source-evidence-pack` writes versioned Semgrep, CodeQL, and govulncheck assets plus the release-gate selector contract.
+- `source-evidence-pack` writes versioned npm, Maven/Gradle, Python, and Go Semgrep/CodeQL/govulncheck assets, package-family query packs, expected sample coverage metadata, and the release-gate selector contract.
+- `fixtures/source-vulnerable-apps/coverage-expectations.json` defines checked-in vulnerable sample apps and pinned public repository commits used to measure package-family true-positive coverage. Unit tests require the maintained family rules to cover every expected local sample.
 - The plan JSON includes ecosystem profiles for npm/pnpm/Yarn, Maven/Gradle, PyPI/Poetry/pip, and Go modules.
 - `--analysis-profile production` requires external source evidence and usable selectors.
-- Production gates require `critical_external_evidence_coverage=1.0` unless a stricter user threshold is supplied.
+- Production gates require `critical_external_evidence_coverage=1.0` and `critical_query_family_coverage=1.0` unless a stricter user threshold is supplied.
 - `--require-strong-source-for-critical` fails when critical findings only have `absent`, `unknown_due_to_no_rule`, `package_present`, or `dependency_reachable` evidence. Production profile enables the same gate.
 - `source-coverage.json` reports critical package rows, external evidence coverage per critical package, selected external evidence coverage, rule gaps, and weak-source counts.
 
@@ -31,6 +32,7 @@ Target state:
 - Explicit deny has precedence in the evidence model and must not raise privilege.
 - Scoped or conditional permissions remain visible and score lower than broad unconditioned access.
 - Cross-account and role-assumption paths must show the identity, target role/resource, action, decision, and inherited visible capability.
+- Provider policy decisions must come from structured policy documents when available, not only from Terraform resource labels or pre-classified allow/deny summaries.
 
 Implemented controls:
 
@@ -39,6 +41,9 @@ Implemented controls:
 - Explicit deny statements are preserved as `decision=denied` and matching allow records are marked `decision=denied_by_explicit_deny`.
 - `sts:AssumeRole` expands visible target-role blast radius when both roles are present in the plan.
 - Provider evaluators add provider decision bases and normalize scoped resources, conditions, explicit denies, permissions boundaries, SCPs, Azure deny assignments, GCP deny policies, Workload Identity, and Kubernetes RBAC scope before scoring.
+- AWS, Azure, GCP, and Kubernetes evaluators now run a structured policy engine before effective-access selection when records include policy documents. The engine parses provider policy ASTs and evaluates principal, action, resource, and condition matches. It models explicit deny precedence, conditions, boundaries, inherited scope, trust, resource policies, and cross-account or workload identity constraints from AWS IAM statements, Azure RBAC/deny assignments, GCP IAM/deny/PAB/org policies, and Kubernetes RBAC rules.
+- `fixtures/policies/provider-policy-examples.json` exercises boundary, SCP, resource-policy, cross-account, deny-assignment, principal-access-boundary, Workload Identity, and Kubernetes service-account escalation cases without requiring a cloud account.
+- Selected identity results emit `evaluation_order`, `policy_evaluation`, and `effective_access_model` for the chosen identity/resource/action decision. Azure, GCP, and Kubernetes expose provider-layer states comparable to AWS: deny controls, allow basis, resource policy or role/binding scope, conditions, inherited scope, provider-specific boundaries, and high-risk identity transitions.
 
 ## Network exposure
 
@@ -51,13 +56,14 @@ Target state:
 Implemented controls:
 
 - Terraform and Kubernetes contexts emit typed `network_paths` with `path_type`, `entry`, `steps`, `confidence`, `blockers`, and `unknowns`.
+- Provider evaluators build provider-specific resource graphs from structured resources before using explicit `network_graph`, `network_edges`, or inferred `steps`. Built edges carry `type`, `precedence`, `precedence_reason`, and the provider rule that selected them. Disconnected graphs block the path instead of trusting the exposure label.
 - Inferred exposure records are emitted for directly classified workloads when no full hop sequence exists.
 - Provider blockers include auth settings, API Gateway authorizers, API keys, WAF/firewall policies, public network disabled flags, internal-only endpoints, private endpoints, route/firewall adapter signals, NSG denies, and NetworkPolicy deny-all ingress.
 - Network blockers carry an effect: `blocks`, `constrains`, or unknown. Scoring treats blockers as uncertainty instead of equivalent confirmed exposure.
 - Lateral inference is bounded to linked security groups, target attachments, selectors, route/private-network bridges, and IAM network-control pivots.
 - The effective exposure engine delegates network and IAM decisions to AWS, Azure, GCP, Kubernetes, and fallback provider evaluators before scoring.
 - Provider evaluators emit `reachable`, `constrained`, `blocked`, `isolated`, or `unknown` decisions and carry blocker/unknown semantics from the provider layer into scoring.
-- Provider network evaluators add decision bases for AWS source security groups/CIDRs, source VPC endpoint conditions, WAF/API authorizers, Azure access restrictions/NSG/WAF/private endpoints, GCP IAP/Cloud Armor/Private Service Connect/internal ingress, and Kubernetes NetworkPolicy/service-mesh/internal-ingress evidence.
+- Provider network evaluators add decision bases for AWS source security groups/CIDRs, source VPC endpoint conditions, WAF/API authorizers, Azure access restrictions/NSG/WAF/private endpoints, GCP IAP/Cloud Armor/Private Service Connect/internal ingress, and Kubernetes NetworkPolicy/service-mesh/internal-ingress evidence. Resource-graph tests cover AWS NACL rule ordering, Azure NSG priority, GCP firewall priority, and Kubernetes deny-policy precedence.
 
 ## Terraform and artifact matching
 
@@ -67,7 +73,7 @@ Target state:
 - Static Terraform source/HCL mode is advisory only.
 - Artifact matching prefers image digests and exact image references, then repository/tag, then weaker names.
 - CI, Helm, Kustomize, Docker, OCI, and registry metadata should feed artifact identity.
-- Pipelines can pass one structured CI artifact manifest that maps SBOM path, image reference, image digest, registry reference, Git SHA, Helm value image, Kustomize image, and Terraform image output.
+- Pipelines can pass one structured CI artifact manifest that maps SBOM path, image reference, image digest, registry reference, Git SHA, Helm value image, Kustomize image, and Terraform image output. Strict release gates can require digest-level identity, SBOM path, Git SHA, and a signature or attestation marker.
 - A readiness report explains missing release evidence in direct terms.
 
 Implemented controls:
@@ -78,7 +84,7 @@ Implemented controls:
 - `artifact-manifest init` and `artifact-manifest validate` let CI create and check that manifest before scanning.
 - `rendered-iac-plan` writes the Terraform, Helm, and Kustomize render commands expected before a release scan.
 - `--mapping-out` records candidate source, strength, match method, match score, and mapping warnings.
-- `--readiness-out` and `evidence-profile` report missing release identity, missing SBOM paths, missing or weak workload matches, missing network paths, missing identity paths, low-confidence network or identity evidence, external source coverage, and unrendered IaC gaps.
+- `--readiness-out` and `evidence-profile` report missing release identity, missing SBOM paths, missing or weak workload matches, missing network paths, missing identity paths, low-confidence network or identity evidence, external source coverage, query-family coverage, and unrendered IaC gaps.
 - Quality gates can enforce artifact match coverage, strong artifact identity coverage, mapping warning failures, readiness blockers, and readiness warnings.
 
 ## IDE integration

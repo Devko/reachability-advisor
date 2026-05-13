@@ -1,0 +1,74 @@
+{
+  "schema_version": "1.0",
+  "samples": [
+    {
+      "id": "npm-express-ssrf",
+      "ecosystem": "npm",
+      "path": "npm-express-ssrf",
+      "components": [
+        {"name": "axios", "purl": "pkg:npm/axios@0.21.1", "expected_query_families": ["http-client"]},
+        {"name": "express", "purl": "pkg:npm/express@4.18.2", "expected_query_families": ["web-handler"]}
+      ]
+    },
+    {
+      "id": "python-fastapi-ssrf",
+      "ecosystem": "pypi",
+      "path": "python-fastapi-ssrf",
+      "components": [
+        {"name": "requests", "purl": "pkg:pypi/requests@2.19.0", "expected_query_families": ["http-client"]},
+        {"name": "fastapi", "purl": "pkg:pypi/fastapi@0.95.0", "expected_query_families": ["web-handler"]}
+      ]
+    },
+    {
+      "id": "maven-spring-log4shell",
+      "ecosystem": "maven",
+      "path": "maven-spring-log4shell",
+      "components": [
+        {"name": "log4j-core", "group": "org.apache.logging.log4j", "purl": "pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1", "expected_query_families": ["logging"]},
+        {"name": "spring-web", "group": "org.springframework", "purl": "pkg:maven/org.springframework/spring-web@5.3.18", "expected_query_families": ["http-client", "web-handler"]}
+      ]
+    },
+    {
+      "id": "python-yaml-loader",
+      "ecosystem": "pypi",
+      "path": "python-yaml-loader",
+      "components": [
+        {"name": "PyYAML", "purl": "pkg:pypi/PyYAML@5.3.1", "expected_query_families": ["deserialization"]}
+      ]
+    },
+    {
+      "id": "go-http-handler",
+      "ecosystem": "go",
+      "path": "go-http-handler",
+      "components": [
+        {"name": "net/http", "purl": "pkg:golang/net/http", "expected_query_families": ["http-client", "web-handler"]}
+      ]
+    }
+  ],
+  "pinned_public_cases": [
+    {
+      "id": "datadog-vulnerable-java-application",
+      "repository": "DataDog/vulnerable-java-application",
+      "url": "https://github.com/DataDog/vulnerable-java-application",
+      "commit": "817ef6e21390c9766ee9b5bef2fd909b7a4a62ea",
+      "query_families": ["http-client", "archive-file-io", "web-handler"],
+      "notes": "Purposely vulnerable Java application reference for SSRF, command execution, and path traversal validation."
+    },
+    {
+      "id": "appsecco-dvna",
+      "repository": "appsecco/dvna",
+      "url": "https://github.com/appsecco/dvna",
+      "commit": "e58daee3fc388a9d0d771c9d035e637c74895e00",
+      "query_families": ["web-handler", "template-engine", "deserialization", "auth-token-crypto"],
+      "notes": "Pinned vulnerable Node application reference for npm family validation."
+    },
+    {
+      "id": "christophetd-log4shell-vulnerable-app",
+      "repository": "christophetd/log4shell-vulnerable-app",
+      "url": "https://github.com/christophetd/log4shell-vulnerable-app",
+      "commit": "f08ee855b014316ef4aeedddbcf1b724cadbbea6",
+      "query_families": ["logging", "web-handler"],
+      "notes": "Pinned Log4Shell sample application reference for Java logging-family validation."
+    }
+  ]
+}

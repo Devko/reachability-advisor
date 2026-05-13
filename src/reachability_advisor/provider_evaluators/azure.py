@@ -4,7 +4,17 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from .base import ProviderEvaluator, ProviderExposurePolicy, dedupe_objects, jsonish
+from reachability_advisor.models import ContextEvidence
+
+from .base import (
+    ProviderEvaluator,
+    ProviderExposurePolicy,
+    dedupe_objects,
+    jsonish,
+    matched_blocker_state,
+    strongest_provider_effective_access,
+)
+from .policy_engine import evaluate_azure_policy_records
 
 
 class AzureExposureEvaluator(ProviderEvaluator):
@@ -50,7 +60,12 @@ class AzureExposureEvaluator(ProviderEvaluator):
                 "access_restriction_scope",
                 "management_group_scope",
                 "pim_eligible_only",
+                "resource_group_scope",
+                "resource_policy_condition",
+                "role_assignment_condition",
+                "role_definition_scope",
                 "scoped_resource",
+                "subscription_scope",
                 "unknown_resource_scope",
             }
         ),
@@ -148,6 +163,80 @@ class AzureExposureEvaluator(ProviderEvaluator):
             )
         return dedupe_objects(augmented)
 
+    def select_effective_access(self, context: ContextEvidence) -> dict[str, Any] | None:
+        records = [dict(item) for item in context.effective_access if isinstance(item, dict)]
+        records = evaluate_azure_policy_records(records)
+        return strongest_provider_effective_access(records, denies=_azure_record_denies, layer_rank=_azure_policy_layer_rank)
+
+    def effective_identity_decision(self, record: dict[str, Any], blockers: list[dict[str, Any]]) -> str:
+        if _azure_record_denies(record) or any(item.get("effect") == "blocks" for item in blockers):
+            return "denied"
+        if any(item.get("effect") == "constrains" for item in blockers):
+            return "constrained_allow"
+        return "allowed"
+
+    def identity_evaluation_order(
+        self,
+        record: dict[str, Any],
+        blockers: list[dict[str, Any]],
+        decision: str,
+    ) -> list[dict[str, str]]:
+        blocking = {str(item.get("kind") or "unknown") for item in blockers if item.get("effect") == "blocks"}
+        constraining = {str(item.get("kind") or "unknown") for item in blockers if item.get("effect") == "constrains"}
+        return [
+            {"step": "deny_assignment", "state": "matched" if _azure_record_denies(record) or "deny_assignment" in blocking else "not_observed"},
+            {"step": "role_assignment_allow", "state": "matched" if str(record.get("effect") or "allow").lower() != "deny" else "not_observed"},
+            {"step": "resource_policy", "state": matched_blocker_state(blocking, constraining, {"resource_policy_deny", "resource_policy_condition"})},
+            {"step": "role_definition_scope", "state": matched_blocker_state(blocking, constraining, {"role_definition_scope"})},
+            {"step": "scope_inheritance", "state": _azure_scope_level(record)},
+            {"step": "conditions", "state": "matched" if {"condition", "role_assignment_condition"} & constraining else "not_observed"},
+            {"step": "pim_activation", "state": "required" if "pim_eligible_only" in constraining else "not_observed"},
+            {"step": "effective_decision", "state": decision},
+        ]
+
+    def identity_decision_detail(
+        self,
+        record: dict[str, Any],
+        blockers: list[dict[str, Any]],
+        decision: str,
+    ) -> dict[str, Any]:
+        detail = super().identity_decision_detail(record, blockers, decision)
+        blocking = {str(item.get("kind") or "unknown") for item in blockers if item.get("effect") == "blocks"}
+        constraining = {str(item.get("kind") or "unknown") for item in blockers if item.get("effect") == "constrains"}
+        detail.update(
+            {
+                "authorization_model": "azure_rbac",
+                "scope_level": _azure_scope_level(record),
+                "deny_assignment": _azure_record_denies(record) or "deny_assignment" in blocking,
+                "deny_assignment_state": matched_blocker_state(blocking, constraining, {"deny_assignment"}),
+                "role_assignment_allow": str(record.get("effect") or "allow").lower() != "deny",
+                "role_assignment": "matched" if str(record.get("effect") or "allow").lower() != "deny" else "not_observed",
+                "role_definition_scope": matched_blocker_state(blocking, constraining, {"role_definition_scope"}),
+                "resource_policy": matched_blocker_state(blocking, constraining, {"resource_policy_deny", "resource_policy_condition"}),
+                "conditions_and_scope": matched_blocker_state(
+                    blocking,
+                    constraining,
+                    {
+                        "condition",
+                        "role_assignment_condition",
+                        "management_group_scope",
+                        "subscription_scope",
+                        "resource_group_scope",
+                        "scoped_resource",
+                        "unknown_resource_scope",
+                    },
+                ),
+                "pim_activation_required": "pim_eligible_only" in constraining,
+                "pim": matched_blocker_state(blocking, constraining, {"pim_eligible_only"}),
+                "conditional_access": bool({"condition", "role_assignment_condition"} & constraining),
+                "management_group_inheritance": "management_group_scope" in constraining,
+                "subscription_scope": "subscription_scope" in constraining,
+                "resource_group_scope": "resource_group_scope" in constraining,
+                "policy_layer_authority": str(record.get("policy_layer") or "unknown").lower(),
+            }
+        )
+        return detail
+
     def augment_identity_blockers(
         self,
         record: dict[str, Any],
@@ -179,6 +268,42 @@ class AzureExposureEvaluator(ProviderEvaluator):
                     "evidence": "Azure role assignment is inherited or scoped at management-group level",
                 }
             )
+        elif "/resourcegroups/" in text or "resource_group" in text:
+            augmented.append(
+                {
+                    "kind": "resource_group_scope",
+                    "effect": "constrains",
+                    "provider": self.provider,
+                    "evidence": "Azure role assignment is scoped at resource-group level",
+                }
+            )
+        elif "/subscriptions/" in text or "subscription" in text:
+            augmented.append(
+                {
+                    "kind": "subscription_scope",
+                    "effect": "constrains",
+                    "provider": self.provider,
+                    "evidence": "Azure role assignment is scoped or inherited at subscription level",
+                }
+            )
+        if "assignable_scopes" in text or "assignablescopes" in text:
+            augmented.append(
+                {
+                    "kind": "role_definition_scope",
+                    "effect": "constrains",
+                    "provider": self.provider,
+                    "evidence": "Azure custom role definition has assignable scope constraints",
+                }
+            )
+        if "condition" in text or record.get("condition_keys"):
+            augmented.append(
+                {
+                    "kind": "role_assignment_condition",
+                    "effect": "constrains",
+                    "provider": self.provider,
+                    "evidence": "Azure role assignment includes conditions",
+                }
+            )
         if "pim" in text or "eligible" in text:
             augmented.append(
                 {
@@ -197,6 +322,15 @@ class AzureExposureEvaluator(ProviderEvaluator):
                     "evidence": "Azure resource policy denies the effective action",
                 }
             )
+        elif policy_layer == "resource_policy":
+            augmented.append(
+                {
+                    "kind": "resource_policy_condition",
+                    "effect": "constrains",
+                    "provider": self.provider,
+                    "evidence": "Azure resource policy participates in the effective action",
+                }
+            )
         return dedupe_objects(augmented)
 
     def network_unknowns(self, network: dict[str, Any], exposure: str) -> list[str]:
@@ -208,3 +342,42 @@ class AzureExposureEvaluator(ProviderEvaluator):
             if "route_table" not in text and "azurerm_route" not in text:
                 unknowns.append("Azure route-table precedence was not proven by linked route evidence.")
         return unknowns
+
+
+def _azure_record_denies(record: dict[str, Any]) -> bool:
+    effect = str(record.get("effect") or "allow").lower()
+    decision = str(record.get("decision") or "").lower()
+    decision_basis = str(record.get("decision_basis") or "").lower()
+    policy_layer = str(record.get("policy_layer") or "").lower()
+    text = jsonish(record).lower()
+    return (
+        effect == "deny"
+        or decision.startswith("denied")
+        or "deny_assignment" in decision_basis
+        or policy_layer == "deny_assignment"
+        or "denyassignment" in text
+    )
+
+
+def _azure_policy_layer_rank(layer: str) -> int:
+    return {
+        "deny_assignment": 7,
+        "resource_policy": 6,
+        "role_assignment": 5,
+        "management_group": 4,
+        "subscription": 3,
+        "resource_group": 2,
+    }.get(layer.lower(), 1)
+
+
+def _azure_scope_level(record: dict[str, Any]) -> str:
+    text = jsonish(record).lower()
+    if "managementgroups" in text or "management_group" in text:
+        return "management_group"
+    if "/subscriptions/" in text and "/resourcegroups/" in text:
+        return "resource_group"
+    if "/subscriptions/" in text:
+        return "subscription"
+    if str(record.get("resource_scope") or "").lower() == "scoped":
+        return "resource"
+    return "unknown"

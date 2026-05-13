@@ -2,7 +2,7 @@
 
 ## Current gates
 
-- Unit and workflow tests: 484.
+- Unit and workflow tests: 519.
 - Coverage threshold: 93%.
 - Current measured coverage: passes the 93% line/branch-aware coverage gate.
 - Test runner: `scripts/run_tests.py`.
@@ -11,8 +11,8 @@
 - Static type configuration: strict `mypy` across `src`.
 - Sample workflow: `make sample`.
 - Terraform fixture workflow: `make fixtures`.
-- Release validation: `make release-check` currently covers 51 import/export and release-contract checks.
-- Complex real-world app validation: `make external-complex` (AWS Retail Store and Google Online Boutique).
+- Release validation: `make release-check` currently covers 53 import/export and release-contract checks.
+- Complex real-world app validation: `make external-complex` (AWS Retail Store, Google Online Boutique, Bank of Anthos, Azure AKS Store, and Instana Robot Shop).
 - Package build: `make package` (`python -m build --no-isolation`).
 - CI matrix: Python 3.10, 3.11, 3.12.
 - CI runs compile, lint, strict type-checking, tests, coverage, sample output generation, fixture packs, release validation, package build, and a built-wheel CLI smoke test.
@@ -100,6 +100,7 @@ The logic layer has tests for:
 - Rendered Kubernetes manifest analysis for workload, Service, Ingress, RBAC, artifact matching, and coverage output.
 - Generated output validation against repository JSON schemas through `scripts/validate_release.py`.
 - Direct schema-contract tests for checked-in sample vulnerability data, context data, runtime policy config, fixture packs, and complex benchmark output.
+- Real-app benchmark snapshot tests for expected tier distributions and high/urgent inflation limits.
 - Golden regression tests for the main sample lock finding counts, tier spread, top remediation order, coverage summaries, and visual graph connectivity.
 - Hostile-input tests cover malformed SBOM/vulnerability/source-evidence files and HTML report escaping.
 
@@ -112,8 +113,8 @@ The Terraform layer has tests for:
 - Plan parsing from `planned_values` and `resource_changes`.
 - Container image extraction across ECS/Lambda/App Runner, Azure Container Apps/App Service, GCP Cloud Run, and Kubernetes resources.
 - Public, restricted external, internal lateral, private-only, and unknown exposure detection across AWS, Azure, GCP, and Kubernetes resources.
-- Bounded graph pathfinding for AWS ECS security groups/target groups, AWS target attachments, AWS Lambda URLs, Azure application gateway/load-balancer backend paths, GCP forwarding-rule/backend-service/NEG paths, GCP Cloud Run/Cloud Functions public invokers, Azure Container Apps ingress, Kubernetes Service/Ingress names or selectors, security-group hops, route table associations, AWS/Azure/GCP route adapter signals, firewall target tags, firewall priorities, private endpoints, NSG allow/deny rules, rendered Kubernetes NetworkPolicy deny-all ingress, and lateral bridge resources such as peering, VPN, transit, ExpressRoute, and Interconnect.
-- IAM blast-radius classification, provider role catalogs, per-workload identity linkage, explicit AWS `sts:AssumeRole` capability propagation, per-resource IAM capability records with resource scope, condition keys, effective risk, risk multiplier, targeted sensitive-resource evidence, and network-aware criticality across AWS IAM, Azure role assignments and Key Vault policies, GCP IAM, and Kubernetes role bindings.
+- Bounded graph pathfinding for AWS ECS security groups/target groups, AWS target attachments, AWS Lambda URLs, Azure application gateway/load-balancer backend paths, GCP forwarding-rule/backend-service/NEG paths, GCP Cloud Run/Cloud Functions public invokers, Azure Container Apps ingress, Kubernetes Service/Ingress names or selectors, security-group hops, route table associations, provider resource-graph construction, typed edge precedence, AWS route/security-group/NACL evaluation, AWS ALB/API Gateway/WAF constraints, AWS/Azure/GCP route adapter signals, firewall target tags, firewall priorities, private endpoints, NSG allow/deny rules, rendered Kubernetes NetworkPolicy deny-all ingress, and lateral bridge resources such as peering, VPN, transit, ExpressRoute, and Interconnect.
+- IAM blast-radius classification, provider role catalogs, per-workload identity linkage, explicit AWS `sts:AssumeRole` capability propagation, per-resource IAM capability records with resource scope, condition keys, effective risk, risk multiplier, targeted sensitive-resource evidence, explicit-deny precedence, structured policy-document evaluation, provider-specific evaluation order, and effective access models across AWS IAM, Azure role assignments and Key Vault policies, GCP IAM, and Kubernetes role bindings.
 - CLI generation of `--terraform-coverage-out`.
 
 ## Fixture-pack quality bar
@@ -128,6 +129,8 @@ Every Terraform fixture pack must validate and run through the fixture harness. 
 - at least one expected finding reaches the documented minimum tier.
 
 The active pack set covers AWS ECS/Fargate, AWS Lambda function URLs, Azure Container Apps, Azure App Service, GCP Cloud Run, GKE plus Kubernetes workloads, Kubernetes ingress, Helm-heavy Kubernetes, and private service-mesh workloads.
+
+Provider policy fixtures live under `fixtures/policies/`. They validate the policy AST evaluator against sanitized AWS trust, permissions-boundary, SCP, resource-policy, cross-account, Azure RBAC/deny-assignment, GCP IAM/PAB/Workload Identity, and Kubernetes RBAC examples. These tests cover principal matching, resource/action matching, condition handling, explicit and implicit deny behavior, scoped access, and provider-specific blocker output.
 
 ## Future hardening
 

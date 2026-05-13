@@ -1,0 +1,117 @@
+{
+  "$schema": "../../schemas/benchmark-snapshots.schema.json",
+  "schema_version": "1.0",
+  "description": "Expected tier distributions and over-prioritization limits for the real-app complex validation corpus.",
+  "source_benchmark": "outputs/external-complex/benchmark.json",
+  "captured_at": "2026-05-13T10:23:48Z",
+  "snapshots": [
+    {
+      "id": "external-complex-aggregate",
+      "required_status": null,
+      "expected_tier_counts": {
+        "urgent": 0,
+        "high": 1,
+        "medium": 105,
+        "low": 69,
+        "informational": 12
+      },
+      "regression_limits": {
+        "max_count_by_tier": {"urgent": 0, "high": 2, "high_or_urgent": 2},
+        "max_ratio_by_tier": {"high_or_urgent": 0.02},
+        "allowed_count_delta_by_tier": {"urgent": 0, "high": 1, "medium": 25, "low": 25, "informational": 15},
+        "min_total_findings": 120,
+        "max_total_findings_delta_ratio": 0.35
+      }
+    },
+    {
+      "id": "aws-retail-store-sample-app",
+      "case_id": "aws-retail-store-sample-app",
+      "required_status": "passed",
+      "expected_tier_counts": {
+        "urgent": 0,
+        "high": 0,
+        "medium": 27,
+        "low": 13,
+        "informational": 0
+      },
+      "regression_limits": {
+        "max_count_by_tier": {"urgent": 0, "high_or_urgent": 0},
+        "allowed_count_delta_by_tier": {"urgent": 0, "high": 0, "medium": 10, "low": 10, "informational": 5},
+        "min_total_findings": 20,
+        "max_total_findings_delta_ratio": 0.5
+      }
+    },
+    {
+      "id": "google-online-boutique",
+      "case_id": "google-online-boutique",
+      "required_status": "passed",
+      "expected_tier_counts": {
+        "urgent": 0,
+        "high": 0,
+        "medium": 32,
+        "low": 6,
+        "informational": 0
+      },
+      "regression_limits": {
+        "max_count_by_tier": {"urgent": 0, "high_or_urgent": 0},
+        "allowed_count_delta_by_tier": {"urgent": 0, "high": 0, "medium": 10, "low": 10, "informational": 5},
+        "min_total_findings": 20,
+        "max_total_findings_delta_ratio": 0.5
+      }
+    },
+    {
+      "id": "bank-of-anthos",
+      "case_id": "bank-of-anthos",
+      "required_status": "passed",
+      "expected_tier_counts": {
+        "urgent": 0,
+        "high": 1,
+        "medium": 25,
+        "low": 11,
+        "informational": 1
+      },
+      "regression_limits": {
+        "max_count_by_tier": {"urgent": 0, "high": 2, "high_or_urgent": 2},
+        "allowed_count_delta_by_tier": {"urgent": 0, "high": 1, "medium": 10, "low": 10, "informational": 5},
+        "min_total_findings": 10,
+        "max_total_findings_delta_ratio": 0.5
+      }
+    },
+    {
+      "id": "azure-aks-store-demo",
+      "case_id": "azure-aks-store-demo",
+      "required_status": "passed",
+      "expected_tier_counts": {
+        "urgent": 0,
+        "high": 0,
+        "medium": 21,
+        "low": 38,
+        "informational": 11
+      },
+      "regression_limits": {
+        "max_count_by_tier": {"urgent": 0, "high_or_urgent": 0},
+        "allowed_count_delta_by_tier": {"urgent": 0, "high": 0, "medium": 15, "low": 15, "informational": 10},
+        "min_total_findings": 5,
+        "max_total_findings_delta_ratio": 0.5
+      }
+    },
+    {
+      "id": "instana-robot-shop",
+      "case_id": "instana-robot-shop",
+      "required_status": "passed",
+      "expected_tier_counts": {
+        "urgent": 0,
+        "high": 0,
+        "medium": 0,
+        "low": 1,
+        "informational": 0
+      },
+      "regression_limits": {
+        "max_count_by_tier": {"urgent": 0, "high_or_urgent": 0},
+        "allowed_count_delta_by_tier": {"urgent": 0, "high": 0, "medium": 5, "low": 5, "informational": 5},
+        "min_total_findings": 1,
+        "max_total_findings_delta_ratio": 5.0
+      }
+    }
+  ]
+}

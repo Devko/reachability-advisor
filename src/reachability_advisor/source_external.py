@@ -18,6 +18,7 @@ from .models import (
     VulnerabilityRecord,
 )
 from .purl import parse_purl
+from .source_query_families import normalize_query_family_ids
 
 VULNERABILITY_ID_RE = re.compile(r"^(CVE-\d{4}-\d+|GHSA-[a-z0-9-]+|GO-\d{4}-\d+|OSV-\d+|PYSEC-\d{4}-\d+)", re.IGNORECASE)
 
@@ -142,6 +143,7 @@ def merge_source_evidence(base: SourceEvidence, external: SourceEvidence | None)
         matched_symbols=symbols,
         dependency_path=dependency_path,
         evidence_source=external.evidence_source,
+        query_families=list(external.query_families),
         diagnostics=diagnostics,
     )
 
@@ -259,6 +261,7 @@ def _evidence_with_diagnostic(evidence: SourceEvidence, diagnostic: dict[str, An
         matched_symbols=evidence.matched_symbols,
         dependency_path=evidence.dependency_path,
         evidence_source=evidence.evidence_source,
+        query_families=list(evidence.query_families),
         diagnostics=diagnostics,
     )
 
@@ -366,6 +369,14 @@ def _record_from_plain(item: dict[str, Any], path: Path) -> ExternalSourceEviden
         matched_symbols=[str(symbol) for symbol in item.get("matched_symbols", []) or []],
         dependency_path=[str(part) for part in item.get("dependency_path", []) or []],
         evidence_source=source,
+        query_families=list(
+            normalize_query_family_ids(
+                item.get("query_families")
+                or item.get("query_family")
+                or item.get("package_family")
+                or item.get("query_pack")
+            )
+        ),
         diagnostics=diagnostics,
     )
     return ExternalSourceEvidenceRecord(
@@ -407,6 +418,7 @@ def _record_from_finding(item: dict[str, Any], path: Path) -> ExternalSourceEvid
         "locations": source.get("locations"),
         "matched_symbols": source.get("matched_symbols"),
         "dependency_path": source.get("dependency_path"),
+        "query_families": source.get("query_families") or source.get("query_family"),
         "diagnostics": source.get("diagnostics"),
         "tool": source.get("evidence_source") or "reachability-advisor",
     }
@@ -502,6 +514,7 @@ def _record_from_semgrep(item: dict[str, Any], path: Path) -> ExternalSourceEvid
         "reason": _semgrep_reason(extra, has_taint_trace, item.get("check_id")),
         "locations": locations,
         "matched_symbols": _semgrep_matched_symbols(item, extra),
+        "query_families": _first_selector(metadata_sources, "query_families", "query_family", "package_family", "query_pack"),
         "tool": "semgrep",
         "diagnostics": [
             {
@@ -640,6 +653,7 @@ def _records_from_sarif(data: dict[str, Any], path: Path) -> list[ExternalSource
                 "reason": _sarif_reason(str(tool_name), message.get("text"), rule_id, has_flow),
                 "locations": locations,
                 "matched_symbols": _sarif_matched_symbols(rule_id, result, rule),
+                "query_families": _first_selector(metadata_sources, "query_families", "query_family", "package_family", "query_pack"),
                 "tool": str(tool_name),
                 "diagnostics": [
                     {
@@ -679,6 +693,7 @@ def _record_from_govulncheck(item: dict[str, Any], path: Path) -> ExternalSource
             "locations": locations,
             "tool": "govulncheck",
             "language": "go",
+            "query_family": "go-vuln-callstack",
         },
         path,
     )

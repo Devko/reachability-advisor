@@ -23,6 +23,7 @@ from .baseline import (
     load_baseline,
     write_baseline,
 )
+from .benchmark_snapshots import BenchmarkSnapshotError, validate_benchmark_snapshots
 from .compare import compare_findings, delta_fails, pr_delta, write_delta, write_delta_markdown
 from .context import ContextError, load_context_file
 from .effective_exposure import enrich_context_map_with_effective_exposure
@@ -113,6 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--evidence-graph-out", help="Write structured asset/source/network/IAM/finding graph JSON.")
     scan.add_argument("--artifact-alias", action="append", default=[], help="Add artifact mapping alias: artifact=reference. Repeatable; use when SBOM metadata lacks image refs.")
     scan.add_argument("--artifact-manifest", action="append", default=[], help="CI artifact identity manifest JSON with image refs, digests, Git SHA, SBOM path, and renderer metadata. Repeatable.")
+    scan.add_argument("--require-artifact-provenance", action="store_true", help="Exit 10 unless artifact manifests provide digest, SBOM path, Git SHA, and signature/attestation markers.")
     scan.add_argument("--reachability-rules", help="Custom source reachability rules JSON.")
     scan.add_argument("--source-evidence-in", action="append", default=[], help="External source evidence JSON, Semgrep JSON, SARIF, or govulncheck JSONL. Repeatable.")
     scan.add_argument(
@@ -227,6 +229,7 @@ def build_parser() -> argparse.ArgumentParser:
     artifact_manifest_init.add_argument("--out", required=True, help="Manifest output path.")
     artifact_manifest_validate = artifact_manifest_sub.add_parser("validate", help="Validate artifact identity manifest coverage.")
     artifact_manifest_validate.add_argument("--manifest", required=True)
+    artifact_manifest_validate.add_argument("--strict-provenance", action="store_true", help="Require digest identity, SBOM path, Git SHA, and signature/attestation marker.")
     artifact_manifest_validate.add_argument("--out", help="Write validation JSON.")
     artifact_manifest_validate.add_argument("--fail-on-warning", action="store_true", help="Exit 10 unless every artifact has strong identity.")
 
@@ -246,6 +249,12 @@ def build_parser() -> argparse.ArgumentParser:
     hcl_audit.add_argument("--out", help="Write HCL audit JSON report.")
     hcl_audit.add_argument("--markdown-out", help="Write HCL audit Markdown report.")
     hcl_audit.add_argument("--fail-on-gaps", action="store_true", help="Exit 10 when static audit reports visibility gaps.")
+
+    benchmark_snapshots = sub.add_parser("benchmark-snapshots", help="Validate real-app benchmark tier distributions and over-prioritization limits.")
+    benchmark_snapshots.add_argument("--benchmark", required=True, help="Complex benchmark JSON from scripts/run_complex_app_validation.py.")
+    benchmark_snapshots.add_argument("--expectations", default="fixtures/benchmarks/real-app-tier-snapshots.json", help="Benchmark snapshot expectation JSON.")
+    benchmark_snapshots.add_argument("--out", help="Write validation report JSON.")
+    benchmark_snapshots.add_argument("--warn-only", action="store_true", help="Return 0 even when a benchmark regression is detected.")
 
     semgrep = sub.add_parser("export-semgrep-rules", help="Write Semgrep starter rules from reachability rules.")
     semgrep.add_argument("--reachability-rules", help="Custom source reachability rules JSON to include.")
@@ -376,6 +385,10 @@ def run_scan(args: argparse.Namespace) -> int:
         if args.artifact_manifest
         else {"schema_version": "1.0", "manifests": [], "entries": 0, "applied": 0, "unmatched": []}
     )
+    artifact_provenance_reports = [
+        validate_artifact_manifest(path, strict_provenance=args.require_artifact_provenance)
+        for path in args.artifact_manifest
+    ]
     _apply_artifact_aliases(sboms, args.artifact_alias)
     vulnerabilities = load_vulnerabilities(args.vulns)
     source_roots = parse_source_roots(args.source_root)
@@ -423,6 +436,10 @@ def run_scan(args: argparse.Namespace) -> int:
     mapping_report = build_mapping_report(sboms, source_roots, terraform_coverage, kubernetes_coverage)
     if args.artifact_manifest:
         mapping_report["artifact_manifest"] = artifact_manifest_report
+        mapping_report["artifact_provenance"] = {
+            "required": bool(args.require_artifact_provenance),
+            "reports": artifact_provenance_reports,
+        }
     metadata = {
         "sbom_count": len(sboms),
         "vulnerability_records": len(vulnerabilities),
@@ -485,7 +502,7 @@ def run_scan(args: argparse.Namespace) -> int:
         out.write_text(json.dumps(readiness_report, indent=2), encoding="utf-8")
     if not args.no_table:
         print(render_table(findings, args.limit))
-    quality_failures = _quality_gate_failures(args, mapping_report, source_coverage)
+    quality_failures = _quality_gate_failures(args, mapping_report, source_coverage, artifact_provenance_reports)
     if readiness_report is not None:
         readiness_summary = readiness_report.get("summary", {}) if isinstance(readiness_report.get("summary"), dict) else {}
         if args.require_release_ready and int(readiness_summary.get("blockers") or 0) > 0:
@@ -509,7 +526,12 @@ def _findings_fail(findings: list[Any], tier: Tier) -> bool:
     return any(finding.policy_status != "excepted" and order[finding.tier] >= threshold for finding in findings)
 
 
-def _quality_gate_failures(args: argparse.Namespace, mapping_report: dict[str, Any], source_coverage: dict[str, Any]) -> list[str]:
+def _quality_gate_failures(
+    args: argparse.Namespace,
+    mapping_report: dict[str, Any],
+    source_coverage: dict[str, Any],
+    artifact_provenance_reports: list[dict[str, Any]] | None = None,
+) -> list[str]:
     failures: list[str] = []
     mapping_summary = mapping_report.get("summary", {}) if isinstance(mapping_report.get("summary"), dict) else {}
     source_summary = source_coverage.get("summary", {}) if isinstance(source_coverage.get("summary"), dict) else {}
@@ -533,9 +555,11 @@ def _quality_gate_failures(args: argparse.Namespace, mapping_report: dict[str, A
     source_rule_minimum = _profile_minimum(args.min_source_rule_coverage, 0.8 if production else None)
     external_usable_minimum = _profile_minimum(args.min_external_evidence_usable_ratio, 0.8 if production else None)
     critical_external_minimum = _profile_minimum(args.min_critical_external_source_coverage, 1.0 if production else None)
+    critical_query_family_minimum = 1.0 if production else None
     ratio_gate("source rule coverage", source_summary.get("source_rule_coverage"), source_rule_minimum)
     ratio_gate("external source evidence usable ratio", source_summary.get("external_evidence_usable_ratio"), external_usable_minimum)
     ratio_gate("critical external source evidence coverage", source_summary.get("critical_external_evidence_coverage"), critical_external_minimum)
+    ratio_gate("critical source query-family coverage", source_summary.get("critical_query_family_coverage"), critical_query_family_minimum)
     if args.fail_on_mapping_warnings and int(mapping_summary.get("mapping_warnings_count") or 0) > 0:
         failures.append(f"mapping report contains {mapping_summary.get('mapping_warnings_count')} warning(s)")
     if (args.require_external_source_evidence or production) and int(source_summary.get("external_evidence_records") or 0) == 0:
@@ -547,6 +571,13 @@ def _quality_gate_failures(args: argparse.Namespace, mapping_report: dict[str, A
         failures.append("production profile requires rendered deployment evidence: provide --terraform-plan or --kubernetes-manifest")
     if production and args.terraform_source and not args.terraform_plan:
         failures.append("production profile treats --terraform-source as advisory; provide --terraform-plan for Terraform-managed resources")
+    if getattr(args, "require_artifact_provenance", False):
+        if not getattr(args, "artifact_manifest", []):
+            failures.append("strict artifact provenance requires at least one --artifact-manifest")
+        for report in artifact_provenance_reports or []:
+            if report.get("status") != "ready":
+                blockers = report.get("summary", {}).get("provenance_blockers", 0)
+                failures.append(f"artifact provenance has {blockers} blocker(s)")
     return failures
 
 
@@ -738,7 +769,7 @@ def run_artifact_manifest(args: argparse.Namespace) -> int:
         write_artifact_manifest(args.out, payload)
         return 0
     if args.artifact_manifest_command == "validate":
-        report = validate_artifact_manifest(args.manifest)
+        report = validate_artifact_manifest(args.manifest, strict_provenance=args.strict_provenance)
         if args.out:
             out = Path(args.out)
             out.parent.mkdir(parents=True, exist_ok=True)
@@ -788,6 +819,17 @@ def run_hcl_audit(args: argparse.Namespace) -> int:
         print("Reachability Advisor HCL audit failed: visibility gaps reported.", file=sys.stderr)
         return 10
     return 0
+
+
+def run_benchmark_snapshots(args: argparse.Namespace) -> int:
+    report = validate_benchmark_snapshots(args.benchmark, args.expectations)
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    else:
+        print(json.dumps(report, indent=2))
+    return 0 if args.warn_only or report.get("status") == "passed" else 10
 
 
 def run_export_semgrep_rules(args: argparse.Namespace) -> int:
@@ -850,6 +892,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_fixtures(args)
         if args.command == "hcl-audit":
             return run_hcl_audit(args)
+        if args.command == "benchmark-snapshots":
+            return run_benchmark_snapshots(args)
         if args.command == "export-semgrep-rules":
             return run_export_semgrep_rules(args)
         if args.command == "version":
@@ -857,7 +901,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         parser.error("unknown command")
         return 2
-    except (UserFacingError, SbomError, VulnerabilityError, ContextError, FixtureError, HclAuditError, KubernetesManifestError, ArtifactManifestError, ValueError) as exc:
+    except (UserFacingError, SbomError, VulnerabilityError, ContextError, FixtureError, HclAuditError, KubernetesManifestError, ArtifactManifestError, BenchmarkSnapshotError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return exc.exit_code if isinstance(exc, UserFacingError) else 2
 

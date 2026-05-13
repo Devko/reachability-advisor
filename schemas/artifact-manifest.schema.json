@@ -37,6 +37,9 @@
       }
     },
     "signature": {"type": ["object", "string", "boolean"]},
+    "attestation": {"type": ["object", "string", "boolean"]},
+    "slsa": {"type": ["object", "string", "boolean"]},
+    "sigstore_bundle": {"type": ["object", "string", "boolean"]},
     "signed": {"type": "boolean"}
   }
 }

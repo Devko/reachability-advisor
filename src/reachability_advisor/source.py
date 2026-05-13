@@ -47,6 +47,7 @@ from .source_manifests import (
     manifest_dependency_evidence,
     manifest_language_for,
 )
+from .source_query_families import query_family_ids_for_component, query_family_ids_for_rule
 
 MAX_FILE_BYTES = 1_000_000
 SUPPORTED_EXTENSIONS = {".java", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".py", ".go"}
@@ -1061,6 +1062,7 @@ def analyze_component_source(
     import_patterns = tuple(dict.fromkeys(pattern for rule in rules for pattern in rule.import_patterns)) or generic_patterns
     function_patterns = tuple(dict.fromkeys(pattern for rule in rules for pattern in rule.function_patterns))
     attacker_patterns = tuple(dict.fromkeys(pattern for rule in rules for pattern in rule.attacker_patterns))
+    query_families = list(query_family_ids_for_component(component))
 
     signals: list[FileSignal] = []
     for indexed in index.files:
@@ -1145,6 +1147,7 @@ def analyze_component_source(
             ),
             locations=locations,
             matched_symbols=sorted({*symbols, call_symbol}),
+            query_families=query_families,
         )
 
     if same_function_attacker:
@@ -1155,6 +1158,7 @@ def analyze_component_source(
             reason=f"{rule_text}; same function contains vulnerable-function hint and attacker-controlled entrypoint/input hint",
             locations=locations,
             matched_symbols=symbols,
+            query_families=query_families,
         )
     if same_file_function:
         reason = f"{rule_text}; same source file contains import and vulnerable-function usage hints"
@@ -1176,6 +1180,7 @@ def analyze_component_source(
             reason=reason,
             locations=locations,
             matched_symbols=symbols,
+            query_families=query_families,
             diagnostics=diagnostics,
         )
     if has_import_any and has_function_any:
@@ -1186,6 +1191,7 @@ def analyze_component_source(
             reason=f"{rule_text}; import and vulnerable-function hints were observed in the source root but not the same file",
             locations=locations,
             matched_symbols=symbols,
+            query_families=query_families,
             diagnostics=[
                 source_diagnostic(
                     "cross_file_unlinked_function",
@@ -1202,6 +1208,7 @@ def analyze_component_source(
             reason=f"{rule_text}; source imports or requires the package",
             locations=locations,
             matched_symbols=symbols,
+            query_families=query_families,
         )
     dependency_evidence = _dependency_reachable_evidence(component, sbom, index, custom_rules, language)
     if dependency_evidence:
@@ -1272,6 +1279,9 @@ def source_coverage_report(
         "critical_findings_with_dependency_only_source": 0,
         "critical_findings_with_external_evidence": 0,
         "critical_findings_missing_external_evidence": 0,
+        "critical_findings_requiring_query_family": 0,
+        "critical_findings_with_required_query_family": 0,
+        "critical_findings_missing_query_family": 0,
         "source_diagnostic_counts": {},
     }
     external_selector_diagnostics = external_evidence.selector_diagnostics() if external_evidence else {"records": 0, "matchable_records": 0, "artifact_only_records": 0, "unscoped_records": 0}
@@ -1287,6 +1297,8 @@ def source_coverage_report(
         artifact_states: dict[str, int] = {}
         artifact_diagnostics: dict[str, int] = {}
         critical_packages: dict[str, dict[str, Any]] = {}
+        artifact_query_family_required = 0
+        artifact_query_family_covered = 0
         for finding in artifact_findings:
             state = finding.source.reachability.value
             artifact_states[state] = artifact_states.get(state, 0) + 1
@@ -1311,6 +1323,10 @@ def source_coverage_report(
                 totals["findings_with_weak_source_evidence"] += 1
             if _critical_source_gate_applies(finding):
                 totals["critical_findings"] += 1
+                required_query_families = set(query_family_ids_for_component(finding.component))
+                has_external_evidence = finding.source.evidence_source != "builtin"
+                evidence_query_families = _evidence_query_families(finding, required_query_families) if has_external_evidence else set()
+                missing_query_families = sorted(required_query_families - evidence_query_families)
                 package_key = finding.component.purl or finding.component.display_name
                 package_row = critical_packages.setdefault(
                     package_key,
@@ -1319,11 +1335,17 @@ def source_coverage_report(
                         "purl": finding.component.purl,
                         "vulnerabilities": [],
                         "external_evidence": False,
+                        "required_query_families": set(),
+                        "evidence_query_families": set(),
+                        "missing_query_families": set(),
                         "states": {},
                     },
                 )
                 package_row["vulnerabilities"].append(finding.vulnerability.id)
                 package_row["states"][state] = package_row["states"].get(state, 0) + 1
+                package_row["required_query_families"].update(required_query_families)
+                package_row["evidence_query_families"].update(evidence_query_families)
+                package_row["missing_query_families"].update(missing_query_families)
                 if state in {
                     Reachability.ABSENT.value,
                     Reachability.UNKNOWN_DUE_TO_NO_RULE.value,
@@ -1336,7 +1358,16 @@ def source_coverage_report(
                     package_row["external_evidence"] = True
                 else:
                     totals["critical_findings_missing_external_evidence"] += 1
-        critical_package_rows = sorted(critical_packages.values(), key=lambda row: str(row["component"]))
+                if required_query_families:
+                    totals["critical_findings_requiring_query_family"] += 1
+                    artifact_query_family_required += 1
+                    if has_external_evidence and not missing_query_families:
+                        totals["critical_findings_with_required_query_family"] += 1
+                        artifact_query_family_covered += 1
+                    else:
+                        totals["critical_findings_missing_query_family"] += 1
+        critical_package_rows = [_critical_package_row(row) for row in critical_packages.values()]
+        critical_package_rows = sorted(critical_package_rows, key=lambda row: str(row["component"]))
         critical_packages_with_external = sum(1 for row in critical_package_rows if row["external_evidence"])
         artifacts.append(
             {
@@ -1352,6 +1383,7 @@ def source_coverage_report(
                 "source_diagnostics": artifact_diagnostics,
                 "critical_packages": critical_package_rows,
                 "critical_package_coverage": round(critical_packages_with_external / len(critical_package_rows), 4) if critical_package_rows else 1.0,
+                "critical_query_family_coverage": round(artifact_query_family_covered / artifact_query_family_required, 4) if artifact_query_family_required else 1.0,
                 "skipped_files": index.skipped_files[:20],
             }
         )
@@ -1373,6 +1405,9 @@ def source_coverage_report(
     totals["external_evidence_selector_diagnostics"] = external_selector_diagnostics
     totals["external_evidence_selected_ratio"] = round(totals["findings_with_external_evidence"] / len(findings), 4) if findings else 1.0
     totals["critical_external_evidence_coverage"] = round(totals["critical_findings_with_external_evidence"] / totals["critical_findings"], 4) if totals["critical_findings"] else 1.0
+    family_required = int(totals["critical_findings_requiring_query_family"])
+    family_covered = int(totals["critical_findings_with_required_query_family"])
+    totals["critical_query_family_coverage"] = round(family_covered / family_required, 4) if family_required else 1.0
     return {
         "schema_version": "1.0",
         "summary": totals,
@@ -1382,6 +1417,7 @@ def source_coverage_report(
             "No-rule findings are rule coverage gaps; package-present findings are evidence gaps.",
             "Package-manager manifest evidence is weak dependency evidence. It does not prove runtime import or vulnerable API execution.",
             "External evidence must match a component/package, package URL, or vulnerability selector; artifact only narrows a selector match.",
+            "Critical findings for maintained package families also need matching external query-family evidence.",
             "Built-in source rules are advisory fallback evidence. Production gates should import Semgrep, CodeQL/SARIF, govulncheck, or native evidence.",
             "Production profile fails when critical findings only have dependency-level or weaker source evidence.",
         ],
@@ -1401,6 +1437,27 @@ def _critical_source_gate_applies(finding: Any) -> bool:
         or bool(getattr(vulnerability, "known_exploited", False))
         or (isinstance(epss, (int, float)) and epss >= 0.5)
     )
+
+
+def _evidence_query_families(finding: Any, required_query_families: set[str]) -> set[str]:
+    source = finding.source
+    families = {str(item).lower().replace("_", "-") for item in getattr(source, "query_families", []) if str(item)}
+    if str(getattr(source, "evidence_source", "")).lower() == "govulncheck" and ecosystem_from_component(finding.component.purl, finding.component.name) == "go":
+        # govulncheck reports vulnerability-specific call stacks instead of a
+        # package-family rule ID, so it satisfies maintained Go family gates.
+        families.update(required_query_families)
+        families.add("go-vuln-callstack")
+    return families
+
+
+def _critical_package_row(row: dict[str, Any]) -> dict[str, Any]:
+    converted = dict(row)
+    converted["vulnerabilities"] = sorted({str(item) for item in converted.get("vulnerabilities", [])})
+    for key in ("required_query_families", "evidence_query_families", "missing_query_families"):
+        values = converted.get(key, set())
+        if isinstance(values, set):
+            converted[key] = sorted(values)
+    return converted
 
 
 def semgrep_rules_yaml(rules: Iterable[ReachabilityRule] = BUILTIN_RULES) -> str:
@@ -1426,6 +1483,7 @@ def semgrep_rules_yaml(rules: Iterable[ReachabilityRule] = BUILTIN_RULES) -> str
                     "      reachability_advisor:",
                     f"        ecosystem: {_yaml_string(rule.ecosystem)}",
                     f"        package: {_yaml_string(rule.package_name)}",
+                    f"        query_families: [{', '.join(_yaml_string(item) for item in query_family_ids_for_rule(rule.ecosystem, rule.package_name))}]",
                     f"        state: {_yaml_string(state.value)}",
                     "        confidence: medium",
                     f"        vulnerability_ids: [{', '.join(_yaml_string(item) for item in rule.vulnerability_ids)}]",

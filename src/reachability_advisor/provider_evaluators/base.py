@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
@@ -13,6 +14,8 @@ from reachability_advisor.iam_capabilities import (
 )
 from reachability_advisor.models import ContextEvidence
 from reachability_advisor.terraform_exposure import exposure_rank
+
+from .network_engine import evaluate_provider_network_graph
 
 
 @dataclass(frozen=True)
@@ -82,13 +85,15 @@ class ProviderEvaluator:
 
     def evaluate_network(self, context: ContextEvidence, network: dict[str, Any]) -> dict[str, Any]:
         exposure = str(network.get("exposure") or context.exposure or "unknown").lower()
-        blockers = self.normalize_blockers(network.get("blockers"), is_identity=False)
+        graph_eval = self.evaluate_network_graph(network, exposure)
+        blockers = self.normalize_blockers([*objects(network.get("blockers")), *objects(graph_eval.get("blockers"))], is_identity=False)
         blockers = self.normalize_blockers(self.augment_network_blockers(network, blockers), is_identity=False)
         effects = {str(item.get("effect") or "") for item in blockers}
-        unknowns = strings(network.get("unknowns"))
+        unknowns = [*strings(network.get("unknowns")), *strings(graph_eval.get("unknowns"))]
         path_type = str(network.get("path_type") or path_type_for_exposure(exposure))
         entry = str(network.get("entry") or network.get("entry_kind") or entry_for_exposure(exposure))
-        steps = strings(network.get("steps"))
+        graph_path = strings(graph_eval.get("path"))
+        steps = graph_path or strings(network.get("steps"))
         if not steps and exposure not in {"private", "isolated", "none", "unknown"}:
             unknowns.append("provider path exists as a label but has no hop sequence")
         if exposure == "unknown":
@@ -105,7 +110,7 @@ class ProviderEvaluator:
         else:
             decision = "reachable"
         decision_basis = self.network_decision_basis(network, blockers, unknowns, decision)
-        return {
+        result: dict[str, Any] = {
             "provider": self.provider,
             "decision": decision,
             "decision_basis": decision_basis,
@@ -119,22 +124,22 @@ class ProviderEvaluator:
             "source": str(network.get("source") or context.source or "context"),
             "evidence_layer": evidence_layer(str(network.get("source") or context.source or "context")),
         }
+        if graph_eval.get("evaluated"):
+            result["network_graph"] = graph_eval
+        return result
+
+    def evaluate_network_graph(self, network: dict[str, Any], exposure: str) -> dict[str, Any]:
+        return evaluate_provider_network_graph(self.provider, network, exposure)
 
     def evaluate_identity(self, context: ContextEvidence) -> dict[str, Any]:
-        access = strongest_effective_access(context)
+        access = self.select_effective_access(context)
         if access:
             blockers = self.normalize_blockers(access.get("blockers"), is_identity=True)
             blockers = self.normalize_blockers(self.augment_identity_blockers(access, blockers), is_identity=True)
-            decision = str(access.get("decision") or ("denied" if str(access.get("effect") or "allow").lower() == "deny" else "allowed"))
-            effect = str(access.get("effect") or "allow").lower()
-            if effect == "deny" or decision.startswith("denied") or any(item.get("effect") == "blocks" for item in blockers):
-                decision = "denied"
-            elif any(item.get("effect") == "constrains" for item in blockers):
-                decision = "constrained_allow"
-            else:
-                decision = "allowed"
+            decision = self.effective_identity_decision(access, blockers)
             decision_basis = str(access.get("decision_basis") or "unknown")
             provider_decision_basis = self.identity_decision_basis(access, blockers, decision, decision_basis)
+            evaluation_order = merge_policy_evaluation_order(self.identity_evaluation_order(access, blockers, decision), access)
             return {
                 "provider": str(access.get("provider") or self.provider),
                 "decision": decision,
@@ -152,6 +157,9 @@ class ProviderEvaluator:
                 "unknowns": self.identity_unknowns(access, has_capability=True),
                 "source": str(access.get("source") or context.source or "context"),
                 "evidence_layer": "iam",
+                "evaluation_order": evaluation_order,
+                "effective_access_model": self.identity_decision_detail(access, blockers, decision),
+                "policy_evaluation": access.get("policy_evaluation"),
             }
         capability = strongest_capability(context)
         if capability:
@@ -176,6 +184,8 @@ class ProviderEvaluator:
                 "unknowns": self.identity_unknowns(capability, has_capability=True),
                 "source": str(capability.get("source") or context.source or "context"),
                 "evidence_layer": "iam",
+                "evaluation_order": self.identity_evaluation_order(capability, blockers, decision),
+                "effective_access_model": self.identity_decision_detail(capability, blockers, decision),
             }
         unknowns = [] if context.privilege not in {"", "unknown"} or context.iam_impacts else ["no identity/effective-access evidence"]
         return {
@@ -191,6 +201,68 @@ class ProviderEvaluator:
             "source": context.source,
             "evidence_layer": "iam",
         }
+
+    def select_effective_access(self, context: ContextEvidence) -> dict[str, Any] | None:
+        return strongest_effective_access(context)
+
+    def effective_identity_decision(self, record: dict[str, Any], blockers: list[dict[str, Any]]) -> str:
+        decision = str(record.get("decision") or ("denied" if str(record.get("effect") or "allow").lower() == "deny" else "allowed"))
+        effect = str(record.get("effect") or "allow").lower()
+        if effect == "deny" or decision.startswith("denied") or any(item.get("effect") == "blocks" for item in blockers):
+            return "denied"
+        if any(item.get("effect") == "constrains" for item in blockers):
+            return "constrained_allow"
+        return "allowed"
+
+    def identity_evaluation_order(
+        self,
+        record: dict[str, Any],
+        blockers: list[dict[str, Any]],
+        decision: str,
+    ) -> list[dict[str, str]]:
+        steps = [
+            {"step": "explicit_deny", "state": "matched" if any(item.get("effect") == "blocks" for item in blockers) else "not_observed"},
+            {"step": "allow", "state": "matched" if str(record.get("effect") or "allow").lower() != "deny" else "not_observed"},
+        ]
+        if any(item.get("effect") == "constrains" for item in blockers):
+            steps.append({"step": "constraints", "state": "matched"})
+        steps.append({"step": "effective_decision", "state": decision})
+        return steps
+
+    def identity_decision_detail(
+        self,
+        record: dict[str, Any],
+        blockers: list[dict[str, Any]],
+        decision: str,
+    ) -> dict[str, Any]:
+        """Return a normalized identity/resource/action decision model for graph consumers."""
+
+        condition_keys = record.get("condition_keys")
+        conditions = [str(item) for item in condition_keys if str(item)] if isinstance(condition_keys, list) else []
+        effect = str(record.get("effect") or "allow").lower()
+        detail = {
+            "provider": str(record.get("provider") or self.provider),
+            "identity": record.get("identity"),
+            "action": record.get("action"),
+            "resource": record.get("resource"),
+            "target_resources": record.get("target_resources", []),
+            "policy_layer": record.get("policy_layer", "unknown"),
+            "effect": effect,
+            "decision": decision,
+            "allow_observed": effect != "deny",
+            "deny_observed": effect == "deny" or decision == "denied" or bool(blocker_kinds(blockers, "blocks")),
+            "blocking_reasons": blocker_kinds(blockers, "blocks"),
+            "constraints": blocker_kinds(blockers, "constrains"),
+            "resource_scope": str(record.get("resource_scope") or "unknown").lower(),
+            "conditions": conditions,
+            "confidence": confidence_value(record.get("confidence")),
+        }
+        policy_evaluation = record.get("policy_evaluation")
+        if isinstance(policy_evaluation, dict):
+            detail["policy_evaluation"] = policy_evaluation
+            detail["policy_engine"] = policy_evaluation.get("engine")
+            detail["policy_matched_statements"] = policy_evaluation.get("matched_statements", [])
+        return detail
 
     def normalize_blockers(self, value: Any, *, is_identity: bool) -> list[dict[str, Any]]:
         blockers: list[dict[str, Any]] = []
@@ -400,6 +472,96 @@ def strongest_effective_access(context: ContextEvidence) -> dict[str, Any] | Non
     )
 
 
+def merge_policy_evaluation_order(
+    provider_order: list[dict[str, str]],
+    record: dict[str, Any],
+) -> list[dict[str, str]]:
+    policy_evaluation = record.get("policy_evaluation")
+    if not isinstance(policy_evaluation, dict):
+        return provider_order
+    policy_order = policy_evaluation.get("evaluation_order")
+    if not isinstance(policy_order, list):
+        return provider_order
+    normalized = [
+        {"step": f"policy:{str(item.get('step') or 'unknown')}", "state": str(item.get("state") or "unknown")}
+        for item in policy_order
+        if isinstance(item, dict)
+    ]
+    if not normalized:
+        return provider_order
+    seen = {item["step"] for item in normalized}
+    return [*normalized, *[item for item in provider_order if item.get("step") not in seen]]
+
+
+def strongest_provider_effective_access(
+    records: list[dict[str, Any]],
+    *,
+    denies: Callable[[dict[str, Any]], bool],
+    layer_rank: Callable[[str], int],
+) -> dict[str, Any] | None:
+    if not records:
+        return None
+    deny_records = [record for record in records if denies(record)]
+    allow_records = [record for record in records if not denies(record)]
+    strongest_allow = _strongest_by_layer_impact_confidence(allow_records, layer_rank)
+    if not deny_records:
+        return strongest_allow
+    if strongest_allow is None:
+        return _strongest_by_layer_impact_confidence(deny_records, layer_rank)
+    applicable_denies = [
+        record
+        for record in deny_records
+        if _deny_applies_to_candidate(record, strongest_allow)
+        or impact_rank(str(record.get("impact") or "")) >= impact_rank(str(strongest_allow.get("impact") or ""))
+    ]
+    if applicable_denies:
+        return _strongest_by_layer_impact_confidence(applicable_denies, layer_rank)
+    return strongest_allow
+
+
+def _strongest_by_layer_impact_confidence(
+    records: list[dict[str, Any]],
+    layer_rank: Callable[[str], int],
+) -> dict[str, Any] | None:
+    if not records:
+        return None
+    return max(
+        records,
+        key=lambda item: (
+            layer_rank(str(item.get("policy_layer") or "")),
+            impact_rank(str(item.get("impact") or "")),
+            confidence_rank(str(item.get("confidence") or "")),
+        ),
+    )
+
+
+def _deny_applies_to_candidate(deny_record: dict[str, Any], candidate: dict[str, Any]) -> bool:
+    deny_action = str(deny_record.get("action") or "").lower()
+    candidate_action = str(candidate.get("action") or "").lower()
+    if not deny_action or not candidate_action:
+        return False
+    if deny_action not in {"*", candidate_action}:
+        return False
+    deny_resources = _effective_access_resource_tokens(deny_record)
+    candidate_resources = _effective_access_resource_tokens(candidate)
+    if not deny_resources or not candidate_resources:
+        return True
+    return "*" in deny_resources or bool(deny_resources & candidate_resources)
+
+
+def _effective_access_resource_tokens(record: dict[str, Any]) -> set[str]:
+    tokens: set[str] = set()
+    for key in ("resource", "resource_scope"):
+        value = str(record.get(key) or "").lower()
+        if value and value != "unknown":
+            tokens.add(value)
+    for key in ("target_resources", "resource_refs"):
+        raw = record.get(key)
+        if isinstance(raw, list):
+            tokens.update(str(item).lower() for item in raw if str(item))
+    return tokens
+
+
 def strongest_capability(context: ContextEvidence) -> dict[str, Any] | None:
     capabilities = dedupe_iam_capabilities([dict(item) for item in context.iam_capabilities if isinstance(item, dict)])
     if not capabilities:
@@ -411,7 +573,7 @@ def identity_decision_rank(item: dict[str, Any]) -> int:
     decision = str(item.get("decision") or "").lower()
     effect = str(item.get("effect") or "allow").lower()
     if effect == "deny" or decision.startswith("denied"):
-        return 0
+        return 4
     if decision in {"allowed", "allow"}:
         return 3
     return 1
@@ -592,6 +754,14 @@ def dedupe_objects(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def blocker_kinds(blockers: list[dict[str, Any]], effect: str) -> list[str]:
     return sorted({str(item.get("kind") or "unknown") for item in blockers if str(item.get("effect") or "") == effect})
+
+
+def matched_blocker_state(blocking: set[str], constraining: set[str], kinds: set[str]) -> str:
+    if blocking & kinds:
+        return "blocks"
+    if constraining & kinds:
+        return "constrains"
+    return "not_observed"
 
 
 def stable_token(value: str) -> str:

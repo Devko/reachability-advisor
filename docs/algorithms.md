@@ -6,7 +6,7 @@ Reachability Advisor scores dependency vulnerabilities from SBOM, vulnerability,
 
 ```text
 CycloneDX SBOMs
-  + vulnerability intelligence (Grype JSON or normalized local JSON)
+  + vulnerability intelligence (Grype JSON, OSV-style JSON, or normalized local JSON)
   + source roots
   + Terraform plan JSON
   + CI artifact manifest, when SBOM metadata lacks image identity
@@ -21,6 +21,7 @@ CycloneDX SBOMs
   -> score and tier
   -> remediation groups by artifact/component/version
   -> JSON/SARIF/diagnostics/Markdown/HTML/annotations/coverage/mapping
+  -> optional real-app benchmark snapshot regression checks
 ```
 
 ## Effective exposure graph
@@ -87,6 +88,8 @@ same vulnerability record shape used by local fixtures, with the Grype artifact
 version recorded as the affected version. The advisor then verifies that record
 against the supplied SBOM component before scoring it.
 
+The normalized vulnerability record preserves source attribution. Grype, OSV-style input, and local JSON can carry severity, CVSS, EPSS, CISA KEV, VEX status, fix state/versions, references, source records, and timestamps. The scanner uses the top-level compatibility fields for scoring (`epss`, `known_exploited`, `fixed_versions`) and writes the complete source-attributed record under `vulnerability.intelligence`.
+
 A vulnerability matches a component when one of these conditions is true:
 
 1. exact package URL match;
@@ -117,9 +120,9 @@ When multiple source evidence providers match the same finding, the scanner pick
 
 External source evidence must include a component/package, package URL, or vulnerability selector. Artifact-only records are retained for diagnostics but do not upgrade findings, because artifact names can only narrow a dependency match. `source-coverage.json` reports unmatchable external records under `external_evidence_selector_diagnostics`.
 
-Use `--analysis-profile production` for release gates. It requires external source evidence, usable selectors, rendered deployment evidence from `--terraform-plan` or `--kubernetes-manifest`, and external analyzer coverage for critical findings. It also fails when critical findings only have dependency-level or weaker source evidence. The default `advisory` profile keeps built-in source rules available for local development and early pull requests.
+Use `--analysis-profile production` for release gates. It requires external source evidence, usable selectors, rendered deployment evidence from `--terraform-plan` or `--kubernetes-manifest`, and external analyzer coverage for critical findings. For maintained package families, the evidence must also include the relevant `query_family` or `query_families` metadata, for example `http-client`, `logging`, or `deserialization`. A generic Semgrep or CodeQL record is not enough for a critical finding when the package maps to a maintained query family. The gate also fails when critical findings only have dependency-level or weaker source evidence. The default `advisory` profile keeps built-in source rules available for local development and early pull requests.
 
-Use `source-evidence-plan` to generate the analyzer handoff. Pass `--language` for CodeQL command generation. Supported language profiles are JavaScript/TypeScript, Java/Kotlin, Python, and Go; Go plans also include `govulncheck`. Without a supported language or package-manager hint, the command emits only the generic Semgrep starter workflow.
+Use `source-evidence-pack` to write the maintained rules and query packs. The pack includes Semgrep rules per package family plus CodeQL suites for the upstream query ids used by each family. Checked-in vulnerable sample apps and pinned public repository commits under `fixtures/source-vulnerable-apps/` define the coverage target; tests require the maintained family rules to match the expected local samples. Use `source-evidence-plan` to generate the analyzer handoff. Pass `--language` for CodeQL command generation. Supported language profiles are JavaScript/TypeScript, Java/Kotlin, Python, and Go; Go plans also include `govulncheck`. Without a supported language or package-manager hint, the command emits only the generic Semgrep starter workflow.
 
 ```bash
 reachability-advisor source-evidence-plan \
@@ -138,7 +141,7 @@ Built-in high-risk source rules currently cover common Java, Node, Python, and G
 
 The JSON output includes both the machine state and a human label. The HTML report uses the labels `request-controlled path`, `reachable vulnerable API`, `dependency evidence`, `import observed`, `SBOM only`, and `no source rule`.
 
-`--source-coverage-out` writes source coverage metrics: source files and package-manager manifests scanned, skipped files, evidence states by artifact, source diagnostic counts, external evidence records consumed, external evidence provider counts, package-specific rule coverage, rule gaps, weak-source evidence counts, critical package coverage, and the fraction of findings with dependency-graph, manifest, import, vulnerable API, or request-controlled evidence.
+`--source-coverage-out` writes source coverage metrics: source files and package-manager manifests scanned, skipped files, evidence states by artifact, source diagnostic counts, external evidence records consumed, external evidence provider counts, package-specific rule coverage, rule gaps, weak-source evidence counts, critical package coverage, critical query-family coverage, and the fraction of findings with dependency-graph, manifest, import, vulnerable API, or request-controlled evidence.
 
 ## Remediation grouping
 
@@ -154,8 +157,8 @@ Terraform evidence is derived from a local `terraform show -json` plan. Use plan
 4. Extract likely container image or artifact references from provider-specific and generic fields.
 5. Match those references against SBOM artifact candidates and preserve candidate source/strength in the match proof.
 6. Build a bounded network graph from ingress, load balancer, target attachment, gateway backend, service, security-group, private-network, and provider bridge edges.
-7. Infer exposure from graph paths linked to the matched workload. The emitted context includes typed `network_paths` with path type, entry class, provider, confidence, steps, blocker/constraint evidence, and unknowns where visible.
-8. Build effective-access records per matched workload identity, resource/action, policy layer, allow-or-deny effect, decision, decision basis, impact, scope, condition keys, target resources, confidence, and blockers. Matching explicit denies mark allow records as `denied_by_explicit_deny`. This is a local evidence graph, not a full cloud IAM simulator.
+7. Infer exposure from graph paths linked to the matched workload. The emitted context includes typed `network_paths` with path type, entry class, provider, confidence, steps, blocker/constraint evidence, and unknowns where visible. Provider evaluators can also consume `network_graph` or `network_edges` records and solve the path from entry to workload before applying blockers.
+8. Build effective-access records per matched workload identity, resource/action, policy layer, allow-or-deny effect, decision, decision basis, impact, scope, condition keys, target resources, confidence, and blockers. When structured policy documents are attached to a record, the provider policy engine evaluates those documents before provider selection. Matching explicit denies mark allow records as `denied_by_explicit_deny`. Provider evaluators then select the effective identity/resource/action record with provider-specific deny precedence and emit a normalized authorization model for scoring.
 9. Infer direct workload identity privilege and IAM impact classes from IAM/role/policy resources, including targeted sensitive resources where visible. Unrelated provider-level IAM is not applied to every workload.
 10. Emit coverage and mapping reports.
 
@@ -212,21 +215,23 @@ The effective exposure engine normalizes provider signals into one asset-level d
 - `decision_basis`: the network or identity reason that drove the combined decision;
 - `evaluator`: the provider evaluator that produced the decision, for example `aws.effective_exposure`;
 - `network`: provider, entry, path type, exposure, confidence, decision basis, blockers, unknowns, and evidence layer;
-- `identity`: identity/action/impact, policy layer, source decision basis, provider decision basis, confidence, blockers, and unknowns;
+- `identity`: identity/action/impact, policy layer, source decision basis, provider decision basis, confidence, blockers, unknowns, evaluation order, and `effective_access_model`;
 - `edges`: asset -> effective network path -> effective identity -> runtime, with provider, source, confidence, blocker, and unknown state.
 
-The provider evaluators live under `src/reachability_advisor/provider_evaluators/`. Each evaluator owns its blocker taxonomy, provider decision basis, and unresolved-precedence notes for the provider:
+The provider evaluators live under `src/reachability_advisor/provider_evaluators/`. `network_engine.py` builds provider resource graphs before falling back to explicit `network_graph.edges`, `network_edges`, or inferred `steps`. Builders select typed edges from provider resources such as AWS routes/NACLs/security groups, Azure NSG rules, GCP firewall rules, and Kubernetes NetworkPolicy or service-mesh policy. Each selected edge carries `type`, `precedence`, and `precedence_reason`; the graph output records the provider rule used to select it. A disconnected graph blocks the path; a linked graph emits per-edge state under `network.network_graph`.
 
-- AWS interprets IAM authorization, API authorizers, source security-group/CIDR restrictions, source VPC endpoint conditions, WAF evidence, permissions boundaries, SCP scope or deny, resource policies, trust policies, session policies, NACL uncertainty, and route-table uncertainty.
-- Azure interprets Private Endpoint, App Service auth and access restrictions, NSG deny evidence, Front Door/Application Gateway WAF evidence, deny assignments, management-group scope, PIM eligibility, NSG ordering, and route-table uncertainty.
-- GCP interprets IAP, Cloud Armor, Private Service Connect, internal serverless ingress, VPC connector evidence, IAM deny policies, conditional IAM bindings, Workload Identity mappings, organization/folder scope, hierarchical firewall uncertainty, and route uncertainty.
-- Kubernetes interprets NetworkPolicy deny-all or allow-list evidence, internal ingress class, service-mesh AuthorizationPolicy and mTLS evidence, RBAC denies, service-account scope, namespace scope, and `resourceNames` scope.
+`policy_engine.py` is the structured IAM policy layer. It parses provider documents into policy AST records for principal, action, resource, and condition evaluation before selecting an effective-access record. It accepts AWS policy statements, Azure role/deny assignments, GCP IAM/deny/PAB/org policies, and Kubernetes RBAC rules when those documents are present on an effective-access record. The engine emits `policy_evaluation` with matched statements, principal/action/resource match state, condition keys, blockers, unknowns, resource scope, confidence, and per-layer evaluation order. Each provider evaluator then owns the blocker taxonomy, provider decision basis, and unresolved-precedence notes for its platform:
+
+- AWS evaluates structured route, security-group, and NACL evidence before falling back to text hints. Route evaluation checks the selected default route, blackhole state, egress-only gateways, and private transit targets. Security-group evaluation distinguishes public ingress, source-security-group-only ingress, source-CIDR restrictions, and missing inbound allows. NACL evaluation follows AWS rule order and lets the first matching allow or deny decide the path. AWS policy evaluation models identity/resource allows, explicit denies, permissions boundaries, SCPs, session policies, trust policies, resource policies, condition keys, scoped resources, and `sts:AssumeRole` trust constraints.
+- Azure interprets Private Endpoint, App Service auth and access restrictions, NSG deny evidence, Front Door/Application Gateway WAF evidence, NSG ordering, and route-table uncertainty. Azure policy evaluation models deny assignments, role assignments, role definitions, common built-in role names, resource policies, assignable scopes, inherited management-group/subscription/resource-group scope, PIM activation hints, and role-assignment conditions.
+- GCP interprets IAP, Cloud Armor, Private Service Connect, internal serverless ingress, VPC connector evidence, hierarchical firewall uncertainty, and route uncertainty. GCP policy evaluation models IAM bindings, common predefined role names, deny policies, principal access boundaries, organization-policy constraints, resource policies, organization/folder/project/resource scope, conditional bindings, Workload Identity mappings, and service-account impersonation.
+- Kubernetes interprets NetworkPolicy deny-all or allow-list evidence, internal ingress class, service-mesh AuthorizationPolicy and mTLS evidence. Kubernetes policy evaluation models RBAC denies, RoleBinding/ClusterRoleBinding allows, cluster/namespace/service-account scope, `resourceNames`, non-resource URLs, aggregated ClusterRoles, and high-risk verbs such as `impersonate`, `bind`, `escalate`, and pod exec.
 
 The fallback evaluator keeps unknown-provider evidence visible without pretending provider precedence was evaluated.
 
 This is the provider-specific layer used by scoring gates and by the evidence graph. It does not replace raw network paths or IAM records; it makes their effective meaning explicit.
 
-IAM is combined with network reachability in three ways. First, workload identity references such as task roles, instance profiles, service accounts, managed identities, and role bindings add `limited`, `sensitive`, or `admin` privilege evidence to the matched artifact. Second, policies are expanded into capability records with action, effect, policy layer, decision, decision basis, impact, access class, resource scope, condition keys, resource references, `effective_risk`, and `risk_multiplier` where known. Impact classes are `data_access`, `network_control`, `iam_escalation`, `compute_control`, `admin_control`, and `limited_access`. Provider role catalogs cover common AWS managed policies, Azure built-in roles, GCP predefined roles, and Kubernetes role names before falling back to string impact detection. Limited-looking permissions such as `secretsmanager:GetSecretValue`, `ec2:AuthorizeSecurityGroupIngress`, `iam:PassRole`, `sts:AssumeRole`, or workload update permissions can raise context criticality when the workload is reachable. Scoped or conditional permissions still count, but score lower than broad unconditioned permissions for the same impact. Explicit deny statements are preserved as denied effective-access records, matching allow records are marked `denied_by_explicit_deny`, and neither raises privilege. Explicit `sts:AssumeRole` edges inherit the target role's visible capabilities when the target role is present in the plan; `iam:PassRole` remains escalation evidence but is not expanded without a compatible compute mutation path. Third, a network-reachable workload with `admin_control`, `network_control`, or `iam_escalation` can create an internal provider-control-plane pivot, raising private same-provider workloads to `internal` when the compromised identity can alter routes, security groups, policies, or attachments.
+IAM is combined with network reachability in three ways. First, workload identity references such as task roles, instance profiles, service accounts, managed identities, and role bindings add `limited`, `sensitive`, or `admin` privilege evidence to the matched artifact. Second, policies are expanded into capability records with action, effect, policy layer, decision, decision basis, impact, access class, resource scope, condition keys, resource references, `effective_risk`, and `risk_multiplier` where known. Effective-access records may also carry the structured source policy documents used to make that decision. Impact classes are `data_access`, `network_control`, `iam_escalation`, `compute_control`, `admin_control`, and `limited_access`. Provider role catalogs cover common AWS managed policies, Azure built-in roles, GCP predefined roles, and Kubernetes role names before falling back to string impact detection. Limited-looking permissions such as `secretsmanager:GetSecretValue`, `ec2:AuthorizeSecurityGroupIngress`, `iam:PassRole`, `sts:AssumeRole`, secret reads, role binding writes, or workload update permissions can raise context criticality when the workload is reachable. Scoped or conditional permissions still count, but score lower than broad unconditioned permissions for the same impact. Explicit deny records take precedence over matching or equally critical allow records in AWS, Azure, GCP, and Kubernetes evaluators; unrelated low-impact denies do not hide a separate admin or escalation capability. Each selected identity result includes `evaluation_order`, `effective_access_model`, and `policy_evaluation` when structured policy documents were evaluated. Explicit `sts:AssumeRole` edges inherit the target role's visible capabilities when the target role is present in the plan; `iam:PassRole` remains escalation evidence but is not expanded without a compatible compute mutation path. Third, a network-reachable workload with `admin_control`, `network_control`, or `iam_escalation` can create an internal provider-control-plane pivot, raising private same-provider workloads to `internal` when the compromised identity can alter routes, security groups, policies, or attachments.
 
 IAM criticality is network-aware. Critical IAM impacts on public, external, or internal workloads raise context `criticality` to `high`; the same impact on a private-only workload raises it to `medium` because the blast radius is serious but the entry path is weaker. Targeted sensitive resources are recorded as evidence when Terraform exposes both the policy resource ARN/name and the sensitive resource. Identity resource names alone are not treated as permission evidence.
 
@@ -323,6 +328,20 @@ Default tiers:
 - Terraform coverage summary.
 
 CI can enforce mapping quality with `--min-artifact-match-coverage`, `--min-strong-artifact-identity-coverage`, and `--fail-on-mapping-warnings`.
+
+## Benchmark snapshot gates
+
+The synthetic scoring benchmark protects individual scoring edge cases. Real-app benchmark snapshots protect distribution drift. `scripts/run_complex_app_validation.py` writes `benchmark.json` with aggregate and per-case tier counts for AWS Retail Store, Google Online Boutique, Bank of Anthos, Azure AKS Store, and Instana Robot Shop. `reachability-advisor benchmark-snapshots` compares that file with `fixtures/benchmarks/real-app-tier-snapshots.json`.
+
+The snapshot gate checks:
+
+- expected aggregate and per-case tier distributions;
+- explicit high and urgent count limits;
+- high-or-urgent ratio limits;
+- total finding drift limits;
+- expected case status.
+
+This gate is specifically aimed at over-prioritization. If a scoring change turns internal or weak-evidence findings into broad high/urgent output, the real-app snapshot fails before the change is published.
 
 ## Terraform coverage metrics
 

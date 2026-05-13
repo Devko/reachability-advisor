@@ -36,30 +36,30 @@ SOURCE_EVIDENCE_PROFILES: dict[str, dict[str, Any]] = {
         "ecosystems": ["unknown"],
         "tools": ["semgrep"],
         "critical_package_families": ["project-specific package rules"],
-        "minimum_release_gate": "critical findings need package, purl, or vulnerability selectors",
+        "minimum_release_gate": "critical findings need package, purl, or vulnerability selectors and package-family metadata when applicable",
     },
     "javascript-typescript": {
         "ecosystems": ["npm", "pnpm", "yarn"],
         "tools": ["semgrep", "codeql"],
-        "critical_package_families": ["http clients", "template engines", "jwt", "yaml/xml parsers", "archive extraction", "web handlers"],
-        "minimum_release_gate": "critical findings need Semgrep/CodeQL evidence with package, purl, or vulnerability selectors",
+        "critical_package_families": ["http-client", "template-engine", "auth-token-crypto", "deserialization", "archive-file-io", "web-handler"],
+        "minimum_release_gate": "critical findings need Semgrep/CodeQL evidence with selectors and relevant query-family metadata",
     },
     "java-kotlin": {
         "ecosystems": ["maven", "gradle"],
         "tools": ["semgrep", "codeql"],
-        "critical_package_families": ["logging", "deserialization", "yaml/xml parsers", "jwt", "web handlers"],
-        "minimum_release_gate": "critical findings need Semgrep/CodeQL evidence with package, purl, or vulnerability selectors",
+        "critical_package_families": ["logging", "deserialization", "auth-token-crypto", "archive-file-io", "web-handler", "http-client"],
+        "minimum_release_gate": "critical findings need Semgrep/CodeQL evidence with selectors and relevant query-family metadata",
     },
     "python": {
         "ecosystems": ["pypi", "poetry", "pip"],
         "tools": ["semgrep", "codeql"],
-        "critical_package_families": ["http clients", "template engines", "yaml/xml parsers", "jwt", "web handlers"],
-        "minimum_release_gate": "critical findings need Semgrep/CodeQL evidence with package, purl, or vulnerability selectors",
+        "critical_package_families": ["http-client", "template-engine", "deserialization", "auth-token-crypto", "web-handler", "archive-file-io"],
+        "minimum_release_gate": "critical findings need Semgrep/CodeQL evidence with selectors and relevant query-family metadata",
     },
     "go": {
         "ecosystems": ["go", "golang"],
         "tools": ["govulncheck", "semgrep", "codeql"],
-        "critical_package_families": ["govulncheck vulnerable calls", "jwt", "yaml/xml parsers", "web handlers"],
+        "critical_package_families": ["http-client", "deserialization", "auth-token-crypto", "web-handler", "archive-file-io"],
         "minimum_release_gate": "critical findings need govulncheck or CodeQL/Semgrep call-path evidence",
     },
 }
@@ -137,7 +137,7 @@ def render_source_evidence_plan_markdown(commands: list[SourceEvidenceCommand]) 
         "",
         "Generate these artifacts before `reachability-advisor scan --analysis-profile production`.",
         "Pass generated JSON/SARIF/JSONL files through repeated `--source-evidence-in` flags.",
-        "Release gates require critical findings to be covered by external analyzer evidence.",
+        "Release gates require critical findings to be covered by external analyzer evidence and the relevant package-family query metadata.",
         "",
     ]
     for item in commands:
@@ -171,7 +171,7 @@ def render_source_evidence_plan_markdown(commands: list[SourceEvidenceCommand]) 
             "  ...",
             "```",
             "",
-            "Production gates reject unscoped external evidence and dependency-only source evidence on critical findings.",
+            "Production gates reject unscoped, dependency-only, or missing query-family evidence on critical findings.",
             "",
         ]
     )

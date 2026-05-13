@@ -131,6 +131,7 @@ class VulnerabilityRecord:
     fixed_versions: list[str] = field(default_factory=list)
     summary: str = ""
     references: list[str] = field(default_factory=list)
+    intelligence: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -158,6 +159,7 @@ class SourceEvidence:
     matched_symbols: list[str] = field(default_factory=list)
     dependency_path: list[str] = field(default_factory=list)
     evidence_source: str = "builtin"
+    query_families: list[str] = field(default_factory=list)
     diagnostics: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -223,6 +225,7 @@ class Finding:
                 "fixed_versions": self.vulnerability.fixed_versions,
                 "summary": self.vulnerability.summary,
                 "references": self.vulnerability.references,
+                "intelligence": self.vulnerability.intelligence,
             },
             "source_reachability": {
                 "state": self.source.reachability.value,
@@ -233,6 +236,7 @@ class Finding:
                 "matched_symbols": self.source.matched_symbols,
                 "dependency_path": self.source.dependency_path,
                 "evidence_source": self.source.evidence_source,
+                "query_families": self.source.query_families,
                 "diagnostics": self.source.diagnostics,
                 "locations": [location.to_json() for location in self.source.locations],
             },

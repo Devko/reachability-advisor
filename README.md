@@ -5,7 +5,7 @@ Reachability Advisor ranks dependency vulnerabilities with deployment reachabili
 Release-gate inputs:
 
 - one CycloneDX SBOM per deployable artifact;
-- Grype JSON or normalized local vulnerability data from the same artifact;
+- Grype JSON, OSV-style JSON, or normalized local vulnerability data from the same artifact;
 - source roots for code reachability;
 - Terraform plan JSON and/or rendered Kubernetes manifests for workload, network, and IAM context;
 - optional CI artifact manifest when SBOM metadata does not preserve image digests or registry refs.
@@ -29,6 +29,7 @@ Outputs:
 - rendered Kubernetes manifest coverage reports;
 - SBOM/source/Terraform mapping reports;
 - release evidence readiness reports.
+- real-app benchmark snapshot regression reports for tier inflation checks.
 
 Package version: **v1.0.0**.
 License: **GNU GPL v3.0 or later**.
@@ -118,7 +119,7 @@ reachability-advisor source-evidence-plan \
   --out-json reachability/source-evidence-plan.json
 ```
 
-`source-evidence-pack` writes the maintained Semgrep rules, CodeQL suite file, govulncheck profile metadata, and release-gate selector contract. `source-evidence-plan` writes the commands that run those tools in CI.
+`source-evidence-pack` writes maintained Semgrep rules per package family, per-ecosystem npm/Maven-Gradle/Python/Go profiles, package-family query packs, CodeQL suite/profile files, govulncheck metadata, and the release-gate selector contract. The checked-in source fixtures measure whether those family assets cover the expected vulnerable samples. `source-evidence-plan` writes the commands that run the tools in CI.
 
 For source-only validation, Grype can also emit both sides of the handoff from the same directory scan:
 
@@ -376,10 +377,13 @@ For scale validation, run the complex app harness. It generates one SBOM and Gry
 ```bash
 python scripts/run_complex_app_validation.py \
   --no-clone \
-  --strict
+  --strict \
+  --benchmark-expectations fixtures/benchmarks/real-app-tier-snapshots.json \
+  --fail-on-benchmark-regression
 ```
 
 Outputs are written to `outputs/external-complex/`, including schema-validated `benchmark.json` and `benchmark.md` for release-to-release drift checks.
+The checked-in benchmark snapshot gates over-prioritization. It records expected tier distributions for the real-app corpus and fails when high or urgent findings inflate beyond the configured limits.
 Local scale-test snapshot:
 
 - AWS Retail Store: 5 service SBOMs, 40 Grype matches, 40 findings, 24 remediation groups, 91 Terraform resources, 0.8 deployment artifact-match coverage, and generated HTML graph.
@@ -448,16 +452,16 @@ The `ide/vscode` directory contains a VS Code extension. It discovers local scan
 |---|---|
 | SBOM | CycloneDX JSON |
 | SBOM acquisition support | `sbom-plan` command with Syft, Trivy, Maven, npm, and Python suggestions |
-| Vulnerability input | Grype JSON, local JSON, and small OSV-Scanner-style JSON |
+| Vulnerability input | Grype JSON, local JSON, and small OSV-Scanner-style JSON. Records normalize severity, CVSS, EPSS, KEV, VEX, fix data, references, source attribution, and timestamps into each finding |
 | Source reachability | JVM, Node, Python, and Go rules with same-function input/sink evidence, bounded handler-to-sink paths, CycloneDX dependency-graph evidence, and package-manager manifest evidence for Maven/Gradle, npm/pnpm/Yarn, Poetry/requirements, and Go modules |
 | Custom source rules | `--reachability-rules` JSON and `export-semgrep-rules` starter YAML |
-| External source evidence | `--source-evidence-in` for Reachability Advisor JSON, Semgrep JSON, SARIF/CodeQL, and govulncheck JSONL. `source-evidence-pack` writes maintained Semgrep/CodeQL/govulncheck assets; `source-evidence-plan` writes CI commands for JavaScript/TypeScript, Java/Kotlin, Python, and Go. Gates reject artifact-only, unscoped, or critical-package coverage gaps |
-| Terraform context | Primary deployment context. AWS, Azure, GCP, and Kubernetes plan/source support with coverage reporting, artifact matching, network graphing, typed path blockers, route/private-endpoint/firewall-tag hints, IAM allow/deny capability records, AWS `sts:AssumeRole` propagation, provider-specific effective exposure decisions, and IAM impact classification |
+| External source evidence | `--source-evidence-in` for Reachability Advisor JSON, Semgrep JSON, SARIF/CodeQL, and govulncheck JSONL. `source-evidence-pack` writes maintained Semgrep/CodeQL/govulncheck assets for npm, Maven/Gradle, Python, and Go plus package-family query packs. Production gates reject artifact-only, unscoped, dependency-only, or missing query-family evidence for critical findings |
+| Terraform context | Primary deployment context. AWS, Azure, GCP, and Kubernetes plan/source support with coverage reporting, artifact matching, network graphing, provider resource-graph building, typed edge precedence, typed path blockers, AWS route/security-group/NACL/ALB/API Gateway/WAF evaluation, route/private-endpoint/firewall-tag hints, IAM allow/deny capability records, structured provider policy AST evaluation for principal/action/resource/condition matching, AWS `sts:AssumeRole` trust constraints, Azure RBAC deny assignments/PIM/role conditions, GCP deny policies/principal access boundaries/Workload Identity, Kubernetes RBAC scope/high-risk verbs, provider-specific effective exposure and IAM decisions, deny precedence, per-provider evaluation order, normalized effective access models, and IAM impact classification |
 | Kubernetes manifests | Rendered YAML/JSON workload, Service, Ingress, RBAC, and NetworkPolicy context with artifact matching and coverage reporting |
 | Artifact manifest | `--artifact-manifest` for CI-supplied image digests, registry refs, Git SHA, SBOM paths, Helm values images, Kustomize images, and Terraform image outputs |
 | Context JSON | Explicit override/enrichment keyed by artifact name |
 | Outputs | JSON with remediation groups and raw findings, unified effective exposure graph JSON, baseline JSON, PR delta JSON/Markdown, SARIF, diagnostics JSON, Markdown, interactive HTML, annotations, Terraform coverage JSON, Kubernetes coverage JSON, source coverage JSON, mapping JSON, readiness JSON |
-| CI quality gates | Built-in scan gates for artifact match coverage, strong artifact identity coverage, mapping warnings, source rule coverage, external evidence presence, external selector usability, critical external coverage, weak workload matches, low-confidence network/IAM evidence, readiness blockers, and readiness warnings |
+| CI quality gates | Built-in scan gates for artifact match coverage, strong artifact identity coverage, mapping warnings, source rule coverage, external evidence presence, external selector usability, critical external coverage, critical query-family coverage, weak workload matches, low-confidence network/IAM evidence, readiness blockers, and readiness warnings |
 
 ## Import/export contract
 
@@ -469,11 +473,11 @@ python scripts/validate_release.py
 
 It verifies:
 
-- vulnerability imports: local JSON, Grype `matches[]`, and OSV-Scanner-style JSON;
+- vulnerability imports: local JSON, Grype `matches[]`, OSV-Scanner-style JSON, and normalized source-attributed intelligence fields;
 - source-evidence imports: native Reachability Advisor JSON, Reachability Advisor findings JSON, Semgrep JSON/dataflow traces, SARIF/CodeQL code flows, and govulncheck JSONL;
 - deployment/context inputs: Terraform plan JSON, a synthetic no-cloud Terraform plan E2E fixture, Terraform source paths through `hcl-audit`, rendered Kubernetes YAML/JSON, context JSON, artifact aliases, and CI artifact manifests;
 - configuration inputs: custom reachability rules and runtime policy JSON;
-- exports: findings JSON, remediation groups, evidence graph JSON, baseline JSON, PR delta JSON/Markdown, SARIF, diagnostics JSON, PR summary Markdown, GitHub annotations, self-contained HTML graph, source coverage, Terraform coverage, Kubernetes coverage, mapping reports, readiness reports, HCL audit JSON/Markdown, SBOM plan JSON/Markdown, source-evidence pack/plan JSON, rendered-IaC plan JSON/Markdown, artifact-manifest validation JSON, scoring benchmark JSON, complex benchmark JSON/Markdown, Semgrep starter rules, fixture validation, fixture run reports, and single-finding explanations.
+- exports: findings JSON, remediation groups, evidence graph JSON, baseline JSON, PR delta JSON/Markdown, SARIF, diagnostics JSON, PR summary Markdown, GitHub annotations, self-contained HTML graph, source coverage, Terraform coverage, Kubernetes coverage, mapping reports, readiness reports, HCL audit JSON/Markdown, SBOM plan JSON/Markdown, source-evidence pack/plan JSON, rendered-IaC plan JSON/Markdown, artifact-manifest validation JSON, scoring benchmark JSON, real-app benchmark snapshot regression JSON, complex benchmark JSON/Markdown, Semgrep starter rules, fixture validation, fixture run reports, and single-finding explanations.
 - target-state documentation: [docs/maturity_targets.md](docs/maturity_targets.md).
 
 ## Run quality gates
@@ -491,11 +495,11 @@ make package
 Current validation snapshot:
 
 ```text
-Ran 484 tests: OK
+Ran 519 tests: OK
 Coverage: 93%
 Coverage gate: 93% passed
 Fixture packs: 9 passed, 0 failed
-Release import/export contract: 51 checks passed
+Release import/export contract: 53 checks passed
 Package build: sdist and wheel
 ```
 

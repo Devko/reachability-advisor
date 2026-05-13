@@ -20,6 +20,10 @@ inputs:
     description: Newline-separated CI artifact identity manifests with built image digests, registry refs, Git SHA, SBOM paths, and renderer metadata.
     required: false
     default: ""
+  require-artifact-provenance:
+    description: Set to true to require artifact manifests with digest identity, SBOM path, Git SHA, and signature/attestation marker.
+    required: false
+    default: "false"
   context:
     description: Context JSON path for explicit overrides or enrichment.
     required: false
@@ -229,6 +233,7 @@ runs:
         if [[ -n "${{ inputs.terraform-source }}" ]]; then args+=(--terraform-source "${{ inputs.terraform-source }}" --terraform-coverage-out "$terraform_coverage"); fi
         if [[ -n "${{ inputs.kubernetes-manifest }}" ]]; then args+=(--kubernetes-coverage-out "$kubernetes_coverage"); fi
         if [[ "${{ inputs.kubernetes-infer-lateral }}" == "true" ]]; then args+=(--kubernetes-infer-lateral); fi
+        if [[ "${{ inputs.require-artifact-provenance }}" == "true" ]]; then args+=(--require-artifact-provenance); fi
         if [[ -n "${{ inputs.min-artifact-match-coverage }}" ]]; then args+=(--min-artifact-match-coverage "${{ inputs.min-artifact-match-coverage }}"); fi
         if [[ -n "${{ inputs.min-strong-artifact-identity-coverage }}" ]]; then args+=(--min-strong-artifact-identity-coverage "${{ inputs.min-strong-artifact-identity-coverage }}"); fi
         if [[ "${{ inputs.fail-on-mapping-warnings }}" == "true" ]]; then args+=(--fail-on-mapping-warnings); fi

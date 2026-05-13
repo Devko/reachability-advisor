@@ -1,0 +1,478 @@
+{
+  "version": 1,
+  "description": "Sanitized provider-shaped policy examples for effective-access AST evaluation.",
+  "cases": [
+    {
+      "name": "aws-cross-account-trust-with-org-condition",
+      "provider": "aws",
+      "record": {
+        "provider": "aws",
+        "identity": "arn:aws:iam::111111111111:role/cicd",
+        "action": "sts:AssumeRole",
+        "impact": "iam_escalation",
+        "resource": "arn:aws:iam::222222222222:role/prod-api",
+        "trust_policy": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": "arn:aws:iam::111111111111:role/cicd"
+              },
+              "Action": "sts:AssumeRole",
+              "Resource": "arn:aws:iam::222222222222:role/prod-api",
+              "Condition": {
+                "StringEquals": {
+                  "aws:PrincipalOrgID": "o-prod"
+                }
+              }
+            }
+          ]
+        },
+        "condition_context": {
+          "aws:PrincipalOrgID": "o-prod"
+        }
+      },
+      "expected": {
+        "decision": "constrained_allow",
+        "policy_layer": "trust_policy",
+        "required_blocker": "condition",
+        "matched_statements": 1,
+        "principal_matched": true
+      }
+    },
+    {
+      "name": "aws-trust-principal-mismatch-denies-assume-role",
+      "provider": "aws",
+      "record": {
+        "provider": "aws",
+        "identity": "arn:aws:iam::111111111111:role/other",
+        "action": "sts:AssumeRole",
+        "impact": "iam_escalation",
+        "resource": "arn:aws:iam::222222222222:role/prod-api",
+        "trust_policy": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": "arn:aws:iam::111111111111:role/cicd"
+              },
+              "Action": "sts:AssumeRole",
+              "Resource": "arn:aws:iam::222222222222:role/prod-api"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "denied",
+        "policy_layer": "trust_policy",
+        "required_blocker": "trust_policy_deny",
+        "matched_statements": 0
+      }
+    },
+    {
+      "name": "aws-permissions-boundary-blocks-identity-allow",
+      "provider": "aws",
+      "record": {
+        "provider": "aws",
+        "identity": "arn:aws:iam::111111111111:role/api",
+        "action": "s3:DeleteObject",
+        "impact": "data_access",
+        "resource": "arn:aws:s3:::prod-bucket/private.txt",
+        "identity_policy": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": "s3:*",
+              "Resource": "arn:aws:s3:::prod-bucket/*"
+            }
+          ]
+        },
+        "permissions_boundary": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": "s3:GetObject",
+              "Resource": "arn:aws:s3:::prod-bucket/*"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "denied",
+        "policy_layer": "permissions_boundary",
+        "required_blocker": "permission_boundary",
+        "matched_statements": 1
+      }
+    },
+    {
+      "name": "aws-service-control-policy-blocks-network-mutation",
+      "provider": "aws",
+      "record": {
+        "provider": "aws",
+        "identity": "arn:aws:iam::111111111111:role/network-automation",
+        "action": "ec2:AuthorizeSecurityGroupIngress",
+        "impact": "network_exposure",
+        "resource": "arn:aws:ec2:eu-central-1:111111111111:security-group/sg-prod",
+        "identity_policy": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": "ec2:AuthorizeSecurityGroupIngress",
+              "Resource": "*"
+            }
+          ]
+        },
+        "service_control_policy": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": "ec2:Describe*",
+              "Resource": "*"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "denied",
+        "policy_layer": "service_control_policy",
+        "required_blocker": "scp_deny",
+        "matched_statements": 1
+      }
+    },
+    {
+      "name": "aws-resource-policy-explicit-deny-overrides-identity-allow",
+      "provider": "aws",
+      "record": {
+        "provider": "aws",
+        "identity": "arn:aws:iam::111111111111:role/api",
+        "action": "s3:GetObject",
+        "impact": "data_access",
+        "resource": "arn:aws:s3:::prod-bucket/private.txt",
+        "identity_policy": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": "s3:GetObject",
+              "Resource": "arn:aws:s3:::prod-bucket/*"
+            }
+          ]
+        },
+        "resource_policy": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "arn:aws:iam::111111111111:role/api"
+              },
+              "Action": "s3:GetObject",
+              "Resource": "arn:aws:s3:::prod-bucket/private.txt"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "denied",
+        "policy_layer": "resource_policy",
+        "required_blocker": "resource_policy_deny",
+        "matched_statements": 2
+      }
+    },
+    {
+      "name": "aws-cross-account-resource-policy-allows-external-role",
+      "provider": "aws",
+      "record": {
+        "provider": "aws",
+        "identity": "arn:aws:iam::111111111111:role/reporting",
+        "action": "s3:GetObject",
+        "impact": "data_access",
+        "resource": "arn:aws:s3:::shared-bucket/report.csv",
+        "resource_policy": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": "arn:aws:iam::111111111111:role/reporting"
+              },
+              "Action": "s3:GetObject",
+              "Resource": "arn:aws:s3:::shared-bucket/*"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "allowed",
+        "policy_layer": "resource_policy",
+        "matched_statements": 1,
+        "principal_matched": true
+      }
+    },
+    {
+      "name": "azure-key-vault-secret-reader-role-assignment",
+      "provider": "azure",
+      "record": {
+        "provider": "azure",
+        "identity": "principal-api",
+        "action": "Microsoft.KeyVault/vaults/secrets/read",
+        "impact": "data_access",
+        "resource": "/subscriptions/sub-a/resourceGroups/rg-a/providers/Microsoft.KeyVault/vaults/v/secrets/api",
+        "role_assignment": {
+          "roleDefinitionName": "Key Vault Secrets User",
+          "principalId": "principal-api",
+          "scope": "/subscriptions/sub-a/resourceGroups/rg-a"
+        }
+      },
+      "expected": {
+        "decision": "constrained_allow",
+        "policy_layer": "role_assignment",
+        "required_blocker": "resource_group_scope",
+        "matched_statements": 1,
+        "principal_matched": true
+      }
+    },
+    {
+      "name": "azure-role-assignment-principal-mismatch",
+      "provider": "azure",
+      "record": {
+        "provider": "azure",
+        "identity": "principal-other",
+        "action": "Microsoft.KeyVault/vaults/secrets/read",
+        "impact": "data_access",
+        "resource": "/subscriptions/sub-a/resourceGroups/rg-a/providers/Microsoft.KeyVault/vaults/v/secrets/api",
+        "role_assignment": {
+          "roleDefinitionName": "Key Vault Secrets User",
+          "principalId": "principal-api",
+          "scope": "/subscriptions/sub-a/resourceGroups/rg-a"
+        }
+      },
+      "expected": {
+        "decision": "denied",
+        "policy_layer": "implicit_deny",
+        "required_blocker": "role_assignment_missing_allow",
+        "matched_statements": 0
+      }
+    },
+    {
+      "name": "azure-deny-assignment-overrides-role-assignment",
+      "provider": "azure",
+      "record": {
+        "provider": "azure",
+        "identity": "principal-api",
+        "action": "Microsoft.KeyVault/vaults/secrets/read",
+        "impact": "data_access",
+        "resource": "/subscriptions/sub-a/resourceGroups/rg-a/providers/Microsoft.KeyVault/vaults/v/secrets/api",
+        "role_assignment": {
+          "roleDefinitionName": "Key Vault Secrets User",
+          "principalId": "principal-api",
+          "scope": "/subscriptions/sub-a/resourceGroups/rg-a"
+        },
+        "deny_assignment": {
+          "denyActions": [
+            "Microsoft.KeyVault/vaults/secrets/read"
+          ],
+          "principalId": "principal-api",
+          "scope": "/subscriptions/sub-a/resourceGroups/rg-a"
+        }
+      },
+      "expected": {
+        "decision": "denied",
+        "policy_layer": "deny_assignment",
+        "required_blockers": ["deny_assignment", "resource_group_scope"],
+        "matched_statements": 2
+      }
+    },
+    {
+      "name": "gcp-secret-accessor-conditional-binding",
+      "provider": "gcp",
+      "record": {
+        "provider": "gcp",
+        "identity": "serviceAccount:api@prod.iam.gserviceaccount.com",
+        "action": "secretmanager.versions.access",
+        "impact": "data_access",
+        "resource": "projects/prod/secrets/api",
+        "iam_policy": {
+          "bindings": [
+            {
+              "role": "roles/secretmanager.secretAccessor",
+              "members": [
+                "serviceAccount:api@prod.iam.gserviceaccount.com"
+              ],
+              "resources": [
+                "projects/prod/secrets/api"
+              ],
+              "condition": {
+                "title": "prod-secrets-only",
+                "expression": "resource.name.startsWith('projects/prod/')"
+              }
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "constrained_allow",
+        "policy_layer": "iam_policy",
+        "required_blocker": "conditional_iam_binding",
+        "matched_statements": 1,
+        "principal_matched": true
+      }
+    },
+    {
+      "name": "gcp-principal-access-boundary-blocks-cross-project-secret",
+      "provider": "gcp",
+      "record": {
+        "provider": "gcp",
+        "identity": "serviceAccount:api@prod.iam.gserviceaccount.com",
+        "action": "secretmanager.versions.access",
+        "impact": "data_access",
+        "resource": "projects/prod/secrets/api",
+        "iam_policy": {
+          "bindings": [
+            {
+              "role": "roles/secretmanager.secretAccessor",
+              "members": [
+                "serviceAccount:api@prod.iam.gserviceaccount.com"
+              ],
+              "resources": [
+                "projects/prod/secrets/api"
+              ]
+            }
+          ]
+        },
+        "principal_access_boundary": {
+          "permissions": [
+            "secretmanager.versions.access"
+          ],
+          "resources": [
+            "projects/dev/*"
+          ]
+        }
+      },
+      "expected": {
+        "decision": "denied",
+        "policy_layer": "principal_access_boundary",
+        "required_blocker": "principal_access_boundary_deny",
+        "matched_statements": 1,
+        "principal_matched": true
+      }
+    },
+    {
+      "name": "gcp-gke-workload-identity-secret-access",
+      "provider": "gcp",
+      "record": {
+        "provider": "gcp",
+        "identity": "principal://iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/prod.svc.id.goog/subject/ns/payments/sa/api",
+        "action": "secretmanager.versions.access",
+        "impact": "data_access",
+        "resource": "projects/prod/secrets/api",
+        "annotations": {
+          "iam.gke.io/gcp-service-account": "api@prod.iam.gserviceaccount.com"
+        },
+        "iam_policy": {
+          "bindings": [
+            {
+              "role": "roles/secretmanager.secretAccessor",
+              "members": [
+                "principal://iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/prod.svc.id.goog/subject/ns/payments/sa/api"
+              ],
+              "resources": [
+                "projects/prod/secrets/api"
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "constrained_allow",
+        "policy_layer": "iam_policy",
+        "required_blocker": "workload_identity_condition",
+        "matched_statements": 1,
+        "principal_matched": true
+      }
+    },
+    {
+      "name": "kubernetes-serviceaccount-secret-reader",
+      "provider": "kubernetes",
+      "record": {
+        "provider": "kubernetes",
+        "identity": "system:serviceaccount:payments:api",
+        "action": "get secrets",
+        "impact": "data_access",
+        "resource": "secrets",
+        "namespace": "payments",
+        "rules": [
+          {
+            "verbs": [
+              "get"
+            ],
+            "resources": [
+              "secrets"
+            ],
+            "resourceNames": [
+              "api-secret"
+            ],
+            "subjects": [
+              {
+                "kind": "ServiceAccount",
+                "namespace": "payments",
+                "name": "api"
+              }
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "decision": "constrained_allow",
+        "policy_layer": "kubernetes_rbac",
+        "required_blocker": "rbac_resource_names",
+        "matched_statements": 1,
+        "principal_matched": true
+      }
+    },
+    {
+      "name": "kubernetes-serviceaccount-impersonation-escalation",
+      "provider": "kubernetes",
+      "record": {
+        "provider": "kubernetes",
+        "identity": "system:serviceaccount:payments:ci",
+        "action": "impersonate serviceaccounts",
+        "impact": "iam_escalation",
+        "resource": "serviceaccounts",
+        "namespace": "payments",
+        "cluster_role_binding": {
+          "subjects": [
+            {
+              "kind": "ServiceAccount",
+              "namespace": "payments",
+              "name": "ci"
+            }
+          ],
+          "rules": [
+            {
+              "verbs": [
+                "impersonate"
+              ],
+              "resources": [
+                "serviceaccounts"
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "constrained_allow",
+        "policy_layer": "cluster_role_binding",
+        "required_blockers": ["privilege_escalation_verb", "service_account_scope"],
+        "matched_statements": 1,
+        "principal_matched": true
+      }
+    }
+  ]
+}

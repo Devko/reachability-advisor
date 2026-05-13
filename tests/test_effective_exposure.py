@@ -279,6 +279,679 @@ class EffectiveExposureEngineTests(unittest.TestCase):
 
         self.assertTrue(any(blocker["kind"] == "trust_policy_condition" for blocker in trust_record["identity"]["blockers"]))
 
+    def test_aws_structured_network_evaluation_blocks_route_sg_and_nacl(self) -> None:
+        route_context = ContextEvidence(
+            exposure="public",
+            confidence=Confidence.HIGH,
+            network_paths=[
+                {
+                    "provider": "aws",
+                    "exposure": "public",
+                    "routes": [{"destination_cidr_block": "10.0.0.0/16", "gateway_id": "local", "state": "active"}],
+                    "security_groups": [{"ingress": [{"cidr_blocks": ["0.0.0.0/0"], "type": "ingress"}]}],
+                    "network_acls": [{"rule_number": 100, "rule_action": "allow", "egress": False, "cidr_block": "0.0.0.0/0"}],
+                }
+            ],
+        )
+        route_record = evaluate_effective_exposure("api", route_context)[0]
+        self.assertEqual(route_record["network"]["decision"], "blocked")
+        self.assertIn("no_public_route", {blocker["kind"] for blocker in route_record["network"]["blockers"]})
+
+        sg_context = ContextEvidence(
+            exposure="public",
+            confidence=Confidence.HIGH,
+            network_paths=[
+                {
+                    "provider": "aws",
+                    "exposure": "public",
+                    "routes": [{"destination_cidr_block": "0.0.0.0/0", "gateway_id": "igw-123", "state": "active"}],
+                    "security_groups": [{"ingress": [{"cidr_blocks": ["10.0.0.0/8"], "type": "ingress"}]}],
+                }
+            ],
+        )
+        sg_record = evaluate_effective_exposure("api", sg_context)[0]
+        self.assertEqual(sg_record["network"]["decision"], "constrained")
+        self.assertIn("source_cidr_restriction", {blocker["kind"] for blocker in sg_record["network"]["blockers"]})
+
+        nacl_context = ContextEvidence(
+            exposure="public",
+            confidence=Confidence.HIGH,
+            network_paths=[
+                {
+                    "provider": "aws",
+                    "exposure": "public",
+                    "routes": [{"destination_cidr_block": "0.0.0.0/0", "gateway_id": "igw-123", "state": "active"}],
+                    "security_groups": [{"ingress": [{"cidr_blocks": ["0.0.0.0/0"], "type": "ingress"}]}],
+                    "network_acls": [
+                        {"rule_number": 90, "rule_action": "deny", "egress": False, "cidr_block": "0.0.0.0/0"},
+                        {"rule_number": 100, "rule_action": "allow", "egress": False, "cidr_block": "0.0.0.0/0"},
+                    ],
+                }
+            ],
+        )
+        nacl_record = evaluate_effective_exposure("api", nacl_context)[0]
+        self.assertEqual(nacl_record["network"]["decision"], "blocked")
+        self.assertIn("network_acl_deny", {blocker["kind"] for blocker in nacl_record["network"]["blockers"]})
+
+    def test_aws_resource_graph_builder_selects_nacl_precedence(self) -> None:
+        context = ContextEvidence(
+            exposure="public",
+            confidence=Confidence.HIGH,
+            network_paths=[
+                {
+                    "provider": "aws",
+                    "exposure": "public",
+                    "entry": "internet",
+                    "target": "aws_ecs_service.api",
+                    "routes": [{"id": "route-public", "destination_cidr_block": "0.0.0.0/0", "gateway_id": "igw-123"}],
+                    "network_acls": [
+                        {
+                            "id": "acl-api",
+                            "ingress": [
+                                {"id": "acl-deny", "rule_number": 90, "rule_action": "deny", "cidr_block": "0.0.0.0/0"},
+                                {"id": "acl-allow", "rule_number": 100, "rule_action": "allow", "cidr_block": "0.0.0.0/0"},
+                            ],
+                        }
+                    ],
+                    "security_groups": [{"id": "sg-api", "ingress": [{"id": "sg-public", "cidr_blocks": ["0.0.0.0/0"]}]}],
+                    "source": "terraform-plan",
+                }
+            ],
+        )
+
+        record = evaluate_effective_exposure("api", context)[0]
+        graph = record["network"]["network_graph"]
+        acl_edge = next(edge for edge in graph["edges"] if edge["type"] == "network_acl")
+
+        self.assertEqual(record["network"]["decision"], "blocked")
+        self.assertEqual(acl_edge["precedence"], 90)
+        self.assertIn("lowest numbered", acl_edge["precedence_reason"])
+        self.assertTrue(graph["resource_graph"]["evaluated"])
+        self.assertIn("network_acl_deny", {blocker["kind"] for blocker in record["network"]["blockers"]})
+
+    def test_azure_resource_graph_builder_selects_lowest_priority_nsg_rule(self) -> None:
+        context = ContextEvidence(
+            exposure="public",
+            confidence=Confidence.HIGH,
+            network_paths=[
+                {
+                    "provider": "azure",
+                    "exposure": "public",
+                    "entry": "internet",
+                    "target": "azurerm_linux_web_app.api",
+                    "network_security_rules": [
+                        {"id": "nsg-deny", "priority": 100, "access": "Deny", "source_address_prefix": "*"},
+                        {"id": "nsg-allow", "priority": 200, "access": "Allow", "source_address_prefix": "*"},
+                    ],
+                    "source": "terraform-plan",
+                }
+            ],
+        )
+
+        record = evaluate_effective_exposure("api", context)[0]
+        graph = record["network"]["network_graph"]
+        nsg_edge = next(edge for edge in graph["edges"] if edge["type"] == "network_security_group")
+
+        self.assertEqual(record["network"]["decision"], "blocked")
+        self.assertEqual(nsg_edge["precedence"], 100)
+        self.assertIn("lowest priority", nsg_edge["precedence_reason"])
+        self.assertIn("nsg_deny", {blocker["kind"] for blocker in record["network"]["blockers"]})
+
+    def test_gcp_resource_graph_builder_selects_lowest_priority_firewall_rule(self) -> None:
+        context = ContextEvidence(
+            exposure="public",
+            confidence=Confidence.HIGH,
+            network_paths=[
+                {
+                    "provider": "gcp",
+                    "exposure": "public",
+                    "entry": "internet",
+                    "target": "google_cloud_run_v2_service.api",
+                    "firewall_rules": [
+                        {"id": "fw-deny", "priority": 900, "action": "deny", "direction": "INGRESS", "source_ranges": ["0.0.0.0/0"]},
+                        {"id": "fw-allow", "priority": 1000, "action": "allow", "direction": "INGRESS", "source_ranges": ["0.0.0.0/0"]},
+                    ],
+                    "source": "terraform-plan",
+                }
+            ],
+        )
+
+        record = evaluate_effective_exposure("api", context)[0]
+        graph = record["network"]["network_graph"]
+        firewall_edge = next(edge for edge in graph["edges"] if edge["type"] == "firewall")
+
+        self.assertEqual(record["network"]["decision"], "blocked")
+        self.assertEqual(firewall_edge["precedence"], 900)
+        self.assertIn("lowest priority", firewall_edge["precedence_reason"])
+        self.assertIn("firewall_deny", {blocker["kind"] for blocker in record["network"]["blockers"]})
+
+    def test_kubernetes_resource_graph_builder_applies_deny_policy_precedence(self) -> None:
+        context = ContextEvidence(
+            exposure="public",
+            source="kubernetes-manifest",
+            confidence=Confidence.HIGH,
+            network_paths=[
+                {
+                    "provider": "kubernetes",
+                    "exposure": "public",
+                    "entry": "internet",
+                    "target": "kubernetes_deployment.api",
+                    "ingresses": [{"id": "ingress-public", "class": "nginx"}],
+                    "services": [{"id": "service-api"}],
+                    "network_policies": [
+                        {"id": "np-deny", "policy": "deny all ingress"},
+                        {"id": "np-allow", "policy": "allow frontend"},
+                    ],
+                    "authorization_policies": [{"id": "mesh-deny", "action": "DENY"}],
+                    "source": "kubernetes-manifest",
+                }
+            ],
+        )
+
+        record = evaluate_effective_exposure("api", context)[0]
+        graph = record["network"]["network_graph"]
+        policy_edge = next(edge for edge in graph["edges"] if edge["type"] == "network_policy")
+
+        self.assertEqual(record["network"]["decision"], "blocked")
+        self.assertEqual(policy_edge["precedence"], 0)
+        self.assertIn("NetworkPolicy", policy_edge["precedence_reason"])
+        self.assertIn("network_policy_deny_all", {blocker["kind"] for blocker in record["network"]["blockers"]})
+
+    def test_effective_access_prefers_explicit_deny_over_allow_records(self) -> None:
+        context = ContextEvidence(
+            exposure="internal",
+            confidence=Confidence.HIGH,
+            network_paths=[{"provider": "aws", "exposure": "internal", "confidence": "high", "steps": ["aws_vpc.private", "aws_ecs_service.api"]}],
+            effective_access=[
+                {
+                    "provider": "aws",
+                    "identity": "aws_iam_role.api",
+                    "action": "secretsmanager:GetSecretValue",
+                    "impact": "data_access",
+                    "effect": "allow",
+                    "decision": "allowed",
+                    "policy_layer": "identity_policy",
+                    "confidence": "high",
+                },
+                {
+                    "provider": "aws",
+                    "identity": "aws_iam_role.api",
+                    "action": "secretsmanager:GetSecretValue",
+                    "impact": "data_access",
+                    "effect": "deny",
+                    "decision": "denied_by_explicit_deny",
+                    "policy_layer": "resource_policy",
+                    "confidence": "high",
+                },
+            ],
+        )
+
+        record = evaluate_effective_exposure("api", context)[0]
+
+        self.assertEqual(record["identity"]["decision"], "denied")
+        self.assertEqual(record["decision"], "reachable_without_effective_identity")
+        self.assertEqual(record["identity"]["policy_layer"], "resource_policy")
+        self.assertEqual(record["identity"]["evaluation_order"][0]["state"], "matched")
+        self.assertEqual(record["identity"]["effective_access_model"]["authorization_model"], "aws_iam")
+        self.assertTrue(record["identity"]["effective_access_model"]["explicit_deny_precedence"])
+        self.assertEqual(record["identity"]["effective_access_model"]["resource_policy"], "blocks")
+
+    def test_structured_policy_documents_drive_provider_effective_access(self) -> None:
+        cases = [
+            (
+                "aws",
+                {
+                    "provider": "aws",
+                    "identity": "aws_iam_role.api",
+                    "action": "s3:GetObject",
+                    "impact": "data_access",
+                    "resource": "arn:aws:s3:::tenant-data/private.json",
+                    "identity_policy": {
+                        "Statement": [
+                            {
+                                "Effect": "Allow",
+                                "Action": "s3:GetObject",
+                                "Resource": "arn:aws:s3:::tenant-data/*",
+                            }
+                        ]
+                    },
+                    "permissions_boundary": {
+                        "Statement": [
+                            {
+                                "Effect": "Deny",
+                                "Action": "s3:GetObject",
+                                "Resource": "arn:aws:s3:::tenant-data/private.json",
+                            }
+                        ]
+                    },
+                    "confidence": "medium",
+                },
+                "permission_boundary",
+                "aws.structured_policy",
+            ),
+            (
+                "azure",
+                {
+                    "provider": "azure",
+                    "identity": "principal:api",
+                    "action": "Microsoft.KeyVault/vaults/secrets/read",
+                    "impact": "data_access",
+                    "resource": "/subscriptions/sub-a/resourceGroups/rg-a/providers/Microsoft.KeyVault/vaults/v/secrets/api",
+                    "role_definition": {
+                        "permissions": [{"actions": ["Microsoft.KeyVault/vaults/secrets/read"]}],
+                        "assignableScopes": ["/subscriptions/sub-a"],
+                    },
+                    "role_assignment": {"scope": "/subscriptions/sub-a/resourceGroups/rg-a"},
+                    "deny_assignment": {
+                        "permissions": [{"actions": ["Microsoft.KeyVault/vaults/secrets/read"]}],
+                        "scope": "/subscriptions/sub-a/resourceGroups/rg-a",
+                    },
+                    "confidence": "medium",
+                },
+                "deny_assignment",
+                "azure.structured_policy",
+            ),
+            (
+                "gcp",
+                {
+                    "provider": "gcp",
+                    "identity": "serviceAccount:api@prod.iam.gserviceaccount.com",
+                    "action": "secretmanager.versions.access",
+                    "impact": "data_access",
+                    "resource": "projects/prod/secrets/api",
+                    "iam_policy": {
+                        "bindings": [
+                            {
+                                "permissions": ["secretmanager.versions.access"],
+                                "resources": ["projects/prod/secrets/api"],
+                                "condition": {"expression": "request.time < timestamp('2026-01-01T00:00:00Z')"},
+                            }
+                        ]
+                    },
+                    "deny_policy": {
+                        "rules": [
+                            {
+                                "deniedPermissions": ["secretmanager.versions.access"],
+                                "resources": ["projects/prod/secrets/api"],
+                            }
+                        ]
+                    },
+                    "confidence": "medium",
+                },
+                "deny_policy",
+                "gcp.structured_policy",
+            ),
+            (
+                "kubernetes",
+                {
+                    "provider": "kubernetes",
+                    "identity": "system:serviceaccount:payments:api",
+                    "action": "get secrets",
+                    "impact": "data_access",
+                    "resource": "secrets",
+                    "namespace": "payments",
+                    "rules": [
+                        {"effect": "Deny", "verbs": ["get"], "resources": ["secrets"]},
+                        {"verbs": ["get"], "resources": ["secrets"], "resourceNames": ["api-secret"]},
+                    ],
+                    "confidence": "medium",
+                },
+                "rbac_deny",
+                "kubernetes.structured_policy",
+            ),
+        ]
+
+        for provider, access_record, expected_blocker, expected_engine in cases:
+            with self.subTest(provider=provider):
+                context = ContextEvidence(
+                    exposure="internal",
+                    confidence=Confidence.HIGH,
+                    network_paths=[{"provider": provider, "exposure": "internal", "confidence": "high", "steps": ["private-network", "api"]}],
+                    effective_access=[access_record],
+                )
+
+                record = evaluate_effective_exposure("api", context)[0]
+                identity = record["identity"]
+                model = identity["effective_access_model"]
+                blocker_kinds = {blocker["kind"] for blocker in identity["blockers"]}
+
+                self.assertEqual(identity["decision"], "denied")
+                self.assertEqual(model["policy_engine"], expected_engine)
+                self.assertEqual(model["policy_evaluation"]["decision"], "denied")
+                self.assertIn(expected_blocker, blocker_kinds)
+                self.assertTrue(any(step["step"].startswith("policy:") for step in identity["evaluation_order"]))
+
+    def test_structured_policy_documents_capture_trust_and_workload_identity_constraints(self) -> None:
+        aws_context = ContextEvidence(
+            exposure="internal",
+            confidence=Confidence.HIGH,
+            network_paths=[{"provider": "aws", "exposure": "internal", "confidence": "high", "steps": ["aws_vpc.private", "aws_ecs_service.api"]}],
+            effective_access=[
+                {
+                    "provider": "aws",
+                    "identity": "arn:aws:iam::111111111111:role/cicd",
+                    "action": "sts:AssumeRole",
+                    "impact": "iam_escalation",
+                    "resource": "arn:aws:iam::222222222222:role/prod-api",
+                    "trust_policy": {
+                        "Statement": [
+                            {
+                                "Effect": "Allow",
+                                "Action": "sts:AssumeRole",
+                                "Resource": "arn:aws:iam::222222222222:role/prod-api",
+                                "Condition": {"StringEquals": {"aws:PrincipalOrgID": "o-prod"}},
+                            }
+                        ]
+                    },
+                }
+            ],
+        )
+        aws_record = evaluate_effective_exposure("api", aws_context)[0]
+        aws_kinds = {blocker["kind"] for blocker in aws_record["identity"]["blockers"]}
+
+        self.assertEqual(aws_record["identity"]["decision"], "constrained_allow")
+        self.assertIn("trust_policy_condition", aws_kinds)
+        self.assertEqual(aws_record["identity"]["effective_access_model"]["policy_engine"], "aws.structured_policy")
+
+        gcp_context = ContextEvidence(
+            exposure="internal",
+            confidence=Confidence.HIGH,
+            network_paths=[{"provider": "gcp", "exposure": "internal", "confidence": "high", "steps": ["gke", "cloud-run-api"]}],
+            effective_access=[
+                {
+                    "provider": "gcp",
+                    "identity": "principal://iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/gke/subject/ns/api/sa/api",
+                    "action": "iam.serviceAccounts.actAs",
+                    "impact": "iam_escalation",
+                    "resource": "projects/prod/serviceAccounts/api@prod.iam.gserviceaccount.com",
+                    "iam_policy": {
+                        "bindings": [
+                            {
+                                "permissions": ["iam.serviceAccounts.actAs"],
+                                "resources": ["projects/prod/serviceAccounts/api@prod.iam.gserviceaccount.com"],
+                                "workload_identity": "iam.gke.io/gcp-service-account=api@prod.iam.gserviceaccount.com",
+                                "condition": {"expression": "resource.name.startsWith('projects/prod/')"},
+                            }
+                        ]
+                    },
+                }
+            ],
+        )
+        gcp_record = evaluate_effective_exposure("api", gcp_context)[0]
+        gcp_kinds = {blocker["kind"] for blocker in gcp_record["identity"]["blockers"]}
+
+        self.assertEqual(gcp_record["identity"]["decision"], "constrained_allow")
+        self.assertIn("workload_identity_condition", gcp_kinds)
+        self.assertIn("service_account_impersonation", gcp_kinds)
+        self.assertEqual(gcp_record["identity"]["effective_access_model"]["policy_engine"], "gcp.structured_policy")
+
+    def test_structured_policy_documents_expand_common_azure_and_gcp_roles(self) -> None:
+        azure_context = ContextEvidence(
+            exposure="internal",
+            confidence=Confidence.HIGH,
+            network_paths=[{"provider": "azure", "exposure": "internal", "confidence": "high", "steps": ["vnet", "app"]}],
+            effective_access=[
+                {
+                    "provider": "azure",
+                    "identity": "principal:api",
+                    "action": "Microsoft.KeyVault/vaults/secrets/read",
+                    "impact": "data_access",
+                    "resource": "/subscriptions/sub-a/resourceGroups/rg-a/providers/Microsoft.KeyVault/vaults/v/secrets/api",
+                    "role_definition": {
+                        "roleName": "Key Vault Secrets User",
+                        "assignableScopes": ["/subscriptions/sub-a/resourceGroups/rg-a"],
+                    },
+                    "role_assignment": {"scope": "/subscriptions/sub-a/resourceGroups/rg-a"},
+                }
+            ],
+        )
+        azure_record = evaluate_effective_exposure("api", azure_context)[0]
+
+        self.assertEqual(azure_record["identity"]["decision"], "constrained_allow")
+        self.assertEqual(azure_record["identity"]["effective_access_model"]["policy_engine"], "azure.structured_policy")
+        self.assertEqual(azure_record["identity"]["policy_evaluation"]["decision"], "constrained_allow")
+
+        gcp_context = ContextEvidence(
+            exposure="internal",
+            confidence=Confidence.HIGH,
+            network_paths=[{"provider": "gcp", "exposure": "internal", "confidence": "high", "steps": ["vpc", "run"]}],
+            effective_access=[
+                {
+                    "provider": "gcp",
+                    "identity": "serviceAccount:api@prod.iam.gserviceaccount.com",
+                    "action": "secretmanager.versions.access",
+                    "impact": "data_access",
+                    "resource": "projects/prod/secrets/api",
+                    "iam_policy": {
+                        "bindings": [
+                            {
+                                "role": "roles/secretmanager.secretAccessor",
+                                "resources": ["projects/prod/secrets/api"],
+                                "condition": {"expression": "resource.name.startsWith('projects/prod/')"},
+                            }
+                        ]
+                    },
+                }
+            ],
+        )
+        gcp_record = evaluate_effective_exposure("api", gcp_context)[0]
+
+        self.assertEqual(gcp_record["identity"]["decision"], "constrained_allow")
+        self.assertEqual(gcp_record["identity"]["effective_access_model"]["policy_engine"], "gcp.structured_policy")
+        self.assertEqual(gcp_record["identity"]["policy_evaluation"]["decision"], "constrained_allow")
+
+    def test_provider_iam_deny_precedence_over_high_impact_allow_across_clouds(self) -> None:
+        cases = [
+            (
+                "azure",
+                {
+                    "provider": "azure",
+                    "identity": "principal",
+                    "action": "Microsoft.KeyVault/vaults/secrets/read",
+                    "impact": "data_access",
+                    "effect": "deny",
+                    "decision": "denied",
+                    "policy_layer": "deny_assignment",
+                    "resource": "secret:api",
+                    "confidence": "high",
+                },
+                "azure_rbac",
+            ),
+            (
+                "gcp",
+                {
+                    "provider": "gcp",
+                    "identity": "serviceAccount:api",
+                    "action": "secretmanager.versions.access",
+                    "impact": "data_access",
+                    "effect": "deny",
+                    "decision": "denied",
+                    "policy_layer": "deny_policy",
+                    "resource": "secret:api",
+                    "confidence": "high",
+                },
+                "gcp_iam",
+            ),
+            (
+                "kubernetes",
+                {
+                    "provider": "kubernetes",
+                    "identity": "system:serviceaccount:api:api",
+                    "action": "get secrets",
+                    "impact": "data_access",
+                    "effect": "deny",
+                    "decision": "denied",
+                    "policy_layer": "kubernetes_rbac",
+                    "resource": "secret:api",
+                    "confidence": "high",
+                },
+                "kubernetes_rbac",
+            ),
+        ]
+
+        for provider, deny_record, model_name in cases:
+            with self.subTest(provider=provider):
+                context = ContextEvidence(
+                    exposure="internal",
+                    confidence=Confidence.HIGH,
+                    network_paths=[{"provider": provider, "exposure": "internal", "confidence": "high", "steps": ["network", "api"]}],
+                    effective_access=[
+                        {
+                            "provider": provider,
+                            "identity": "runtime",
+                            "action": deny_record["action"],
+                            "impact": "data_access",
+                            "effect": "allow",
+                            "decision": "allowed",
+                            "policy_layer": "identity_policy",
+                            "resource": "secret:api",
+                            "confidence": "high",
+                        },
+                        deny_record,
+                    ],
+                )
+
+                record = evaluate_effective_exposure("api", context)[0]
+
+                self.assertEqual(record["identity"]["decision"], "denied")
+                self.assertEqual(record["decision"], "reachable_without_effective_identity")
+                self.assertEqual(record["identity"]["effective_access_model"]["authorization_model"], model_name)
+                self.assertTrue(record["identity"]["effective_access_model"]["deny_observed"])
+
+    def test_provider_iam_unrelated_low_impact_deny_does_not_hide_admin_allow(self) -> None:
+        for provider in ("aws", "azure", "gcp", "kubernetes"):
+            with self.subTest(provider=provider):
+                context = ContextEvidence(
+                    exposure="internal",
+                    confidence=Confidence.HIGH,
+                    network_paths=[{"provider": provider, "exposure": "internal", "confidence": "high", "steps": ["network", "api"]}],
+                    effective_access=[
+                        {
+                            "provider": provider,
+                            "identity": "runtime",
+                            "action": "*",
+                            "impact": "admin_control",
+                            "effect": "allow",
+                            "decision": "allowed",
+                            "policy_layer": "identity_policy",
+                            "resource": "*",
+                            "confidence": "high",
+                        },
+                        {
+                            "provider": provider,
+                            "identity": "runtime",
+                            "action": "read_metadata",
+                            "impact": "limited_access",
+                            "effect": "deny",
+                            "decision": "denied",
+                            "policy_layer": "resource_policy",
+                            "resource": "metadata:debug",
+                            "confidence": "high",
+                        },
+                    ],
+                )
+
+                record = evaluate_effective_exposure("api", context)[0]
+
+                self.assertEqual(record["identity"]["decision"], "allowed")
+                self.assertEqual(record["identity"]["impact"], "admin_control")
+                self.assertFalse(record["identity"]["effective_access_model"]["deny_observed"])
+
+    def test_non_aws_iam_models_expose_provider_layer_states(self) -> None:
+        azure = evaluate_effective_exposure(
+            "api",
+            ContextEvidence(
+                exposure="internal",
+                confidence=Confidence.HIGH,
+                network_paths=[{"provider": "azure", "exposure": "internal", "confidence": "high", "steps": ["vnet", "app"]}],
+                effective_access=[
+                    {
+                        "provider": "azure",
+                        "identity": "managed_identity.api",
+                        "action": "Microsoft.KeyVault/vaults/secrets/read",
+                        "impact": "data_access",
+                        "effect": "allow",
+                        "decision": "allowed",
+                        "policy_layer": "role_assignment",
+                        "resource": "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/payments",
+                        "condition_keys": ["@Resource[Microsoft.KeyVault/vaults:name]"],
+                        "assignable_scopes": ["/subscriptions/sub/resourceGroups/rg"],
+                        "evidence": "PIM eligible role assignment with condition",
+                        "confidence": "high",
+                    }
+                ],
+            ),
+        )[0]
+        gcp = evaluate_effective_exposure(
+            "api",
+            ContextEvidence(
+                exposure="internal",
+                confidence=Confidence.HIGH,
+                network_paths=[{"provider": "gcp", "exposure": "internal", "confidence": "high", "steps": ["vpc", "run"]}],
+                effective_access=[
+                    {
+                        "provider": "gcp",
+                        "identity": "serviceAccount:gke-api",
+                        "action": "iam.serviceAccounts.actAs",
+                        "impact": "iam_escalation",
+                        "effect": "allow",
+                        "decision": "allowed",
+                        "policy_layer": "principal_access_boundary",
+                        "resource": "projects/prod/serviceAccounts/runtime",
+                        "condition_keys": ["resource.name"],
+                        "evidence": "workload_identity principal_access_boundary organization_policy",
+                        "confidence": "high",
+                    }
+                ],
+            ),
+        )[0]
+        k8s = evaluate_effective_exposure(
+            "api",
+            ContextEvidence(
+                exposure="internal",
+                confidence=Confidence.HIGH,
+                network_paths=[{"provider": "kubernetes", "exposure": "internal", "confidence": "high", "steps": ["svc", "deploy"]}],
+                effective_access=[
+                    {
+                        "provider": "kubernetes",
+                        "identity": "system:serviceaccount:payments:api",
+                        "action": "impersonate users",
+                        "impact": "iam_escalation",
+                        "effect": "allow",
+                        "decision": "allowed",
+                        "policy_layer": "cluster_role_binding",
+                        "resource_scope": "global",
+                        "verbs": ["get", "impersonate"],
+                        "resources": ["secrets", "users"],
+                        "non_resource_urls": ["/metrics"],
+                        "aggregation_rule": {"clusterRoleSelectors": []},
+                        "confidence": "high",
+                    }
+                ],
+            ),
+        )[0]
+
+        azure_model = azure["identity"]["effective_access_model"]
+        self.assertEqual(azure_model["authorization_model"], "azure_rbac")
+        self.assertEqual(azure_model["scope_level"], "resource_group")
+        self.assertEqual(azure_model["conditions_and_scope"], "constrains")
+        self.assertEqual(azure_model["role_definition_scope"], "constrains")
+        self.assertEqual(azure_model["pim"], "constrains")
+
+        gcp_model = gcp["identity"]["effective_access_model"]
+        self.assertEqual(gcp_model["authorization_model"], "gcp_iam")
+        self.assertEqual(gcp_model["principal_access_boundary"], "constrains")
+        self.assertEqual(gcp_model["organization_policy"], "constrains")
+        self.assertTrue(gcp_model["workload_identity_mapping"])
+        self.assertTrue(gcp_model["service_account_impersonation"])
+
+        k8s_model = k8s["identity"]["effective_access_model"]
+        self.assertEqual(k8s_model["authorization_model"], "kubernetes_rbac")
+        self.assertTrue(k8s_model["cluster_scope"])
+        self.assertTrue(k8s_model["non_resource_url_scope"])
+        self.assertTrue(k8s_model["aggregation_rule_scope"])
+        self.assertEqual(k8s_model["privilege_escalation_verbs"], ["impersonate"])
+
     def test_provider_evaluators_classify_route_firewall_and_ingress_auth_uncertainty(self) -> None:
         aws = evaluate_effective_exposure(
             "api",
@@ -350,6 +1023,156 @@ class EffectiveExposureEngineTests(unittest.TestCase):
         self.assertIn("ingress_controller_auth", {blocker["kind"] for blocker in k8s["network"]["blockers"]})
         self.assertIn("pod_security_boundary", {blocker["kind"] for blocker in k8s["network"]["blockers"]})
 
+    def test_provider_network_graph_solves_typed_edges(self) -> None:
+        aws = evaluate_effective_exposure(
+            "api",
+            ContextEvidence(
+                exposure="public",
+                confidence=Confidence.HIGH,
+                network_paths=[
+                    {
+                        "provider": "aws",
+                        "exposure": "public",
+                        "entry": "internet",
+                        "target": "aws_ecs_service.api",
+                        "network_graph": {
+                            "edges": [
+                                {
+                                    "from": "internet",
+                                    "to": "aws_route.public",
+                                    "type": "route",
+                                    "destination_cidr_block": "0.0.0.0/0",
+                                    "gateway_id": "igw-123",
+                                },
+                                {
+                                    "from": "aws_route.public",
+                                    "to": "aws_security_group.api",
+                                    "type": "security_group",
+                                    "cidr_blocks": ["10.0.0.0/8"],
+                                },
+                                {"from": "aws_security_group.api", "to": "aws_ecs_service.api", "type": "load_balancer"},
+                            ]
+                        },
+                    }
+                ],
+            ),
+        )[0]
+        azure = evaluate_effective_exposure(
+            "api",
+            ContextEvidence(
+                exposure="public",
+                confidence=Confidence.HIGH,
+                network_paths=[
+                    {
+                        "provider": "azure",
+                        "exposure": "public",
+                        "entry": "internet",
+                        "target": "azurerm_linux_web_app.api",
+                        "network_graph": {
+                            "edges": [
+                                {"from": "internet", "to": "azurerm_application_gateway.edge", "type": "gateway"},
+                                {
+                                    "from": "azurerm_application_gateway.edge",
+                                    "to": "azurerm_network_security_rule.deny",
+                                    "type": "network_security_group",
+                                    "access": "Deny",
+                                    "priority": 100,
+                                },
+                                {"from": "azurerm_network_security_rule.deny", "to": "azurerm_linux_web_app.api", "type": "service"},
+                            ]
+                        },
+                    }
+                ],
+            ),
+        )[0]
+        gcp = evaluate_effective_exposure(
+            "api",
+            ContextEvidence(
+                exposure="public",
+                confidence=Confidence.HIGH,
+                network_paths=[
+                    {
+                        "provider": "gcp",
+                        "exposure": "public",
+                        "entry": "internet",
+                        "target": "google_cloud_run_v2_service.api",
+                        "network_graph": {
+                            "edges": [
+                                {
+                                    "from": "internet",
+                                    "to": "google_compute_firewall.public",
+                                    "type": "firewall",
+                                    "source_ranges": ["0.0.0.0/0"],
+                                    "priority": 1000,
+                                },
+                                {"from": "google_compute_firewall.public", "to": "google_cloud_run_v2_service.api", "type": "gateway"},
+                            ]
+                        },
+                    }
+                ],
+            ),
+        )[0]
+        k8s = evaluate_effective_exposure(
+            "api",
+            ContextEvidence(
+                exposure="public",
+                confidence=Confidence.HIGH,
+                network_paths=[
+                    {
+                        "provider": "kubernetes",
+                        "exposure": "public",
+                        "entry": "internet",
+                        "target": "deployment/api",
+                        "network_graph": {
+                            "edges": [
+                                {"from": "internet", "to": "ingress/api", "type": "ingress"},
+                                {"from": "ingress/api", "to": "networkpolicy/default-deny", "type": "network_policy", "policy": "deny all ingress"},
+                                {"from": "networkpolicy/default-deny", "to": "deployment/api", "type": "service"},
+                            ]
+                        },
+                    }
+                ],
+            ),
+        )[0]
+
+        self.assertEqual(aws["network"]["network_graph"]["decision"], "constrained")
+        self.assertEqual(aws["network"]["decision"], "constrained")
+        self.assertIn("source_cidr_restriction", {blocker["kind"] for blocker in aws["network"]["blockers"]})
+        self.assertEqual(azure["network"]["network_graph"]["decision"], "blocked")
+        self.assertEqual(azure["network"]["decision"], "blocked")
+        self.assertIn("nsg_deny", {blocker["kind"] for blocker in azure["network"]["blockers"]})
+        self.assertEqual(gcp["network"]["network_graph"]["decision"], "constrained")
+        self.assertIn("firewall_priority_unknown", {blocker["kind"] for blocker in gcp["network"]["blockers"]})
+        self.assertEqual(k8s["network"]["network_graph"]["decision"], "blocked")
+        self.assertIn("network_policy_deny_all", {blocker["kind"] for blocker in k8s["network"]["blockers"]})
+
+    def test_network_graph_requires_connected_path_to_target(self) -> None:
+        record = evaluate_effective_exposure(
+            "api",
+            ContextEvidence(
+                exposure="public",
+                confidence=Confidence.HIGH,
+                network_paths=[
+                    {
+                        "provider": "aws",
+                        "exposure": "public",
+                        "entry": "internet",
+                        "target": "aws_ecs_service.api",
+                        "network_graph": {
+                            "edges": [
+                                {"from": "internet", "to": "aws_route.public", "type": "route", "destination_cidr_block": "0.0.0.0/0", "gateway_id": "igw-123"},
+                                {"from": "aws_security_group.other", "to": "aws_ecs_service.api", "type": "security_group", "cidr_blocks": ["0.0.0.0/0"]},
+                            ]
+                        },
+                    }
+                ],
+            ),
+        )[0]
+
+        self.assertEqual(record["network"]["decision"], "blocked")
+        self.assertEqual(record["network"]["network_graph"]["evaluation_order"][0]["state"], "no_path")
+        self.assertIn("unconnected_network_graph", {blocker["kind"] for blocker in record["network"]["blockers"]})
+
     def test_gcp_iap_and_cloud_armor_are_provider_constraints(self) -> None:
         context = ContextEvidence(
             exposure="public",
@@ -413,6 +1236,8 @@ class EffectiveExposureEngineTests(unittest.TestCase):
         self.assertTrue(any(blocker["kind"] == "private_endpoint" and blocker["effect"] == "blocks" for blocker in record["network"]["blockers"]))
         self.assertTrue(any(blocker["kind"] == "deny_assignment" and blocker["effect"] == "blocks" for blocker in record["identity"]["blockers"]))
         self.assertEqual(record["decision_basis"], "network:blocked_by:private_endpoint")
+        self.assertEqual(record["identity"]["effective_access_model"]["authorization_model"], "azure_rbac")
+        self.assertTrue(record["identity"]["effective_access_model"]["deny_assignment"])
 
     def test_azure_evaluator_covers_access_restrictions_waf_scope_and_policy_deny(self) -> None:
         context = ContextEvidence(
@@ -548,6 +1373,9 @@ class EffectiveExposureEngineTests(unittest.TestCase):
         self.assertIn("deny_policy", identity_kinds)
         self.assertIn("organization_scope", identity_kinds)
         self.assertIn("folder_scope", identity_kinds)
+        self.assertEqual(record["identity"]["effective_access_model"]["authorization_model"], "gcp_iam")
+        self.assertTrue(record["identity"]["effective_access_model"]["deny_policy"])
+        self.assertEqual(record["identity"]["effective_access_model"]["scope_level"], "organization")
 
     def test_kubernetes_service_mesh_policy_is_provider_constraint(self) -> None:
         context = ContextEvidence(
@@ -618,6 +1446,9 @@ class EffectiveExposureEngineTests(unittest.TestCase):
         self.assertIn("rbac_resource_names", identity_kinds)
         self.assertIn("service_account_scope", identity_kinds)
         self.assertIn("namespace_scope", identity_kinds)
+        self.assertEqual(record["identity"]["effective_access_model"]["authorization_model"], "kubernetes_rbac")
+        self.assertTrue(record["identity"]["effective_access_model"]["resource_names_scope"])
+        self.assertEqual(record["identity"]["effective_access_model"]["scope_level"], "resource_names")
 
     def test_kubernetes_evaluator_covers_deny_all_internal_ingress_and_rbac_deny(self) -> None:
         context = ContextEvidence(

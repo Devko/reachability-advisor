@@ -178,6 +178,7 @@ The composite action installs the scanner from this repository. It accepts newli
             reachability/semgrep.json
           artifact-manifest: |
             reachability/artifacts.json
+          require-artifact-provenance: "true"
           terraform-plan: reachability/tfplan.json
           kubernetes-manifest: |
             k8s/rendered.yaml
@@ -227,12 +228,18 @@ For release branches and deployment gates, scan the built artifact instead of th
 
 ```yaml
       - name: Build image
-        run: docker build -t local/app:${{ github.sha }} .
+        run: |
+          IMAGE_REF="ghcr.io/${{ github.repository }}/app:${{ github.sha }}"
+          docker build -t "$IMAGE_REF" .
+          IMAGE_DIGEST="$(docker image inspect "$IMAGE_REF" --format '{{.Id}}')"
+          echo "IMAGE_REF=$IMAGE_REF" >> "$GITHUB_ENV"
+          echo "IMAGE_DIGEST=$IMAGE_DIGEST" >> "$GITHUB_ENV"
+          echo "REGISTRY_REF=$IMAGE_REF@$IMAGE_DIGEST" >> "$GITHUB_ENV"
 
       - name: Generate image SBOM and vulnerability matches
         run: |
           mkdir -p sboms vulns reachability
-          syft local/app:${{ github.sha }} -o cyclonedx-json=sboms/app.cdx.json
+          syft "$IMAGE_REF" -o cyclonedx-json=sboms/app.cdx.json
           grype sbom:sboms/app.cdx.json -o json --file vulns/app.grype.json
 
       - name: Write CI artifact manifest
@@ -240,12 +247,17 @@ For release branches and deployment gates, scan the built artifact instead of th
           reachability-advisor artifact-manifest init \
             --artifact app \
             --sbom sboms/app.cdx.json \
-            --image local/app:${{ github.sha }} \
+            --image "$IMAGE_REF" \
+            --digest "$IMAGE_DIGEST" \
+            --registry-ref "$REGISTRY_REF" \
             --git-sha "${{ github.sha }}" \
+            --signed \
             --out reachability/artifacts.json
           reachability-advisor artifact-manifest validate \
             --manifest reachability/artifacts.json \
-            --out reachability/artifact-manifest-validation.json
+            --strict-provenance \
+            --out reachability/artifact-manifest-validation.json \
+            --fail-on-warning
 
       - name: Generate Terraform plan context
         run: |
@@ -273,6 +285,7 @@ For release branches and deployment gates, scan the built artifact instead of th
             --source-root app=. \
             --source-evidence-in reachability/semgrep.json \
             --artifact-manifest reachability/artifacts.json \
+            --require-artifact-provenance \
             --terraform-plan reachability/tfplan.json \
             --terraform-coverage-out reachability/terraform-coverage.json \
             --kubernetes-manifest k8s/rendered.yaml \
@@ -304,7 +317,7 @@ Use `--terraform-source infra` only for advisory feedback when a plan cannot be 
 5. Pass Terraform plan JSON for release gates.
 6. Pass rendered Kubernetes YAML/JSON when workloads are deployed through Kubernetes, Helm, or Kustomize.
 7. Pass `--artifact-manifest` when the SBOM does not preserve image digest or registry reference.
-8. Use `rendered-iac-plan` and `artifact-manifest validate` to make missing release inputs explicit before the scan.
+8. Use `rendered-iac-plan` and `artifact-manifest validate --strict-provenance` to make missing release inputs explicit before the scan.
 9. Use `--analysis-profile production` for release gates.
 10. Fail critical findings that only have dependency-level source evidence or no matching external analyzer evidence.
 11. Write `--mapping-out`, `--source-coverage-out`, `--terraform-coverage-out`, `--kubernetes-coverage-out`, `--readiness-out`, and `--evidence-graph-out` when the related inputs are present.
@@ -389,7 +402,7 @@ reachability-advisor source-evidence-plan \
   --out-md reachability/source-evidence-plan.md
 ```
 
-`source-evidence-pack` writes the maintained Semgrep rules, CodeQL suite file, govulncheck profile, and release-gate selector contract. `source-evidence-plan` emits CodeQL commands for JavaScript/TypeScript, Java/Kotlin, Python, and Go. It emits `govulncheck` only for Go. If no supported language or package-manager hint is supplied, it emits the generic Semgrep workflow and no CodeQL command.
+`source-evidence-pack` writes maintained Semgrep rules, per-ecosystem Semgrep profiles, package-family query packs, CodeQL suite/profile files, govulncheck metadata, and the release-gate selector contract. The maintained family rules are tested against checked-in vulnerable samples; pinned public repositories in `fixtures/source-vulnerable-apps/coverage-expectations.json` give maintainers reproducible larger targets. Use `semgrep-reachability.yml` for all maintained rules, `semgrep/profiles/npm.yml`, `semgrep/profiles/maven-gradle.yml`, `semgrep/profiles/python.yml`, and `semgrep/profiles/go.yml` when a pipeline scans one ecosystem at a time, or `semgrep/query-packs/<family>.yml` when it runs family-specific jobs. `source-evidence-plan` emits CodeQL commands for JavaScript/TypeScript, Java/Kotlin, Python, and Go. It emits `govulncheck` only for Go. If no supported language or package-manager hint is supplied, it emits the generic Semgrep workflow and no CodeQL command.
 
 For CodeQL, pass SARIF output as `--source-evidence-in`. CodeQL `codeFlows` are imported as high-confidence data-flow evidence when the result or rule metadata includes a package, package URL, or vulnerability selector. Generic CodeQL query ids are retained as symbols and are not treated as vulnerability ids unless they look like CVE/GHSA/OSV-style ids.
 
@@ -435,7 +448,7 @@ reachability-advisor evidence-profile \
   --fail-on-blockers
 ```
 
-The report names the missing release evidence: weak artifact identity, missing workload match, no network path, no identity path, external source coverage gaps, or unrendered Terraform/Kubernetes wrappers.
+The report names the missing release evidence: weak artifact identity, missing workload match, no network path, no identity path, external source coverage gaps, query-family coverage gaps, or unrendered Terraform/Kubernetes wrappers.
 
 To enforce the same report during `scan`, add:
 

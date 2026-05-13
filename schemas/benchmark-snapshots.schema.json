@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Reachability Advisor Benchmark Snapshot Expectations",
+  "type": "object",
+  "required": ["schema_version", "snapshots"],
+  "properties": {
+    "$schema": {"type": "string"},
+    "schema_version": {"const": "1.0"},
+    "description": {"type": "string"},
+    "source_benchmark": {"type": "string"},
+    "captured_at": {"type": "string"},
+    "snapshots": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "expected_tier_counts", "regression_limits"],
+        "properties": {
+          "id": {"type": "string"},
+          "case_id": {"type": "string"},
+          "required_status": {"type": ["string", "null"]},
+          "expected_tier_counts": {
+            "type": "object",
+            "properties": {
+              "urgent": {"type": "integer", "minimum": 0},
+              "high": {"type": "integer", "minimum": 0},
+              "medium": {"type": "integer", "minimum": 0},
+              "low": {"type": "integer", "minimum": 0},
+              "informational": {"type": "integer", "minimum": 0}
+            },
+            "additionalProperties": false
+          },
+          "regression_limits": {
+            "type": "object",
+            "properties": {
+              "max_count_by_tier": {"$ref": "#/$defs/countLimits"},
+              "max_ratio_by_tier": {
+                "type": "object",
+                "additionalProperties": {"type": "number", "minimum": 0}
+              },
+              "allowed_count_delta_by_tier": {"$ref": "#/$defs/countLimits"},
+              "min_total_findings": {"type": "integer", "minimum": 0},
+              "max_total_findings_delta_ratio": {"type": "number", "minimum": 0}
+            },
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "$defs": {
+    "countLimits": {
+      "type": "object",
+      "additionalProperties": {"type": "integer", "minimum": 0}
+    }
+  },
+  "additionalProperties": false
+}
