@@ -28,6 +28,7 @@ class KubernetesExposureEvaluator(ProviderEvaluator):
                 "network_policy_deny_all",
                 "private_endpoint",
                 "service_mesh_deny",
+                "service_mesh_authz_no_allow",
             }
         ),
         constraining_network_kinds=frozenset(

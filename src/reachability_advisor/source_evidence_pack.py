@@ -48,8 +48,10 @@ class EcosystemEvidencePack:
             "coverage_gate": {
                 "critical_external_evidence_coverage": 1.0,
                 "critical_query_family_coverage": 1.0,
+                "critical_proven_query_family_coverage": 1.0,
                 "requires_matchable_selector": True,
                 "requires_relevant_query_family": True,
+                "requires_proven_query_family": True,
                 "rejects_dependency_only_critical_source": True,
             },
         }
@@ -117,8 +119,10 @@ class SourceEvidencePack:
                 "requires_external_evidence": True,
                 "critical_external_evidence_coverage": 1.0,
                 "critical_query_family_coverage": 1.0,
+                "critical_proven_query_family_coverage": 1.0,
                 "rejects_dependency_only_critical_source": True,
                 "requires_relevant_query_family": True,
+                "requires_proven_query_family": True,
                 "selector_contract": "artifact plus package URL, component, or vulnerability selector",
                 "required_profiles": [pack.name for pack in self.ecosystem_packs],
                 "required_query_packs": [pack.id for pack in self.query_packs],

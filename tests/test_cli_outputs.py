@@ -403,7 +403,9 @@ class CliTests(unittest.TestCase):
             report = json.loads(coverage.read_text(encoding="utf-8"))
             self.assertEqual(report["summary"]["critical_external_evidence_coverage"], 1.0)
             self.assertEqual(report["summary"]["critical_query_family_coverage"], 0.0)
+            self.assertEqual(report["summary"]["critical_proven_query_family_coverage"], 0.0)
             self.assertEqual(report["summary"]["critical_findings_missing_query_family"], 1)
+            self.assertEqual(report["summary"]["critical_findings_missing_proven_query_family"], 1)
             self.assertEqual(report["artifacts"][0]["critical_packages"][0]["missing_query_families"], ["http-client"])
 
             evidence.write_text(
@@ -441,6 +443,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(code, 0)
             report = json.loads(coverage.read_text(encoding="utf-8"))
             self.assertEqual(report["summary"]["critical_query_family_coverage"], 1.0)
+            self.assertEqual(report["summary"]["critical_proven_query_family_coverage"], 1.0)
             self.assertEqual(report["artifacts"][0]["critical_packages"][0]["evidence_query_families"], ["http-client"])
 
     def test_production_profile_rejects_critical_dependency_only_source(self) -> None:

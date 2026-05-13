@@ -11,3 +11,5 @@ reachability-advisor benchmark-snapshots \
 ```
 
 The gate is focused on over-prioritization. It fails when high or urgent tiers inflate beyond the configured limits, when per-case distributions drift too far, or when an expected case no longer passes.
+
+Use `configs/scoring-benchmark.json` for labeled scoring decisions. That benchmark checks individual urgent, high, medium, and low cases with an expected reason, score band, and required evidence labels. The real-app snapshot in this directory checks release-to-release distribution drift.

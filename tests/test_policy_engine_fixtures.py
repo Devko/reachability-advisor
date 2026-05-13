@@ -51,6 +51,10 @@ class ProviderPolicyFixtureTests(unittest.TestCase):
                 if expected.get("principal_matched"):
                     self.assertTrue(all(item["matched"]["principal"] for item in matched))
                     self.assertTrue(all(item["principals"] for item in matched))
+                if isinstance(expected.get("effective_permission"), dict):
+                    permission = expected["effective_permission"]
+                    self.assertEqual(policy["decision"], permission["decision"])
+                    self.assertEqual(not str(evaluated["decision"]).startswith("denied"), permission["allowed"])
 
     def test_aws_policy_engine_handles_raw_documents_conditions_boundaries_and_trust(self) -> None:
         records = evaluate_aws_policy_records(

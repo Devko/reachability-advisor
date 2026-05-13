@@ -39,6 +39,7 @@ class GcpExposureEvaluator(ProviderEvaluator):
                 "cloud_armor_policy",
                 "firewall_priority_unknown",
                 "iap_required",
+                "private_endpoint_egress_only",
                 "route_precedence_unknown",
                 "source_cidr_restriction",
                 "waf_or_firewall_policy",
@@ -98,7 +99,7 @@ class GcpExposureEvaluator(ProviderEvaluator):
                     "evidence": "GCP Cloud Armor or backend security policy is linked to the path",
                 }
             )
-        if "priority" in text and ("firewall" in text or "hierarchical" in text):
+        if "precedence_evaluated" not in text and "priority" in text and ("firewall" in text or "hierarchical" in text):
             augmented.append(
                 {
                     "kind": "firewall_priority_unknown",
@@ -107,7 +108,7 @@ class GcpExposureEvaluator(ProviderEvaluator):
                     "evidence": "GCP firewall priority evidence is present and must be evaluated with hierarchy",
                 }
             )
-        if "google_compute_route" in text or "route" in text:
+        if "precedence_evaluated" not in text and ("google_compute_route" in text or "route" in text):
             augmented.append(
                 {
                     "kind": "route_precedence_unknown",
@@ -118,14 +119,24 @@ class GcpExposureEvaluator(ProviderEvaluator):
             )
         exposure = str(network.get("exposure") or "").lower()
         if exposure in {"public", "external"} and ("private_service_connect" in text or "psc" in text):
-            augmented.append(
-                {
-                    "kind": "private_endpoint",
-                    "effect": "blocks",
-                    "provider": self.provider,
-                    "evidence": "GCP Private Service Connect evidence restricts the path to private endpoints",
-                }
-            )
+            if "private_endpoint_egress_only" in text:
+                augmented.append(
+                    {
+                        "kind": "private_endpoint_egress_only",
+                        "effect": "constrains",
+                        "provider": self.provider,
+                        "evidence": "GCP Private Service Connect evidence is outbound/dependency traffic, not public ingress",
+                    }
+                )
+            else:
+                augmented.append(
+                    {
+                        "kind": "private_endpoint",
+                        "effect": "blocks",
+                        "provider": self.provider,
+                        "evidence": "GCP Private Service Connect evidence restricts the path to private endpoints",
+                    }
+                )
         if "ingress_internal" in text or "ingress=internal" in text or "internal-and-cloud-load-balancing" in text:
             augmented.append(
                 {

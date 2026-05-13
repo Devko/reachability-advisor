@@ -439,6 +439,8 @@ def _evaluate_gcp(record: PolicyRecord, documents: list[PolicyRecord]) -> Policy
         blockers.append(_blocker("workload_identity_condition", "constrains", "gcp", "Workload Identity mapping participates in access"))
     if "serviceaccounts.actas" in action or "iamcredentials." in action:
         blockers.append(_blocker("service_account_impersonation", "constrains", "gcp", f"{action} can impersonate or mint service account credentials"))
+    for scope_kind in _gcp_scope_blockers(resource, documents):
+        blockers.append(_blocker(scope_kind, "constrains", "gcp", f"GCP scope constraint: {scope_kind}"))
 
     decision = "denied" if deny_layers else "constrained_allow" if blockers else "allowed"
     return _evaluation_result(
@@ -728,7 +730,7 @@ def _kubernetes_statement_asts(layer: str, documents: list[PolicyRecord]) -> lis
 
 def _evaluate_statement(statement: PolicyStatementAst, request: PolicyRequest) -> StatementMatch:
     action_matched = _pattern_set_applies(statement.actions, statement.not_actions, request.action)
-    resource_matched = _pattern_set_applies(statement.resources, statement.not_resources, request.resource, default_when_empty=True)
+    resource_matched = _resource_pattern_set_applies(statement, request)
     principal_matched = _pattern_set_applies(statement.principals, statement.not_principals, request.principal, default_when_empty=True)
     condition_state, condition_blockers, unknowns = _conditions_apply(statement, request)
     matched = action_matched and resource_matched and principal_matched and condition_state != "not_satisfied"
@@ -1119,6 +1121,17 @@ def _azure_scope_blockers(resource: str, documents: list[PolicyRecord]) -> list[
     return []
 
 
+def _gcp_scope_blockers(resource: str, documents: list[PolicyRecord]) -> list[str]:
+    text = f"{resource} {json.dumps(documents, sort_keys=True, default=str)}".lower()
+    if "organizations/" in text or "organization" in text:
+        return ["organization_scope"]
+    if "folders/" in text or "folder" in text:
+        return ["folder_scope"]
+    if "projects/" in text or "project" in text:
+        return ["project_scope"]
+    return []
+
+
 def _kubernetes_scope_blockers(record: PolicyRecord, documents: list[PolicyRecord]) -> list[str]:
     text = f"{json.dumps(record, sort_keys=True, default=str)} {json.dumps(documents, sort_keys=True, default=str)}".lower()
     blockers: list[str] = []
@@ -1132,8 +1145,39 @@ def _kubernetes_scope_blockers(record: PolicyRecord, documents: list[PolicyRecor
 def _kubernetes_action_parts(action: str, resource: str) -> tuple[str, str]:
     tokens = [token for token in action.replace("/", " / ").split() if token != "/"]
     if len(tokens) >= 2:
-        return tokens[0].lower(), tokens[1].lower()
+        return tokens[0].lower(), "/".join(tokens[1:]).lower()
     return action.lower(), resource.lower()
+
+
+def _resource_pattern_set_applies(statement: PolicyStatementAst, request: PolicyRequest) -> bool:
+    if statement.not_resources and _patterns_match(list(statement.not_resources), request.resource):
+        return False
+    if statement.resources:
+        patterns = list(statement.resources)
+        return _patterns_match(patterns, request.resource) or _provider_scope_applies(request.provider, patterns, request.resource)
+    return not statement.not_resources
+
+
+def _provider_scope_applies(provider: str, patterns: list[str], resource: str) -> bool:
+    resource = resource.lower()
+    if provider == "azure":
+        return any(_azure_scope_applies(pattern, resource) for pattern in patterns)
+    if provider == "gcp":
+        return any(_gcp_scope_applies(pattern, resource) for pattern in patterns)
+    return False
+
+
+def _azure_scope_applies(pattern: str, resource: str) -> bool:
+    pattern = pattern.lower()
+    return ("managementgroups/" in pattern or "managementgroup" in pattern) and resource.startswith("/subscriptions/")
+
+
+def _gcp_scope_applies(pattern: str, resource: str) -> bool:
+    pattern = pattern.lower()
+    return (
+        pattern.startswith("organizations/")
+        and (resource.startswith("projects/") or resource.startswith("folders/"))
+    ) or (pattern.startswith("folders/") and resource.startswith("projects/"))
 
 
 def _kubernetes_privilege_escalation_verbs(verb: str, resource: str) -> list[str]:

@@ -43,6 +43,59 @@
       "components": [
         {"name": "net/http", "purl": "pkg:golang/net/http", "expected_query_families": ["http-client", "web-handler"]}
       ]
+    },
+    {
+      "id": "go-yaml-loader",
+      "ecosystem": "go",
+      "path": "go-yaml-loader",
+      "components": [
+        {"name": "gopkg.in/yaml.v3", "purl": "pkg:golang/gopkg.in/yaml.v3@v3.0.1", "expected_query_families": ["deserialization"]}
+      ]
+    },
+    {
+      "id": "npm-template-injection",
+      "ecosystem": "npm",
+      "path": "npm-template-injection",
+      "components": [
+        {"name": "ejs", "purl": "pkg:npm/ejs@3.1.6", "expected_query_families": ["template-engine"]},
+        {"name": "express", "purl": "pkg:npm/express@4.18.2", "expected_query_families": ["web-handler"]}
+      ]
+    },
+    {
+      "id": "python-jinja-template",
+      "ecosystem": "pypi",
+      "path": "python-jinja-template",
+      "components": [
+        {"name": "jinja2", "purl": "pkg:pypi/jinja2@2.11.3", "expected_query_families": ["template-engine"]},
+        {"name": "fastapi", "purl": "pkg:pypi/fastapi@0.95.0", "expected_query_families": ["web-handler"]}
+      ]
+    },
+    {
+      "id": "npm-upload-path",
+      "ecosystem": "npm",
+      "path": "npm-upload-path",
+      "components": [
+        {"name": "multer", "purl": "pkg:npm/multer@1.4.4", "expected_query_families": ["archive-file-io"]},
+        {"name": "express", "purl": "pkg:npm/express@4.18.2", "expected_query_families": ["web-handler"]}
+      ]
+    },
+    {
+      "id": "maven-zip-slip",
+      "ecosystem": "maven",
+      "path": "maven-zip-slip",
+      "components": [
+        {"name": "commons-compress", "group": "org.apache.commons", "purl": "pkg:maven/org.apache.commons/commons-compress@1.20", "expected_query_families": ["archive-file-io"]},
+        {"name": "spring-web", "group": "org.springframework", "purl": "pkg:maven/org.springframework/spring-web@5.3.18", "expected_query_families": ["web-handler"]}
+      ]
+    },
+    {
+      "id": "go-jwt-verification",
+      "ecosystem": "go",
+      "path": "go-jwt-verification",
+      "components": [
+        {"name": "github.com/golang-jwt/jwt/v4", "purl": "pkg:golang/github.com/golang-jwt/jwt/v4@v4.4.0", "expected_query_families": ["auth-token-crypto"]},
+        {"name": "net/http", "purl": "pkg:golang/net/http", "expected_query_families": ["web-handler"]}
+      ]
     }
   ],
   "pinned_public_cases": [

@@ -198,6 +198,16 @@ QUERY_PACKS: tuple[PackageFamilyQueryPack, ...] = (
 
 QUERY_PACKS_BY_ID: dict[str, PackageFamilyQueryPack] = {pack.id: pack for pack in QUERY_PACKS}
 
+PROVEN_QUERY_FAMILIES: tuple[str, ...] = (
+    "archive-file-io",
+    "auth-token-crypto",
+    "deserialization",
+    "http-client",
+    "logging",
+    "template-engine",
+    "web-handler",
+)
+
 
 def query_family_ids_for_component(component: Component) -> tuple[str, ...]:
     """Return maintained query-family IDs relevant to a component."""
@@ -238,6 +248,16 @@ def normalize_query_family_ids(values: Any) -> tuple[str, ...]:
     return tuple(sorted(set(normalized)))
 
 
+def proven_query_family_ids() -> tuple[str, ...]:
+    """Return package families whose maintained queries have checked-in true-positive samples."""
+
+    return PROVEN_QUERY_FAMILIES
+
+
+def query_family_is_proven(family_id: str) -> bool:
+    return family_id.lower().replace("_", "-") in PROVEN_QUERY_FAMILIES
+
+
 def _component_names(component: Component) -> set[str]:
     names = {component.name, component.display_name}
     parsed = parse_purl(component.purl)
@@ -259,7 +279,10 @@ __all__ = [
     "QUERY_PACKS",
     "QUERY_PACKS_BY_ID",
     "PackageFamilyQueryPack",
+    "PROVEN_QUERY_FAMILIES",
     "normalize_query_family_ids",
+    "proven_query_family_ids",
+    "query_family_is_proven",
     "query_family_ids_for_component",
     "query_family_ids_for_rule",
 ]

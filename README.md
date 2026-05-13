@@ -29,7 +29,7 @@ Outputs:
 - rendered Kubernetes manifest coverage reports;
 - SBOM/source/Terraform mapping reports;
 - release evidence readiness reports.
-- real-app benchmark snapshot regression reports for tier inflation checks.
+- labeled scoring benchmark cases with expected rationale labels, plus real-app benchmark snapshot reports for tier inflation checks.
 
 Package version: **v1.0.0**.
 License: **GNU GPL v3.0 or later**.
@@ -383,7 +383,7 @@ python scripts/run_complex_app_validation.py \
 ```
 
 Outputs are written to `outputs/external-complex/`, including schema-validated `benchmark.json` and `benchmark.md` for release-to-release drift checks.
-The checked-in benchmark snapshot gates over-prioritization. It records expected tier distributions for the real-app corpus and fails when high or urgent findings inflate beyond the configured limits.
+The checked-in scoring benchmark gates individual decisions with expected rationale labels. The real-app benchmark snapshot gates over-prioritization by recording expected tier distributions and failing when high or urgent findings inflate beyond the configured limits.
 Local scale-test snapshot:
 
 - AWS Retail Store: 5 service SBOMs, 40 Grype matches, 40 findings, 24 remediation groups, 91 Terraform resources, 0.8 deployment artifact-match coverage, and generated HTML graph.
@@ -455,13 +455,13 @@ The `ide/vscode` directory contains a VS Code extension. It discovers local scan
 | Vulnerability input | Grype JSON, local JSON, and small OSV-Scanner-style JSON. Records normalize severity, CVSS, EPSS, KEV, VEX, fix data, references, source attribution, and timestamps into each finding |
 | Source reachability | JVM, Node, Python, and Go rules with same-function input/sink evidence, bounded handler-to-sink paths, CycloneDX dependency-graph evidence, and package-manager manifest evidence for Maven/Gradle, npm/pnpm/Yarn, Poetry/requirements, and Go modules |
 | Custom source rules | `--reachability-rules` JSON and `export-semgrep-rules` starter YAML |
-| External source evidence | `--source-evidence-in` for Reachability Advisor JSON, Semgrep JSON, SARIF/CodeQL, and govulncheck JSONL. `source-evidence-pack` writes maintained Semgrep/CodeQL/govulncheck assets for npm, Maven/Gradle, Python, and Go plus package-family query packs. Production gates reject artifact-only, unscoped, dependency-only, or missing query-family evidence for critical findings |
-| Terraform context | Primary deployment context. AWS, Azure, GCP, and Kubernetes plan/source support with coverage reporting, artifact matching, network graphing, provider resource-graph building, typed edge precedence, typed path blockers, AWS route/security-group/NACL/ALB/API Gateway/WAF evaluation, route/private-endpoint/firewall-tag hints, IAM allow/deny capability records, structured provider policy AST evaluation for principal/action/resource/condition matching, AWS `sts:AssumeRole` trust constraints, Azure RBAC deny assignments/PIM/role conditions, GCP deny policies/principal access boundaries/Workload Identity, Kubernetes RBAC scope/high-risk verbs, provider-specific effective exposure and IAM decisions, deny precedence, per-provider evaluation order, normalized effective access models, and IAM impact classification |
+| External source evidence | `--source-evidence-in` for Reachability Advisor JSON, Semgrep JSON, SARIF/CodeQL, and govulncheck JSONL. `source-evidence-pack` writes maintained Semgrep/CodeQL/govulncheck assets for npm, Maven/Gradle, Python, and Go plus package-family query packs. Production gates reject artifact-only, unscoped, dependency-only, missing query-family, or unproven query-family evidence for critical findings |
+| Terraform context | Primary deployment context. AWS, Azure, GCP, and Kubernetes plan/source support with coverage reporting, artifact matching, network graphing, provider resource-graph building, typed edge precedence, typed path blockers, AWS route/security-group/NACL/ALB/API Gateway/WAF evaluation, AWS/Azure/GCP route precedence, private endpoint direction, NSG/firewall deny-before-allow behavior, service-mesh authz, route/private-endpoint/firewall-tag hints, IAM allow/deny capability records, structured provider policy AST evaluation for principal/action/resource/condition matching, AWS `sts:AssumeRole` trust constraints, Azure RBAC deny assignments/PIM/role conditions, GCP deny policies/principal access boundaries/Workload Identity, Kubernetes RBAC scope/high-risk verbs, provider-specific effective exposure and IAM decisions, deny precedence, per-provider evaluation order, normalized effective access models, and IAM impact classification |
 | Kubernetes manifests | Rendered YAML/JSON workload, Service, Ingress, RBAC, and NetworkPolicy context with artifact matching and coverage reporting |
 | Artifact manifest | `--artifact-manifest` for CI-supplied image digests, registry refs, Git SHA, SBOM paths, Helm values images, Kustomize images, and Terraform image outputs |
 | Context JSON | Explicit override/enrichment keyed by artifact name |
 | Outputs | JSON with remediation groups and raw findings, unified effective exposure graph JSON, baseline JSON, PR delta JSON/Markdown, SARIF, diagnostics JSON, Markdown, interactive HTML, annotations, Terraform coverage JSON, Kubernetes coverage JSON, source coverage JSON, mapping JSON, readiness JSON |
-| CI quality gates | Built-in scan gates for artifact match coverage, strong artifact identity coverage, mapping warnings, source rule coverage, external evidence presence, external selector usability, critical external coverage, critical query-family coverage, weak workload matches, low-confidence network/IAM evidence, readiness blockers, and readiness warnings |
+| CI quality gates | Built-in scan gates for artifact match coverage, strong artifact identity coverage, mapping warnings, source rule coverage, external evidence presence, external selector usability, critical external coverage, critical query-family coverage, critical proven query-family coverage, weak workload matches, low-confidence network/IAM evidence, readiness blockers, and readiness warnings |
 
 ## Import/export contract
 
@@ -495,7 +495,7 @@ make package
 Current validation snapshot:
 
 ```text
-Ran 519 tests: OK
+Ran 526 tests: OK
 Coverage: 93%
 Coverage gate: 93% passed
 Fixture packs: 9 passed, 0 failed

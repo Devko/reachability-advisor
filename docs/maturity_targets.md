@@ -20,9 +20,9 @@ Implemented controls:
 - `fixtures/source-vulnerable-apps/coverage-expectations.json` defines checked-in vulnerable sample apps and pinned public repository commits used to measure package-family true-positive coverage. Unit tests require the maintained family rules to cover every expected local sample.
 - The plan JSON includes ecosystem profiles for npm/pnpm/Yarn, Maven/Gradle, PyPI/Poetry/pip, and Go modules.
 - `--analysis-profile production` requires external source evidence and usable selectors.
-- Production gates require `critical_external_evidence_coverage=1.0` and `critical_query_family_coverage=1.0` unless a stricter user threshold is supplied.
+- Production gates require `critical_external_evidence_coverage=1.0`, `critical_query_family_coverage=1.0`, and `critical_proven_query_family_coverage=1.0` unless a stricter user threshold is supplied.
 - `--require-strong-source-for-critical` fails when critical findings only have `absent`, `unknown_due_to_no_rule`, `package_present`, or `dependency_reachable` evidence. Production profile enables the same gate.
-- `source-coverage.json` reports critical package rows, external evidence coverage per critical package, selected external evidence coverage, rule gaps, and weak-source counts.
+- `source-coverage.json` reports critical package rows, external evidence coverage per critical package, selected external evidence coverage, proven query-family coverage, rule gaps, and weak-source counts.
 
 ## IAM effective access
 
@@ -42,7 +42,7 @@ Implemented controls:
 - `sts:AssumeRole` expands visible target-role blast radius when both roles are present in the plan.
 - Provider evaluators add provider decision bases and normalize scoped resources, conditions, explicit denies, permissions boundaries, SCPs, Azure deny assignments, GCP deny policies, Workload Identity, and Kubernetes RBAC scope before scoring.
 - AWS, Azure, GCP, and Kubernetes evaluators now run a structured policy engine before effective-access selection when records include policy documents. The engine parses provider policy ASTs and evaluates principal, action, resource, and condition matches. It models explicit deny precedence, conditions, boundaries, inherited scope, trust, resource policies, and cross-account or workload identity constraints from AWS IAM statements, Azure RBAC/deny assignments, GCP IAM/deny/PAB/org policies, and Kubernetes RBAC rules.
-- `fixtures/policies/provider-policy-examples.json` exercises boundary, SCP, resource-policy, cross-account, deny-assignment, principal-access-boundary, Workload Identity, and Kubernetes service-account escalation cases without requiring a cloud account.
+- `fixtures/policies/provider-policy-examples.json` exercises boundary, SCP, session-policy, resource-policy, source-VPC-endpoint condition, cross-account, deny-assignment, inherited Azure scope, principal-access-boundary, GCP organization policy, Workload Identity, and Kubernetes service-account escalation cases without requiring a cloud account.
 - Selected identity results emit `evaluation_order`, `policy_evaluation`, and `effective_access_model` for the chosen identity/resource/action decision. Azure, GCP, and Kubernetes expose provider-layer states comparable to AWS: deny controls, allow basis, resource policy or role/binding scope, conditions, inherited scope, provider-specific boundaries, and high-risk identity transitions.
 
 ## Network exposure
@@ -63,7 +63,7 @@ Implemented controls:
 - Lateral inference is bounded to linked security groups, target attachments, selectors, route/private-network bridges, and IAM network-control pivots.
 - The effective exposure engine delegates network and IAM decisions to AWS, Azure, GCP, Kubernetes, and fallback provider evaluators before scoring.
 - Provider evaluators emit `reachable`, `constrained`, `blocked`, `isolated`, or `unknown` decisions and carry blocker/unknown semantics from the provider layer into scoring.
-- Provider network evaluators add decision bases for AWS source security groups/CIDRs, source VPC endpoint conditions, WAF/API authorizers, Azure access restrictions/NSG/WAF/private endpoints, GCP IAP/Cloud Armor/Private Service Connect/internal ingress, and Kubernetes NetworkPolicy/service-mesh/internal-ingress evidence. Resource-graph tests cover AWS NACL rule ordering, Azure NSG priority, GCP firewall priority, and Kubernetes deny-policy precedence.
+- Provider network evaluators add decision bases for AWS source security groups/CIDRs, source VPC endpoint conditions, WAF/API authorizers, Azure access restrictions/NSG/WAF/private endpoints, GCP IAP/Cloud Armor/Private Service Connect/internal ingress, and Kubernetes NetworkPolicy/service-mesh/internal-ingress evidence. Golden resource-graph fixtures cover route precedence, deny-before-allow rule selection, private endpoint direction, and Kubernetes service-mesh authorization decisions.
 
 ## Terraform and artifact matching
 
@@ -84,7 +84,7 @@ Implemented controls:
 - `artifact-manifest init` and `artifact-manifest validate` let CI create and check that manifest before scanning.
 - `rendered-iac-plan` writes the Terraform, Helm, and Kustomize render commands expected before a release scan.
 - `--mapping-out` records candidate source, strength, match method, match score, and mapping warnings.
-- `--readiness-out` and `evidence-profile` report missing release identity, missing SBOM paths, missing or weak workload matches, missing network paths, missing identity paths, low-confidence network or identity evidence, external source coverage, query-family coverage, and unrendered IaC gaps.
+- `--readiness-out` and `evidence-profile` report missing release identity, missing SBOM paths, missing or weak workload matches, missing network paths, missing identity paths, low-confidence network or identity evidence, external source coverage, query-family coverage, proven query-family coverage, and unrendered IaC gaps.
 - Quality gates can enforce artifact match coverage, strong artifact identity coverage, mapping warning failures, readiness blockers, and readiness warnings.
 
 ## IDE integration

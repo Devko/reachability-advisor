@@ -268,7 +268,9 @@ Generated with `source-evidence-pack --output-dir`.
     "requires_external_evidence": true,
     "critical_external_evidence_coverage": 1.0,
     "critical_query_family_coverage": 1.0,
+    "critical_proven_query_family_coverage": 1.0,
     "requires_relevant_query_family": true,
+    "requires_proven_query_family": true,
     "rejects_dependency_only_critical_source": true,
     "selector_contract": "artifact plus package URL, component, or vulnerability selector"
   }
@@ -302,6 +304,7 @@ Generated with `--source-coverage-out`.
     "critical_findings_missing_query_family": 1,
     "source_rule_coverage": 0.9167,
     "critical_query_family_coverage": 0.75,
+    "critical_proven_query_family_coverage": 0.75,
     "external_evidence_usable_ratio": 0.6667,
     "external_evidence_selected_ratio": 0.5833,
     "analysis_profile": "production",
@@ -426,7 +429,7 @@ Schema draft: `schemas/runtime-policy.schema.json`.
 
 Generated findings and evidence graphs include `effective_exposure`. Terraform plan and rendered Kubernetes inputs generate this record during analysis. External context files may also provide it directly.
 
-`network_paths[]` may carry provider resources or an explicit provider network graph instead of only a label and hop list. When structured resources are present, provider evaluators build typed graph edges first and attach precedence evidence. Examples include AWS route/NACL/security-group records, Azure NSG rules, GCP firewall rules, and Kubernetes NetworkPolicy or service-mesh policy records. If the upstream renderer already has explicit links, use `network_graph.edges` or `network_edges`. Each edge uses `from`, `to`, and `type` or `kind`; provider evaluators solve a path from `entry` to `target` and evaluate each edge by type. Supported edge types include AWS `route`, `security_group`, `network_acl`, `load_balancer`, `api_gateway`, `serverless_url`, `waf`, and `private_endpoint`; Azure `network_security_group`, `route`, `gateway`, `access_restriction`, `auth`, `waf`, and `private_endpoint`; GCP `firewall`, `route`, `iap`, `cloud_armor`, `private_endpoint`, `serverless_ingress`, and `vpc_connector`; and Kubernetes `ingress`, `network_policy`, `service_mesh`, and `pod_security`. The solved path is emitted as `network.network_graph` with per-edge state, blockers, unknowns, `precedence`, `precedence_reason`, and `resource_graph.precedence_rules`.
+`network_paths[]` may carry provider resources or an explicit provider network graph instead of only a label and hop list. When structured resources are present, provider evaluators build typed graph edges first and attach precedence evidence. Examples include AWS route/NACL/security-group records, Azure route/NSG rules, GCP route/firewall rules, and Kubernetes NetworkPolicy or service-mesh policy records. If the upstream renderer already has explicit links, use `network_graph.edges` or `network_edges`. Each edge uses `from`, `to`, and `type` or `kind`; provider evaluators solve a path from `entry` to `target` and evaluate each edge by type. Supported edge types include AWS `route`, `security_group`, `network_acl`, `load_balancer`, `api_gateway`, `serverless_url`, `waf`, and `private_endpoint`; Azure `network_security_group`, `route`, `gateway`, `access_restriction`, `auth`, `waf`, and `private_endpoint`; GCP `firewall`, `route`, `iap`, `cloud_armor`, `private_endpoint`, `serverless_ingress`, and `vpc_connector`; and Kubernetes `ingress`, `network_policy`, `service_mesh`, and `pod_security`. Route records should include destination prefixes such as `destination_cidr_block`, `address_prefix`, or `dest_range`; optional `source_cidr`/`source_ip` on the path lets the selector choose a more-specific return route. Private endpoint records should include `direction` or `target_role` when they describe outbound dependency access rather than inbound service exposure. Service-mesh policy records should include `action` and source principal fields when authz matching is known. The solved path is emitted as `network.network_graph` with per-edge state, blockers, unknowns, `precedence`, `precedence_reason`, and `resource_graph.precedence_rules`.
 
 ```json
 {
@@ -774,11 +777,12 @@ Generated with `--readiness-out` or `evidence-profile`.
   "schema_version": "1.0",
   "status": "blocked",
   "summary": {
-    "blockers": 2,
+    "blockers": 3,
     "warnings": 0,
     "artifacts": 1,
     "critical_external_evidence_coverage": 0.0,
     "critical_query_family_coverage": 0.0,
+    "critical_proven_query_family_coverage": 0.0,
     "artifacts_missing_release_identity": 1,
     "artifacts_missing_workload_match": 0,
     "artifacts_missing_network_path": 0,
@@ -792,6 +796,10 @@ Generated with `--readiness-out` or `evidence-profile`.
     {
       "kind": "critical_source_query_family_coverage",
       "message": "critical source query-family coverage is 0.0000; expected 1.0"
+    },
+    {
+      "kind": "critical_source_proven_query_family_coverage",
+      "message": "critical proven query-family coverage is 0.0000; expected 1.0"
     }
   ],
   "warnings": [],
@@ -809,7 +817,7 @@ Generated with `--readiness-out` or `evidence-profile`.
 }
 ```
 
-The report lists missing image digest or exact image reference, missing SBOM path, missing or weak deployment workload match, missing network path evidence, missing identity/effective-access evidence, low-confidence network or identity evidence, critical source coverage gaps, critical query-family coverage gaps, and unrendered Terraform or Kubernetes evidence.
+The report lists missing image digest or exact image reference, missing SBOM path, missing or weak deployment workload match, missing network path evidence, missing identity/effective-access evidence, low-confidence network or identity evidence, critical source coverage gaps, critical query-family coverage gaps, critical proven query-family coverage gaps, and unrendered Terraform or Kubernetes evidence.
 
 Schema draft: `schemas/readiness.schema.json`.
 
@@ -909,6 +917,37 @@ reachability-advisor benchmark-snapshots \
 The validator checks aggregate and per-case tier distributions, total finding drift, expected case status, and configured high/urgent limits. It is intentionally a regression guard against over-prioritization, not a replacement for reviewing the underlying findings.
 
 Schema draft: `schemas/benchmark-snapshots.schema.json`.
+
+## Scoring benchmark JSON
+
+`configs/scoring-benchmark.json` is the unit-level scoring contract. It is separate from the real-app snapshot because it checks specific decisions, not only tier counts.
+
+```json
+{
+  "schema_version": "1.0",
+  "require_expected_decisions": true,
+  "cases": [
+    {
+      "id": "public-request-controlled-sensitive",
+      "component": {"name": "log4j-core", "scope": "runtime"},
+      "vulnerability": {"id": "CVE-2021-44228", "package_name": "log4j-core", "cvss": 10.0, "known_exploited": true},
+      "source": {"reachability": "attacker_controlled", "confidence": "high"},
+      "context": {"exposure": "public", "environment": "prod", "privilege": "sensitive", "iam_impacts": ["data_access"]},
+      "expected_tier": "urgent",
+      "expected_decision": {
+        "why": "Known exploited critical vulnerability in request-controlled public code with sensitive IAM.",
+        "required_reason_labels": ["tier:urgent", "severity:critical", "source:attacker_controlled", "network:public", "iam_impact:data_access"]
+      },
+      "min_score": 85,
+      "max_score": 100
+    }
+  ]
+}
+```
+
+`required_reason_labels` are stable machine labels emitted by `scripts/validate_scoring_benchmark.py`. They cover severity, exploit intelligence, source evidence, network state, IAM, asset criticality, confidence, and score gates. A case fails when the expected tier is correct but the expected rationale labels are missing.
+
+Schema draft: `schemas/scoring-benchmark.schema.json`.
 
 ## Evidence graph JSON
 

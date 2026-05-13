@@ -116,6 +116,7 @@ def codeql_query_pack_metadata(query_pack: PackageFamilyQueryPack) -> dict[str, 
 
 def query_pack_sample_coverage(expectations: dict[str, Any], sample_root: Path) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
+    by_family: dict[str, dict[str, Any]] = {}
     total = 0
     covered = 0
     for sample in expectations.get("samples", []):
@@ -130,24 +131,64 @@ def query_pack_sample_coverage(expectations: dict[str, Any], sample_root: Path) 
                 total += 1
                 family_id = str(family)
                 matched_rules = _matching_rules(family_id, source_text, str(component.get("name") or ""))
+                expected_rules = _expected_rules(component, family_id)
                 is_covered = bool(matched_rules)
+                true_positive = set(expected_rules).issubset(matched_rules) if expected_rules else is_covered
+                family_row = by_family.setdefault(
+                    family_id,
+                    {
+                        "query_family": family_id,
+                        "expected": 0,
+                        "covered": 0,
+                        "true_positives": 0,
+                        "samples": set(),
+                        "components": set(),
+                    },
+                )
+                family_row["expected"] += 1
+                family_row["covered"] += 1 if is_covered else 0
+                family_row["true_positives"] += 1 if true_positive else 0
+                family_row["samples"].add(str(sample.get("id") or ""))
+                family_row["components"].add(str(component.get("name") or ""))
                 covered += 1 if is_covered else 0
                 rows.append(
                     {
                         "sample": sample.get("id"),
+                        "ecosystem": sample.get("ecosystem"),
                         "component": component.get("name"),
                         "query_family": family_id,
                         "covered": is_covered,
+                        "true_positive": true_positive,
+                        "expected_rules": expected_rules,
                         "matched_rules": matched_rules,
                     }
                 )
+    family_rows = []
+    for row in sorted(by_family.values(), key=lambda item: item["query_family"]):
+        expected = int(row["expected"])
+        family_rows.append(
+            {
+                "query_family": row["query_family"],
+                "expected": expected,
+                "covered": row["covered"],
+                "true_positives": row["true_positives"],
+                "coverage": round(row["covered"] / expected, 4) if expected else 1.0,
+                "true_positive_coverage": round(row["true_positives"] / expected, 4) if expected else 1.0,
+                "samples": sorted(row["samples"]),
+                "components": sorted(row["components"]),
+            }
+        )
     return {
         "schema_version": "1.0",
         "summary": {
             "expected": total,
             "covered": covered,
             "coverage": round(covered / total, 4) if total else 1.0,
+            "families": len(family_rows),
+            "families_fully_covered": sum(1 for row in family_rows if row["coverage"] == 1.0),
+            "true_positive_coverage": round(sum(row["true_positives"] for row in family_rows) / total, 4) if total else 1.0,
         },
+        "query_families": family_rows,
         "samples": rows,
     }
 
@@ -161,6 +202,14 @@ def _matching_rules(family_id: str, source_text: str, component: str) -> list[st
         if all(re.search(pattern, source_text, flags=re.IGNORECASE | re.MULTILINE) for pattern in rule.patterns):
             matched.append(rule.id)
     return matched
+
+
+def _expected_rules(component: dict[str, Any], family_id: str) -> list[str]:
+    raw = component.get("expected_rules")
+    values = raw.get(family_id) if isinstance(raw, dict) else None
+    if isinstance(values, list):
+        return [str(item) for item in values if str(item)]
+    return []
 
 
 def _read_sample_text(sample_path: Path) -> str:

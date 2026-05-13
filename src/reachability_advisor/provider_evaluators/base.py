@@ -87,7 +87,10 @@ class ProviderEvaluator:
         exposure = str(network.get("exposure") or context.exposure or "unknown").lower()
         graph_eval = self.evaluate_network_graph(network, exposure)
         blockers = self.normalize_blockers([*objects(network.get("blockers")), *objects(graph_eval.get("blockers"))], is_identity=False)
-        blockers = self.normalize_blockers(self.augment_network_blockers(network, blockers), is_identity=False)
+        network_for_augment = dict(network)
+        if graph_eval.get("evaluated"):
+            network_for_augment["provider_network_graph"] = graph_eval
+        blockers = self.normalize_blockers(self.augment_network_blockers(network_for_augment, blockers), is_identity=False)
         effects = {str(item.get("effect") or "") for item in blockers}
         unknowns = [*strings(network.get("unknowns")), *strings(graph_eval.get("unknowns"))]
         path_type = str(network.get("path_type") or path_type_for_exposure(exposure))

@@ -41,6 +41,7 @@ class AzureExposureEvaluator(ProviderEvaluator):
                 "firewall_policy",
                 "front_door_waf",
                 "nsg_priority_unknown",
+                "private_endpoint_egress_only",
                 "route_table_precedence_unknown",
                 "source_cidr_restriction",
                 "waf_or_firewall_policy",
@@ -90,14 +91,24 @@ class AzureExposureEvaluator(ProviderEvaluator):
             )
         exposure = str(network.get("exposure") or "").lower()
         if "private_endpoint" in text or "privatelink" in text:
-            augmented.append(
-                {
-                    "kind": "private_endpoint",
-                    "effect": "blocks" if exposure in {"public", "external"} else "constrains",
-                    "provider": self.provider,
-                    "evidence": "Azure Private Endpoint evidence is linked to the path",
-                }
-            )
+            if "private_endpoint_egress_only" in text:
+                augmented.append(
+                    {
+                        "kind": "private_endpoint_egress_only",
+                        "effect": "constrains",
+                        "provider": self.provider,
+                        "evidence": "Azure Private Endpoint evidence is outbound/dependency traffic, not public ingress",
+                    }
+                )
+            else:
+                augmented.append(
+                    {
+                        "kind": "private_endpoint",
+                        "effect": "blocks" if exposure in {"public", "external"} else "constrains",
+                        "provider": self.provider,
+                        "evidence": "Azure Private Endpoint evidence is linked to the path",
+                    }
+                )
         if "access_restriction" in text and "deny" in text:
             augmented.append(
                 {
@@ -143,7 +154,7 @@ class AzureExposureEvaluator(ProviderEvaluator):
                     "evidence": "Azure Application Gateway authentication evidence is linked to the path",
                 }
             )
-        if "network_security_rule" in text or "nsg" in text:
+        if "precedence_evaluated" not in text and ("network_security_rule" in text or "nsg" in text):
             augmented.append(
                 {
                     "kind": "nsg_priority_unknown",
@@ -152,7 +163,7 @@ class AzureExposureEvaluator(ProviderEvaluator):
                     "evidence": "Azure NSG evidence is present; priority order must be evaluated",
                 }
             )
-        if "route_table" in text or "azurerm_route" in text:
+        if "precedence_evaluated" not in text and ("route_table" in text or "azurerm_route" in text):
             augmented.append(
                 {
                     "kind": "route_table_precedence_unknown",

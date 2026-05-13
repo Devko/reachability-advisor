@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
 NetworkRecord = dict[str, Any]
+IpNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
 
 
 @dataclass(frozen=True)
@@ -189,11 +191,11 @@ def _steps_network_edges(provider: str, network: NetworkRecord) -> list[NetworkE
 def _build_aws_resource_graph(network: NetworkRecord, exposure: str) -> ProviderResourceGraph:
     controls: list[GraphControl] = []
     rules: list[NetworkRecord] = []
-    route = _select_aws_route(_aws_route_records(network), exposure)
+    route = _select_aws_route(_aws_route_records(network), exposure, network)
     if route:
         controls.append(_control("aws", "route", route, "aws_route.selected"))
-        rules.append(_precedence_rule("aws", "route", "longest prefix wins; public ingress requires a default route", route))
-    nacl = _select_aws_nacl_rule(_aws_nacl_rule_records(network))
+        rules.append(_precedence_rule("aws", "route", "matching longest destination prefix wins; public ingress falls back to the default internet route when no source CIDR is supplied", route))
+    nacl = _select_aws_nacl_rule(_aws_nacl_rule_records(network), network)
     if nacl:
         controls.append(_control("aws", "network_acl", nacl, "aws_network_acl_rule.selected"))
         rules.append(_precedence_rule("aws", "network_acl", "lowest numbered matching inbound rule wins", nacl))
@@ -213,11 +215,11 @@ def _build_aws_resource_graph(network: NetworkRecord, exposure: str) -> Provider
 def _build_azure_resource_graph(network: NetworkRecord, exposure: str) -> ProviderResourceGraph:
     controls: list[GraphControl] = []
     rules: list[NetworkRecord] = []
-    route = _select_lowest_priority(_graph_items(network, ("routes", "route", "route_table_routes", "route_table")))
+    route = _select_route_by_precedence(_graph_items(network, ("routes", "route", "route_table_routes", "route_table")), exposure, network)
     if route:
         controls.append(_control("azure", "route", route, "azurerm_route.selected"))
-        rules.append(_precedence_rule("azure", "route", "longest prefix and route-table association decide the selected route; priority breaks ties when present", route))
-    nsg_rule = _select_lowest_priority(_graph_items(network, ("network_security_rules", "network_security_rule", "nsg_rules", "security_rules")))
+        rules.append(_precedence_rule("azure", "route", "matching longest address prefix wins; priority breaks equal-prefix route ties", route))
+    nsg_rule = _select_azure_nsg_rule(_graph_items(network, ("network_security_rules", "network_security_rule", "nsg_rules", "security_rules")), network)
     if nsg_rule:
         controls.append(_control("azure", "network_security_group", nsg_rule, "azurerm_network_security_rule.selected"))
         rules.append(_precedence_rule("azure", "network_security_group", "lowest priority matching NSG rule wins before later allow rules", nsg_rule))
@@ -232,11 +234,11 @@ def _build_azure_resource_graph(network: NetworkRecord, exposure: str) -> Provid
 def _build_gcp_resource_graph(network: NetworkRecord, exposure: str) -> ProviderResourceGraph:
     controls: list[GraphControl] = []
     rules: list[NetworkRecord] = []
-    route = _select_lowest_priority(_graph_items(network, ("routes", "route", "google_compute_route")))
+    route = _select_route_by_precedence(_graph_items(network, ("routes", "route", "google_compute_route")), exposure, network)
     if route:
         controls.append(_control("gcp", "route", route, "google_compute_route.selected"))
-        rules.append(_precedence_rule("gcp", "route", "longest matching destination range wins; priority decides equal-prefix routes", route))
-    firewall = _select_lowest_priority(_graph_items(network, ("firewall_rules", "firewalls", "firewall", "google_compute_firewall")))
+        rules.append(_precedence_rule("gcp", "route", "matching longest destination range wins; priority decides equal-prefix routes", route))
+    firewall = _select_gcp_firewall_rule(_graph_items(network, ("firewall_rules", "firewalls", "firewall", "google_compute_firewall")), network)
     if firewall:
         controls.append(_control("gcp", "firewall", firewall, "google_compute_firewall.selected"))
         rules.append(_precedence_rule("gcp", "firewall", "lowest priority matching firewall rule wins; deny blocks before later allows", firewall))
@@ -400,18 +402,13 @@ def _aws_security_group_rule_records(network: NetworkRecord) -> list[NetworkReco
     return records
 
 
-def _select_aws_route(routes: list[NetworkRecord], exposure: str) -> NetworkRecord | None:
-    candidates = [route for route in routes if _route_prefix_length(route) is not None]
-    if exposure in {"public", "external"}:
-        candidates = [route for route in candidates if _route_destination(route) in {"0.0.0.0/0", "::/0"}]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda route: _route_prefix_length(route) or -1)
+def _select_aws_route(routes: list[NetworkRecord], exposure: str, network: NetworkRecord) -> NetworkRecord | None:
+    return _select_route_by_precedence(routes, exposure, network)
 
 
-def _select_aws_nacl_rule(rules: list[NetworkRecord]) -> NetworkRecord | None:
+def _select_aws_nacl_rule(rules: list[NetworkRecord], network: NetworkRecord) -> NetworkRecord | None:
     inbound = [rule for rule in rules if _direction(rule) in {"ingress", "inbound"}]
-    matching = [rule for rule in inbound if _rule_matches_public_source(rule)]
+    matching = [rule for rule in inbound if _rule_matches_source(rule, network)]
     if not matching:
         return None
     return min(matching, key=lambda rule: _numeric_value(rule, ("rule_number", "number", "priority"), 32767))
@@ -424,10 +421,32 @@ def _select_aws_security_group_rule(rules: list[NetworkRecord]) -> NetworkRecord
     return min(inbound, key=_security_group_precedence)
 
 
-def _select_lowest_priority(items: list[NetworkRecord]) -> NetworkRecord | None:
-    if not items:
+def _select_route_by_precedence(routes: list[NetworkRecord], exposure: str, network: NetworkRecord) -> NetworkRecord | None:
+    candidates: list[tuple[int, int, NetworkRecord]] = []
+    for route in routes:
+        prefix = _route_match_prefix(route, exposure, network)
+        if prefix is None:
+            continue
+        candidates.append((prefix, _numeric_value(route, ("priority", "route_priority", "preference"), 1000), route))
+    if not candidates:
         return None
-    return min(items, key=lambda item: _numeric_value(item, ("priority", "rule_number", "number"), 1000))
+    return sorted(candidates, key=lambda item: (-item[0], item[1]))[0][2]
+
+
+def _select_azure_nsg_rule(rules: list[NetworkRecord], network: NetworkRecord) -> NetworkRecord | None:
+    inbound = [rule for rule in rules if _direction(rule) in {"ingress", "inbound"}]
+    matching = [rule for rule in inbound if _rule_matches_source(rule, network)]
+    if not matching:
+        return None
+    return min(matching, key=lambda item: _numeric_value(item, ("priority", "rule_number", "number"), 4096))
+
+
+def _select_gcp_firewall_rule(rules: list[NetworkRecord], network: NetworkRecord) -> NetworkRecord | None:
+    inbound = [rule for rule in rules if _direction(rule) in {"ingress", "inbound"}]
+    matching = [rule for rule in inbound if _rule_matches_source(rule, network)]
+    if not matching:
+        return None
+    return sorted(matching, key=lambda item: (_numeric_value(item, ("priority", "rule_number", "number"), 1000), 0 if _record_has_deny(item) else 1))[0]
 
 
 def _select_kubernetes_network_policy(items: list[NetworkRecord]) -> NetworkRecord | None:
@@ -528,8 +547,12 @@ def _evaluate_aws_edge(edge: NetworkEdge, exposure: str) -> EdgeDecision:
         return _constrain(edge, "lambda_function_url_aws_iam", "AWS Lambda function URL requires AWS IAM authorization")
     if edge_type == "waf":
         return _constrain(edge, "waf_or_firewall_policy", "AWS WAF edge is attached to the path")
-    if edge_type == "private_endpoint" and exposure in {"public", "external"}:
-        return _block(edge, "vpc_endpoint_only", "AWS path is restricted to VPC endpoint or PrivateLink access")
+    if edge_type == "private_endpoint":
+        if _private_endpoint_direction(edge.raw) == "egress":
+            return _constrain(edge, "private_endpoint_egress_only", "AWS VPC endpoint is outbound/dependency path evidence, not public ingress")
+        if exposure in {"public", "external"}:
+            return _block(edge, "vpc_endpoint_only", "AWS path is restricted to VPC endpoint or PrivateLink access")
+        return _constrain(edge, "vpc_endpoint_only", "AWS VPC endpoint constrains the private path")
     return _allow(edge)
 
 
@@ -549,9 +572,15 @@ def _evaluate_azure_edge(edge: NetworkEdge, exposure: str) -> EdgeDecision:
         next_hop = _first_string(edge.raw, ("next_hop_type", "nextHopType", "target", "next_hop"))
         if next_hop.lower() in {"none", "blackhole"}:
             return _block(edge, "route_blackhole", "Azure route edge drops traffic")
+        if edge.raw.get("precedence_evaluated") and _is_public_route_target(next_hop, "azure"):
+            return _allow(edge)
         return _constrain(edge, "route_table_precedence_unknown", "Azure route edge requires route-table precedence evaluation")
-    if edge_type == "private_endpoint" and exposure in {"public", "external"}:
-        return _block(edge, "private_endpoint", "Azure Private Endpoint restricts public access")
+    if edge_type == "private_endpoint":
+        if _private_endpoint_direction(edge.raw) == "egress":
+            return _constrain(edge, "private_endpoint_egress_only", "Azure Private Endpoint is outbound/dependency path evidence, not public ingress")
+        if exposure in {"public", "external"}:
+            return _block(edge, "private_endpoint", "Azure Private Endpoint restricts public access")
+        return _constrain(edge, "private_endpoint", "Azure Private Endpoint constrains the private path")
     if edge_type == "access_restriction":
         if "deny" in text:
             return _block(edge, "access_restriction_deny", "Azure access restriction denies the path")
@@ -582,13 +611,22 @@ def _evaluate_gcp_edge(edge: NetworkEdge, exposure: str) -> EdgeDecision:
             return _constrain(edge, "firewall_priority_unknown", "GCP firewall edge requires priority and hierarchy evaluation")
         return _allow(edge)
     if edge_type == "route":
+        next_hop = _first_string(edge.raw, ("next_hop_gateway", "next_hop_internet", "next_hop_instance", "next_hop_vpn_tunnel", "next_hop_ilb", "target", "next_hop"))
+        if "blackhole" in text or next_hop.lower() in {"none", "blackhole"}:
+            return _block(edge, "route_blackhole", "GCP route edge drops traffic")
+        if edge.raw.get("precedence_evaluated") and _is_public_route_target(next_hop, "gcp"):
+            return _allow(edge)
         return _constrain(edge, "route_precedence_unknown", "GCP route edge requires precedence evaluation")
     if edge_type == "iap":
         return _constrain(edge, "iap_required", "GCP IAP is linked to the path")
     if edge_type == "cloud_armor":
         return _constrain(edge, "cloud_armor_policy", "GCP Cloud Armor is linked to the path")
-    if edge_type == "private_endpoint" and exposure in {"public", "external"}:
-        return _block(edge, "private_endpoint", "GCP Private Service Connect restricts public access")
+    if edge_type == "private_endpoint":
+        if _private_endpoint_direction(edge.raw) == "egress":
+            return _constrain(edge, "private_endpoint_egress_only", "GCP Private Service Connect is outbound/dependency path evidence, not public ingress")
+        if exposure in {"public", "external"}:
+            return _block(edge, "private_endpoint", "GCP Private Service Connect restricts public access")
+        return _constrain(edge, "private_endpoint", "GCP Private Service Connect constrains the private path")
     if edge_type == "serverless_ingress" and ("internal" in text or "ingress_internal" in text):
         return _block(edge, "ingress_internal_only", "GCP serverless ingress is internal only") if exposure in {"public", "external"} else _constrain(edge, "ingress_internal_only", "GCP serverless ingress is internal only")
     if edge_type == "vpc_connector" and "egress" in text and "all" in text:
@@ -609,8 +647,10 @@ def _evaluate_kubernetes_edge(edge: NetworkEdge, exposure: str) -> EdgeDecision:
         if _has_auth(text):
             return _constrain(edge, "ingress_controller_auth", "Kubernetes ingress controller authentication is configured")
     if edge_type == "service_mesh":
-        if "deny" in text:
+        if _service_mesh_denies(edge.raw):
             return _block(edge, "authorization_policy_deny", "Kubernetes service-mesh policy denies the path")
+        if _service_mesh_allow_misses_source(edge.raw):
+            return _block(edge, "service_mesh_authz_no_allow", "Kubernetes service-mesh AuthorizationPolicy has no matching ALLOW source")
         if "mtls" in text and "strict" in text:
             return _constrain(edge, "service_mesh_mtls_strict", "Kubernetes service mesh requires strict mTLS")
         return _constrain(edge, "service_mesh_policy", "Kubernetes service mesh policy is linked to the path")
@@ -764,6 +804,7 @@ def _route_destination(route: NetworkRecord) -> str:
             "destination_range",
             "dest_range",
             "destination",
+            "address_prefix",
             "cidr_block",
             "cidr",
         ),
@@ -778,6 +819,48 @@ def _route_prefix_length(route: NetworkRecord) -> int | None:
         return None
     try:
         return int(destination.rsplit("/", 1)[1])
+    except ValueError:
+        return None
+
+
+def _route_match_prefix(route: NetworkRecord, exposure: str, network: NetworkRecord) -> int | None:
+    destination = _route_destination(route)
+    route_network = _parse_ip_network(destination)
+    source_networks = _network_source_networks(network)
+    if route_network is None:
+        return 0 if not source_networks else None
+    if source_networks:
+        for source in source_networks:
+            if source.version == route_network.version and source.overlaps(route_network):
+                return route_network.prefixlen
+        return None
+    if exposure in {"public", "external"}:
+        return route_network.prefixlen if str(route_network) in {"0.0.0.0/0", "::/0"} else None
+    return route_network.prefixlen
+
+
+def _network_source_networks(network: NetworkRecord) -> list[IpNetwork]:
+    networks: list[IpNetwork] = []
+    for key in ("source_cidr", "source_cidrs", "source_ip", "source_ips", "source_range", "source_ranges", "client_cidr", "client_ip"):
+        raw = network.get(key)
+        values = raw if isinstance(raw, list) else [raw]
+        for value in values:
+            parsed = _parse_ip_network(value)
+            if parsed is not None:
+                networks.append(parsed)
+    return networks
+
+
+def _parse_ip_network(value: Any) -> IpNetwork | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text == "*":
+        return None
+    try:
+        if "/" in text:
+            return ipaddress.ip_network(text, strict=False)
+        return ipaddress.ip_network(text)
     except ValueError:
         return None
 
@@ -818,6 +901,17 @@ def _security_group_precedence(rule: NetworkRecord) -> int:
 def _rule_matches_public_source(rule: NetworkRecord) -> bool:
     cidrs = _cidrs(rule)
     return not cidrs or _contains_public_cidr(cidrs)
+
+
+def _rule_matches_source(rule: NetworkRecord, network: NetworkRecord) -> bool:
+    source_networks = _network_source_networks(network)
+    cidrs = _cidrs(rule)
+    if not source_networks:
+        return _rule_matches_public_source(rule)
+    rule_networks = [parsed for cidr in cidrs if (parsed := _parse_ip_network(cidr)) is not None]
+    if not rule_networks:
+        return True
+    return any(source.version == rule.version and source.overlaps(rule) for source in source_networks for rule in rule_networks)
 
 
 def _record_has_deny(raw: NetworkRecord) -> bool:
@@ -894,17 +988,70 @@ def _has_source_security_group(raw: NetworkRecord, text: str) -> bool:
 
 def _cidrs(raw: NetworkRecord) -> list[str]:
     values: list[str] = []
-    for key in ("cidr", "cidr_block", "source_cidr", "source_range", "destination_cidr_block"):
+    for key in ("cidr", "cidr_block", "source_cidr", "source_range", "source_address_prefix", "destination_cidr_block", "destination_prefix"):
         if raw.get(key):
             values.append(str(raw[key]))
-    for key in ("cidr_blocks", "ipv6_cidr_blocks", "source_cidrs", "source_ranges", "sourceRanges"):
+    for key in ("cidr_blocks", "ipv6_cidr_blocks", "source_cidrs", "source_ranges", "sourceRanges", "source_address_prefixes", "destination_prefixes"):
         if isinstance(raw.get(key), list):
             values.extend(str(item) for item in raw[key] if str(item))
     return values
 
 
 def _contains_public_cidr(cidrs: list[str]) -> bool:
-    return any(cidr.strip() in {"0.0.0.0/0", "::/0"} for cidr in cidrs)
+    return any(cidr.strip().lower() in {"*", "internet", "any", "0.0.0.0/0", "::/0"} for cidr in cidrs)
+
+
+def _is_public_route_target(target: str, provider: str) -> bool:
+    value = target.lower()
+    if provider == "azure":
+        return value in {"internet", "defaultinternetgateway"} or "internet" in value
+    if provider == "gcp":
+        return "default-internet-gateway" in value or "internet" in value
+    return "igw" in value or "internet" in value
+
+
+def _private_endpoint_direction(raw: NetworkRecord) -> str:
+    value = _first_string(raw, ("direction", "traffic_direction", "path_direction", "connection_direction", "endpoint_direction", "applies_to", "target_role")).lower()
+    if any(marker in value for marker in ("egress", "outbound", "dependency", "client")):
+        return "egress"
+    return "ingress"
+
+
+def _service_mesh_denies(raw: NetworkRecord) -> bool:
+    action = _first_string(raw, ("action", "effect")).upper()
+    if action == "DENY":
+        return True
+    return _record_has_deny(raw) and "allow" not in action.lower()
+
+
+def _service_mesh_allow_misses_source(raw: NetworkRecord) -> bool:
+    action = _first_string(raw, ("action", "effect")).upper()
+    if action and action != "ALLOW":
+        return False
+    source = _first_string(raw, ("source_principal", "source", "principal", "request_principal"))
+    if not source:
+        return False
+    principals = _service_mesh_principals(raw)
+    return bool(principals) and source not in principals and "*" not in principals
+
+
+def _service_mesh_principals(raw: NetworkRecord) -> set[str]:
+    principals: set[str] = set()
+    for key in ("principals", "source_principals", "request_principals", "namespaces"):
+        value = raw.get(key)
+        values = value if isinstance(value, list) else [value]
+        principals.update(str(item) for item in values if item)
+    for item in raw.get("from", []) if isinstance(raw.get("from"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        source = item.get("source")
+        if not isinstance(source, dict):
+            continue
+        for key in ("principals", "requestPrincipals", "namespaces"):
+            nested_values = source.get(key)
+            if isinstance(nested_values, list):
+                principals.update(str(value) for value in nested_values if value)
+    return principals
 
 
 def _first_string(value: NetworkRecord, keys: tuple[str, ...]) -> str:

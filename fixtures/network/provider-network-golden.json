@@ -1,0 +1,274 @@
+{
+  "schema_version": "1.0",
+  "description": "Golden provider network graph cases for precedence, private endpoint direction, and service-mesh authorization.",
+  "cases": [
+    {
+      "id": "aws-route-precedence-specific-blackhole",
+      "provider": "aws",
+      "exposure": "public",
+      "network": {
+        "source_cidr": "198.51.100.10/32",
+        "target": "aws_instance.api",
+        "routes": [
+          {
+            "id": "aws_route.default_internet",
+            "destination_cidr_block": "0.0.0.0/0",
+            "gateway_id": "igw-123"
+          },
+          {
+            "id": "aws_route.blocked_partner",
+            "destination_cidr_block": "198.51.100.0/24",
+            "target": "blackhole",
+            "state": "blackhole"
+          }
+        ],
+        "security_groups": [
+          {
+            "id": "aws_security_group.api",
+            "ingress": [
+              {
+                "id": "aws_security_group_rule.public_https",
+                "type": "ingress",
+                "from_port": 443,
+                "to_port": 443,
+                "cidr_blocks": ["0.0.0.0/0"]
+              }
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "decision": "blocked",
+        "blockers": ["route_blackhole"],
+        "selected_resources": ["aws_route.blocked_partner"]
+      }
+    },
+    {
+      "id": "azure-route-precedence-specific-none",
+      "provider": "azure",
+      "exposure": "public",
+      "network": {
+        "source_cidr": "203.0.113.9/32",
+        "target": "azurerm_linux_web_app.api",
+        "routes": [
+          {
+            "id": "azurerm_route.default_internet",
+            "address_prefix": "0.0.0.0/0",
+            "next_hop_type": "Internet",
+            "priority": 200
+          },
+          {
+            "id": "azurerm_route.partner_drop",
+            "address_prefix": "203.0.113.0/24",
+            "next_hop_type": "None",
+            "priority": 300
+          }
+        ],
+        "network_security_rules": [
+          {
+            "id": "azurerm_network_security_rule.allow_https",
+            "direction": "Inbound",
+            "access": "Allow",
+            "priority": 200,
+            "source_address_prefix": "*"
+          }
+        ]
+      },
+      "expected": {
+        "decision": "blocked",
+        "blockers": ["route_blackhole"],
+        "selected_resources": ["azurerm_route.partner_drop"]
+      }
+    },
+    {
+      "id": "azure-nsg-deny-before-allow",
+      "provider": "azure",
+      "exposure": "public",
+      "network": {
+        "source_cidr": "203.0.113.12/32",
+        "target": "azurerm_linux_web_app.api",
+        "network_security_rules": [
+          {
+            "id": "azurerm_network_security_rule.allow_public",
+            "direction": "Inbound",
+            "access": "Allow",
+            "priority": 200,
+            "source_address_prefix": "*"
+          },
+          {
+            "id": "azurerm_network_security_rule.deny_partner",
+            "direction": "Inbound",
+            "access": "Deny",
+            "priority": 100,
+            "source_address_prefix": "203.0.113.0/24"
+          }
+        ]
+      },
+      "expected": {
+        "decision": "blocked",
+        "blockers": ["nsg_deny"],
+        "selected_resources": ["azurerm_network_security_rule.deny_partner"]
+      }
+    },
+    {
+      "id": "gcp-route-precedence-specific-blackhole",
+      "provider": "gcp",
+      "exposure": "public",
+      "network": {
+        "source_cidr": "198.51.100.20/32",
+        "target": "google_compute_instance.api",
+        "routes": [
+          {
+            "id": "google_compute_route.default_internet",
+            "dest_range": "0.0.0.0/0",
+            "next_hop_gateway": "default-internet-gateway",
+            "priority": 1000
+          },
+          {
+            "id": "google_compute_route.partner_drop",
+            "dest_range": "198.51.100.0/24",
+            "next_hop_gateway": "blackhole",
+            "priority": 1000
+          }
+        ],
+        "firewall_rules": [
+          {
+            "id": "google_compute_firewall.allow_https",
+            "direction": "INGRESS",
+            "priority": 1000,
+            "source_ranges": ["0.0.0.0/0"],
+            "allow": [{"protocol": "tcp", "ports": ["443"]}]
+          }
+        ]
+      },
+      "expected": {
+        "decision": "blocked",
+        "blockers": ["route_blackhole"],
+        "selected_resources": ["google_compute_route.partner_drop"]
+      }
+    },
+    {
+      "id": "gcp-firewall-deny-before-allow",
+      "provider": "gcp",
+      "exposure": "public",
+      "network": {
+        "source_cidr": "203.0.113.20/32",
+        "target": "google_compute_instance.api",
+        "firewall_rules": [
+          {
+            "id": "google_compute_firewall.allow_public",
+            "direction": "INGRESS",
+            "priority": 1000,
+            "source_ranges": ["0.0.0.0/0"],
+            "allow": [{"protocol": "tcp"}]
+          },
+          {
+            "id": "google_compute_firewall.deny_partner",
+            "direction": "INGRESS",
+            "priority": 900,
+            "source_ranges": ["203.0.113.0/24"],
+            "deny": [{"protocol": "tcp"}]
+          }
+        ]
+      },
+      "expected": {
+        "decision": "blocked",
+        "blockers": ["firewall_deny"],
+        "selected_resources": ["google_compute_firewall.deny_partner"]
+      }
+    },
+    {
+      "id": "azure-private-endpoint-egress-does-not-block-public-ingress",
+      "provider": "azure",
+      "exposure": "public",
+      "network": {
+        "target": "azurerm_linux_web_app.api",
+        "application_gateways": [
+          {
+            "id": "azurerm_application_gateway.public"
+          }
+        ],
+        "private_endpoints": [
+          {
+            "id": "azurerm_private_endpoint.storage_dependency",
+            "direction": "egress",
+            "target_role": "dependency"
+          }
+        ]
+      },
+      "expected": {
+        "decision": "constrained",
+        "blockers": ["private_endpoint_egress_only"],
+        "selected_resources": ["azurerm_private_endpoint.storage_dependency"]
+      }
+    },
+    {
+      "id": "azure-private-endpoint-inbound-blocks-public-ingress",
+      "provider": "azure",
+      "exposure": "public",
+      "network": {
+        "target": "azurerm_linux_web_app.api",
+        "private_endpoints": [
+          {
+            "id": "azurerm_private_endpoint.app_ingress",
+            "direction": "ingress"
+          }
+        ]
+      },
+      "expected": {
+        "decision": "blocked",
+        "blockers": ["private_endpoint"],
+        "selected_resources": ["azurerm_private_endpoint.app_ingress"]
+      }
+    },
+    {
+      "id": "kubernetes-service-mesh-deny-before-allow",
+      "provider": "kubernetes",
+      "exposure": "internal",
+      "network": {
+        "target": "kubernetes_deployment.api",
+        "services": [{"id": "kubernetes_service.api"}],
+        "authorization_policies": [
+          {
+            "id": "authorizationpolicy.allow_frontend",
+            "action": "ALLOW",
+            "principals": ["cluster.local/ns/frontend/sa/frontend"]
+          },
+          {
+            "id": "authorizationpolicy.deny_legacy",
+            "action": "DENY",
+            "principals": ["cluster.local/ns/legacy/sa/legacy"]
+          }
+        ]
+      },
+      "expected": {
+        "decision": "blocked",
+        "blockers": ["authorization_policy_deny"],
+        "selected_resources": ["authorizationpolicy.deny_legacy"]
+      }
+    },
+    {
+      "id": "kubernetes-service-mesh-allow-source-mismatch",
+      "provider": "kubernetes",
+      "exposure": "internal",
+      "network": {
+        "target": "kubernetes_deployment.api",
+        "source_principal": "cluster.local/ns/default/sa/unknown",
+        "services": [{"id": "kubernetes_service.api"}],
+        "authorization_policies": [
+          {
+            "id": "authorizationpolicy.allow_frontend",
+            "action": "ALLOW",
+            "source_principal": "cluster.local/ns/default/sa/unknown",
+            "principals": ["cluster.local/ns/frontend/sa/frontend"]
+          }
+        ]
+      },
+      "expected": {
+        "decision": "blocked",
+        "blockers": ["service_mesh_authz_no_allow"],
+        "selected_resources": ["authorizationpolicy.allow_frontend"]
+      }
+    }
+  ]
+}

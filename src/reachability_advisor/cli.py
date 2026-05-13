@@ -556,10 +556,12 @@ def _quality_gate_failures(
     external_usable_minimum = _profile_minimum(args.min_external_evidence_usable_ratio, 0.8 if production else None)
     critical_external_minimum = _profile_minimum(args.min_critical_external_source_coverage, 1.0 if production else None)
     critical_query_family_minimum = 1.0 if production else None
+    critical_proven_query_family_minimum = 1.0 if production else None
     ratio_gate("source rule coverage", source_summary.get("source_rule_coverage"), source_rule_minimum)
     ratio_gate("external source evidence usable ratio", source_summary.get("external_evidence_usable_ratio"), external_usable_minimum)
     ratio_gate("critical external source evidence coverage", source_summary.get("critical_external_evidence_coverage"), critical_external_minimum)
     ratio_gate("critical source query-family coverage", source_summary.get("critical_query_family_coverage"), critical_query_family_minimum)
+    ratio_gate("critical proven source query-family coverage", source_summary.get("critical_proven_query_family_coverage"), critical_proven_query_family_minimum)
     if args.fail_on_mapping_warnings and int(mapping_summary.get("mapping_warnings_count") or 0) > 0:
         failures.append(f"mapping report contains {mapping_summary.get('mapping_warnings_count')} warning(s)")
     if (args.require_external_source_evidence or production) and int(source_summary.get("external_evidence_records") or 0) == 0:

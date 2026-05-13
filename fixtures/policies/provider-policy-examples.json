@@ -146,6 +146,86 @@
       }
     },
     {
+      "name": "aws-session-policy-narrows-identity-allow",
+      "provider": "aws",
+      "record": {
+        "provider": "aws",
+        "identity": "arn:aws:iam::111111111111:role/api",
+        "action": "s3:DeleteObject",
+        "impact": "data_access",
+        "resource": "arn:aws:s3:::prod-bucket/private.txt",
+        "identity_policy": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": "s3:*",
+              "Resource": "arn:aws:s3:::prod-bucket/*"
+            }
+          ]
+        },
+        "session_policy": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": "s3:GetObject",
+              "Resource": "arn:aws:s3:::prod-bucket/*"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "denied",
+        "policy_layer": "session_policy",
+        "required_blocker": "session_policy",
+        "matched_statements": 1,
+        "effective_permission": {
+          "allowed": false,
+          "decision": "denied"
+        }
+      }
+    },
+    {
+      "name": "aws-source-vpce-condition-constrains-secret-read",
+      "provider": "aws",
+      "record": {
+        "provider": "aws",
+        "identity": "arn:aws:iam::111111111111:role/api",
+        "action": "secretsmanager:GetSecretValue",
+        "impact": "data_access",
+        "resource": "arn:aws:secretsmanager:eu-central-1:111111111111:secret:payments",
+        "identity_policy": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": "secretsmanager:GetSecretValue",
+              "Resource": "arn:aws:secretsmanager:eu-central-1:111111111111:secret:payments",
+              "Condition": {
+                "StringEquals": {
+                  "aws:SourceVpce": "vpce-123"
+                }
+              }
+            }
+          ]
+        },
+        "condition_context": {
+          "aws:SourceVpce": "vpce-123"
+        }
+      },
+      "expected": {
+        "decision": "constrained_allow",
+        "policy_layer": "identity_policy",
+        "required_blocker": "condition",
+        "matched_statements": 1,
+        "effective_permission": {
+          "allowed": true,
+          "decision": "constrained_allow"
+        }
+      }
+    },
+    {
       "name": "aws-resource-policy-explicit-deny-overrides-identity-allow",
       "provider": "aws",
       "record": {
@@ -290,6 +370,68 @@
       }
     },
     {
+      "name": "azure-management-group-owner-inherits-role-assignment",
+      "provider": "azure",
+      "record": {
+        "provider": "azure",
+        "identity": "principal-platform",
+        "action": "Microsoft.Authorization/roleAssignments/write",
+        "impact": "iam_escalation",
+        "resource": "/subscriptions/sub-a/resourceGroups/rg-a/providers/Microsoft.Authorization/roleAssignments/ra",
+        "role_assignment": {
+          "roleDefinitionName": "Owner",
+          "principalId": "principal-platform",
+          "scope": "/providers/Microsoft.Management/managementGroups/prod"
+        }
+      },
+      "expected": {
+        "decision": "constrained_allow",
+        "policy_layer": "role_assignment",
+        "required_blocker": "management_group_scope",
+        "matched_statements": 1,
+        "principal_matched": true,
+        "effective_permission": {
+          "allowed": true,
+          "decision": "constrained_allow"
+        }
+      }
+    },
+    {
+      "name": "azure-conditional-custom-role-constrains-storage-read",
+      "provider": "azure",
+      "record": {
+        "provider": "azure",
+        "identity": "principal-api",
+        "action": "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+        "impact": "data_access",
+        "resource": "/subscriptions/sub-a/resourceGroups/rg-a/providers/Microsoft.Storage/storageAccounts/store/blobServices/default/containers/c/blobs/report",
+        "role_definition": {
+          "permissions": [
+            {
+              "actions": [
+                "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+              ],
+              "condition": {
+                "expression": "request.time < timestamp('2026-12-31T00:00:00Z')"
+              }
+            }
+          ],
+          "scope": "/subscriptions/sub-a/resourceGroups/rg-a",
+          "principalId": "principal-api"
+        }
+      },
+      "expected": {
+        "decision": "constrained_allow",
+        "policy_layer": "role_definition",
+        "required_blockers": ["role_assignment_condition", "resource_group_scope"],
+        "matched_statements": 1,
+        "effective_permission": {
+          "allowed": true,
+          "decision": "constrained_allow"
+        }
+      }
+    },
+    {
       "name": "gcp-secret-accessor-conditional-binding",
       "provider": "gcp",
       "record": {
@@ -322,6 +464,106 @@
         "required_blocker": "conditional_iam_binding",
         "matched_statements": 1,
         "principal_matched": true
+      }
+    },
+    {
+      "name": "gcp-deny-policy-overrides-project-editor",
+      "provider": "gcp",
+      "record": {
+        "provider": "gcp",
+        "identity": "user:ops@example.com",
+        "action": "compute.instances.delete",
+        "impact": "compute_control",
+        "resource": "projects/prod/zones/europe-west1-b/instances/api",
+        "iam_policy": {
+          "bindings": [
+            {
+              "role": "roles/editor",
+              "members": [
+                "user:ops@example.com"
+              ],
+              "resources": [
+                "projects/prod"
+              ]
+            }
+          ]
+        },
+        "deny_policy": {
+          "rules": [
+            {
+              "deniedPermissions": [
+                "compute.instances.delete"
+              ],
+              "members": [
+                "user:ops@example.com"
+              ],
+              "resources": [
+                "projects/prod/*"
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "denied",
+        "policy_layer": "deny_policy",
+        "required_blocker": "deny_policy",
+        "matched_statements": 2,
+        "principal_matched": true,
+        "effective_permission": {
+          "allowed": false,
+          "decision": "denied"
+        }
+      }
+    },
+    {
+      "name": "gcp-organization-policy-blocks-service-account-key-create",
+      "provider": "gcp",
+      "record": {
+        "provider": "gcp",
+        "identity": "user:admin@example.com",
+        "action": "iam.serviceAccountKeys.create",
+        "impact": "iam_escalation",
+        "resource": "projects/prod/serviceAccounts/api@prod.iam.gserviceaccount.com",
+        "iam_policy": {
+          "bindings": [
+            {
+              "role": "roles/owner",
+              "members": [
+                "user:admin@example.com"
+              ],
+              "resources": [
+                "projects/prod"
+              ]
+            }
+          ]
+        },
+        "organization_policy": {
+          "rules": [
+            {
+              "deniedPermissions": [
+                "iam.serviceAccountKeys.create"
+              ],
+              "members": [
+                "user:admin@example.com"
+              ],
+              "resources": [
+                "organizations/123/*"
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "denied",
+        "policy_layer": "organization_policy",
+        "required_blockers": ["organization_policy_deny", "organization_scope"],
+        "matched_statements": 2,
+        "principal_matched": true,
+        "effective_permission": {
+          "allowed": false,
+          "decision": "denied"
+        }
       }
     },
     {
@@ -472,6 +714,48 @@
         "required_blockers": ["privilege_escalation_verb", "service_account_scope"],
         "matched_statements": 1,
         "principal_matched": true
+      }
+    },
+    {
+      "name": "kubernetes-pod-exec-rolebinding-escalation",
+      "provider": "kubernetes",
+      "record": {
+        "provider": "kubernetes",
+        "identity": "system:serviceaccount:payments:debugger",
+        "action": "create pods/exec",
+        "impact": "compute_control",
+        "resource": "pods/exec",
+        "namespace": "payments",
+        "role_binding": {
+          "subjects": [
+            {
+              "kind": "ServiceAccount",
+              "namespace": "payments",
+              "name": "debugger"
+            }
+          ],
+          "rules": [
+            {
+              "verbs": [
+                "create"
+              ],
+              "resources": [
+                "pods/exec"
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "constrained_allow",
+        "policy_layer": "role_binding",
+        "required_blockers": ["privilege_escalation_verb", "service_account_scope"],
+        "matched_statements": 1,
+        "principal_matched": true,
+        "effective_permission": {
+          "allowed": true,
+          "decision": "constrained_allow"
+        }
       }
     }
   ]

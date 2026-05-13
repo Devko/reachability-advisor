@@ -51,6 +51,7 @@ class AwsExposureEvaluator(ProviderEvaluator):
                 "source_cidr_restriction",
                 "source_security_group_restriction",
                 "security_group_scoped_ingress",
+                "private_endpoint_egress_only",
                 "source_vpce_condition",
                 "waf_or_firewall_policy",
             }
@@ -186,7 +187,7 @@ class AwsExposureEvaluator(ProviderEvaluator):
                     "evidence": "AWS route target is unavailable or blackholed",
                 }
             )
-        elif not routes_evaluated and ("route_table" in text or "aws_route" in text):
+        elif not routes_evaluated and "precedence_evaluated" not in text and ("route_table" in text or "aws_route" in text):
             augmented.append(
                 {
                     "kind": "route_table_precedence_unknown",
@@ -197,6 +198,16 @@ class AwsExposureEvaluator(ProviderEvaluator):
             )
         exposure = str(network.get("exposure") or "").lower()
         if exposure in {"public", "external"} and ("vpc_endpoint_only" in text or "private_link" in text or "privatelink" in text):
+            if "private_endpoint_egress_only" in text:
+                augmented.append(
+                    {
+                        "kind": "private_endpoint_egress_only",
+                        "effect": "constrains",
+                        "provider": self.provider,
+                        "evidence": "AWS VPC endpoint evidence is outbound/dependency traffic, not public ingress",
+                    }
+                )
+                return dedupe_objects(augmented)
             augmented.append(
                 {
                     "kind": "vpc_endpoint_only",

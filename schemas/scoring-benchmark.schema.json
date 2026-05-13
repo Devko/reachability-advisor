@@ -6,6 +6,8 @@
   "properties": {
     "$schema": {"type": "string"},
     "schema_version": {"const": "1.0"},
+    "description": {"type": "string"},
+    "require_expected_decisions": {"type": "boolean"},
     "cases": {
       "type": "array",
       "minItems": 1,
@@ -21,6 +23,19 @@
           "source": {"type": "object"},
           "context": {"type": "object"},
           "expected_tier": {"enum": ["urgent", "high", "medium", "low", "informational"]},
+          "expected_decision": {
+            "type": "object",
+            "required": ["why", "required_reason_labels"],
+            "properties": {
+              "why": {"type": "string", "minLength": 1},
+              "required_reason_labels": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"type": "string", "minLength": 1}
+              }
+            },
+            "additionalProperties": false
+          },
           "min_score": {"type": "number", "minimum": 0, "maximum": 100},
           "max_score": {"type": "number", "minimum": 0, "maximum": 100}
         }

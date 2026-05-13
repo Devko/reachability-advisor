@@ -25,10 +25,15 @@
         "critical_findings_requiring_query_family": {"type": "integer", "minimum": 0},
         "critical_findings_with_required_query_family": {"type": "integer", "minimum": 0},
         "critical_findings_missing_query_family": {"type": "integer", "minimum": 0},
+        "critical_findings_requiring_proven_query_family": {"type": "integer", "minimum": 0},
+        "critical_findings_with_proven_query_family": {"type": "integer", "minimum": 0},
+        "critical_findings_missing_proven_query_family": {"type": "integer", "minimum": 0},
         "source_diagnostic_counts": {"type": "object"},
         "source_evidence_coverage": {"type": "number", "minimum": 0, "maximum": 1},
         "source_rule_coverage": {"type": "number", "minimum": 0, "maximum": 1},
         "critical_query_family_coverage": {"type": "number", "minimum": 0, "maximum": 1},
+        "critical_proven_query_family_coverage": {"type": "number", "minimum": 0, "maximum": 1},
+        "proven_query_families": {"type": "array", "items": {"type": "string"}},
         "external_evidence_records": {"type": "integer", "minimum": 0},
         "external_evidence_providers": {"type": "object"},
         "external_evidence_usable_ratio": {"type": "number", "minimum": 0, "maximum": 1},
@@ -55,6 +60,7 @@
           "states": {"type": "object"},
           "source_diagnostics": {"type": "object"},
           "critical_query_family_coverage": {"type": "number", "minimum": 0, "maximum": 1},
+          "critical_packages": {"type": "array"},
           "skipped_files": {"type": "array"}
         }
       }

@@ -1,6 +1,8 @@
 {
   "$schema": "../schemas/scoring-benchmark.schema.json",
   "schema_version": "1.0",
+  "description": "Labeled scoring benchmark cases. Each case defines the expected tier and the concrete evidence labels that explain why the tier is correct.",
+  "require_expected_decisions": true,
   "cases": [
     {
       "id": "public-request-controlled-sensitive",
@@ -11,6 +13,10 @@
       "source": {"reachability": "attacker_controlled", "confidence": "high"},
       "context": {"exposure": "public", "environment": "prod", "privilege": "sensitive", "iam_impacts": ["data_access"], "confidence": "medium"},
       "expected_tier": "urgent",
+      "expected_decision": {
+        "why": "Urgent because a known exploited critical vulnerability is request-controlled on a public production service with sensitive data-access privileges.",
+        "required_reason_labels": ["tier:urgent", "severity:critical", "exploit:known_exploited", "source:attacker_controlled", "network:public", "iam:sensitive", "iam_impact:data_access"]
+      },
       "min_score": 85,
       "max_score": 100
     },
@@ -23,6 +29,10 @@
       "source": {"reachability": "attacker_controlled", "confidence": "high"},
       "context": {"exposure": "public", "environment": "prod", "privilege": "none", "confidence": "medium"},
       "expected_tier": "high",
+      "expected_decision": {
+        "why": "High because public request-controlled code is affected by a high-severity vulnerability, but there is no exploit intelligence or critical IAM blast radius to justify urgent.",
+        "required_reason_labels": ["tier:high", "severity:high", "source:attacker_controlled", "network:public", "iam:none"]
+      },
       "min_score": 65,
       "max_score": 84
     },
@@ -41,6 +51,10 @@
         "confidence": "medium"
       },
       "expected_tier": "high",
+      "expected_decision": {
+        "why": "High because the vulnerable path is public and request-controlled, but auth/WAF evidence constrains the path and caps the score below urgent.",
+        "required_reason_labels": ["tier:high", "severity:critical", "source:attacker_controlled", "network:public", "network_blocker:constrains", "gate:network_blocker:capped"]
+      },
       "min_score": 80,
       "max_score": 84
     },
@@ -59,6 +73,10 @@
         "confidence": "medium"
       },
       "expected_tier": "medium",
+      "expected_decision": {
+        "why": "Medium because a confirmed private-endpoint blocker removes the public exposure contribution, leaving reachable code and sensitive IAM below high.",
+        "required_reason_labels": ["tier:medium", "severity:critical", "source:function_reachable", "network_blocker:blocks", "gate:network_blocker:capped", "iam:sensitive"]
+      },
       "min_score": 60,
       "max_score": 64
     },
@@ -78,6 +96,10 @@
         "confidence": "medium"
       },
       "expected_tier": "high",
+      "expected_decision": {
+        "why": "High because the finding is critical and externally reachable, but the IAM allow is low confidence and must not be treated as confirmed urgent blast radius.",
+        "required_reason_labels": ["tier:high", "severity:critical", "source:function_reachable", "network:external", "iam_confidence:low", "gate:low_confidence_iam:passed"]
+      },
       "min_score": 75,
       "max_score": 84
     },
@@ -90,6 +112,10 @@
       "source": {"reachability": "function_reachable", "confidence": "medium"},
       "context": {"exposure": "private", "environment": "prod", "privilege": "none", "confidence": "medium"},
       "expected_tier": "medium",
+      "expected_decision": {
+        "why": "Medium because the vulnerable function is reachable in private production code, with no public ingress, critical privilege, or strong exploit signal.",
+        "required_reason_labels": ["tier:medium", "severity:high", "source:function_reachable", "network:private", "iam:none", "gate:private_no_ingress:passed"]
+      },
       "min_score": 40,
       "max_score": 64
     },
@@ -102,6 +128,10 @@
       "source": {"reachability": "imported", "confidence": "medium"},
       "context": {"exposure": "internal", "environment": "prod", "privilege": "sensitive", "iam_impacts": ["network_control"], "confidence": "medium"},
       "expected_tier": "medium",
+      "expected_decision": {
+        "why": "Medium because the service is internal and only import-level code evidence exists; critical IAM impact is visible but import-only evidence is capped below high.",
+        "required_reason_labels": ["tier:medium", "severity:critical", "source:imported", "network:internal", "iam_impact:network_control", "gate:import_only_evidence:capped"]
+      },
       "min_score": 40,
       "max_score": 64
     },
@@ -114,6 +144,10 @@
       "source": {"reachability": "package_present", "confidence": "low"},
       "context": {"exposure": "public", "environment": "prod", "privilege": "none", "confidence": "medium"},
       "expected_tier": "high",
+      "expected_decision": {
+        "why": "High because known exploitation and critical severity matter on a public service, but SBOM-only source evidence is weak and keeps the finding below urgent.",
+        "required_reason_labels": ["tier:high", "severity:critical", "exploit:known_exploited", "source:weak", "network:public", "gate:weak_source_evidence:passed"]
+      },
       "min_score": 65,
       "max_score": 84
     },
@@ -126,6 +160,10 @@
       "source": {"reachability": "dependency_reachable", "confidence": "medium"},
       "context": {"exposure": "public", "environment": "prod", "privilege": "sensitive", "iam_impacts": ["data_access"], "confidence": "medium"},
       "expected_tier": "high",
+      "expected_decision": {
+        "why": "High because the vulnerable dependency is on a public critical path with sensitive IAM, but dependency-graph evidence is not direct vulnerable API usage and remains below urgent.",
+        "required_reason_labels": ["tier:high", "severity:critical", "source:dependency_graph", "network:public", "iam_impact:data_access", "gate:dependency_graph_evidence:passed"]
+      },
       "min_score": 65,
       "max_score": 84
     },
@@ -138,6 +176,10 @@
       "source": {"reachability": "function_reachable", "confidence": "high"},
       "context": {"exposure": "external", "environment": "prod", "privilege": "sensitive", "iam_impacts": ["iam_escalation"], "confidence": "high"},
       "expected_tier": "urgent",
+      "expected_decision": {
+        "why": "Urgent because critical vulnerable functionality is externally reachable in production and combines with sensitive IAM escalation impact.",
+        "required_reason_labels": ["tier:urgent", "severity:critical", "source:function_reachable", "network:external", "iam_impact:iam_escalation", "context_confidence:high"]
+      },
       "min_score": 85,
       "max_score": 100
     },
@@ -150,6 +192,10 @@
       "source": {"reachability": "attacker_controlled", "confidence": "high"},
       "context": {"exposure": "unknown", "environment": "unknown", "privilege": "unknown", "confidence": "low"},
       "expected_tier": "high",
+      "expected_decision": {
+        "why": "High because attacker-controlled code is present, but deployment, network, and IAM evidence are unknown and the urgent gate must remain unsatisfied.",
+        "required_reason_labels": ["tier:high", "severity:high", "source:attacker_controlled", "network:unknown", "iam:unknown", "gate:urgent_gate:passed"]
+      },
       "min_score": 65,
       "max_score": 84
     },
@@ -162,6 +208,10 @@
       "source": {"reachability": "package_present", "confidence": "low"},
       "context": {"exposure": "public", "environment": "prod", "privilege": "admin", "confidence": "medium"},
       "expected_tier": "low",
+      "expected_decision": {
+        "why": "Low because a known exploited dev dependency has only SBOM-level evidence; dev/test scope and weak source evidence cap it below medium despite public and admin context.",
+        "required_reason_labels": ["tier:low", "exploit:known_exploited", "source:weak", "network:public", "iam:admin", "gate:dev_test_without_usage:capped"]
+      },
       "min_score": 20,
       "max_score": 39
     },
@@ -174,6 +224,10 @@
       "source": {"reachability": "attacker_controlled", "confidence": "high"},
       "context": {"exposure": "private", "environment": "prod", "privilege": "admin", "confidence": "medium"},
       "expected_tier": "high",
+      "expected_decision": {
+        "why": "High because request-controlled code and admin context are serious, but private exposure without public or external ingress keeps it below urgent.",
+        "required_reason_labels": ["tier:high", "severity:high", "source:attacker_controlled", "network:private", "iam:admin"]
+      },
       "min_score": 65,
       "max_score": 84
     },
@@ -186,6 +240,10 @@
       "source": {"reachability": "attacker_controlled", "confidence": "high"},
       "context": {"exposure": "public", "environment": "prod", "privilege": "limited", "iam_capabilities": [{"action": "ReadOnlyAccess", "impact": "limited_access"}], "confidence": "medium"},
       "expected_tier": "high",
+      "expected_decision": {
+        "why": "High because a public request-controlled path exists, but the role is limited/read-only and does not add critical IAM impact for urgent.",
+        "required_reason_labels": ["tier:high", "severity:high", "source:attacker_controlled", "network:public", "iam:limited", "iam_capability:limited_access"]
+      },
       "min_score": 65,
       "max_score": 84
     },
@@ -198,6 +256,10 @@
       "source": {"reachability": "function_reachable", "confidence": "medium"},
       "context": {"exposure": "private", "environment": "prod", "privilege": "none", "confidence": "medium"},
       "expected_tier": "medium",
+      "expected_decision": {
+        "why": "Medium because vulnerable code is function-reachable in a private workload with no role, no public ingress, and no exploit signal.",
+        "required_reason_labels": ["tier:medium", "severity:high", "source:function_reachable", "network:private", "iam:none", "gate:private_no_ingress:passed"]
+      },
       "min_score": 40,
       "max_score": 64
     }

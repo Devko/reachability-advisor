@@ -5,7 +5,9 @@ import re
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
+import reachability_advisor.source as source_module
 from reachability_advisor.artifact_manifest import (
     ArtifactManifestError,
     apply_artifact_manifests,
@@ -18,9 +20,19 @@ from reachability_advisor.iac_render import (
     recommend_iac_render_commands,
     render_iac_render_plan_markdown,
 )
-from reachability_advisor.models import Artifact, Component, SbomDocument
+from reachability_advisor.models import (
+    Artifact,
+    Component,
+    Confidence,
+    Reachability,
+    SbomDocument,
+    SourceEvidence,
+    Tier,
+    VulnerabilityRecord,
+)
 from reachability_advisor.readiness import load_release_readiness_inputs, release_readiness_report
 from reachability_advisor.scoring_benchmark import run_scoring_benchmark
+from reachability_advisor.source import source_coverage_report
 from reachability_advisor.source_evidence_pack import write_source_evidence_pack
 from reachability_advisor.source_evidence_plan import (
     recommend_source_evidence_commands,
@@ -28,8 +40,15 @@ from reachability_advisor.source_evidence_plan import (
     source_evidence_profile,
     write_source_evidence_plan_json,
 )
-from reachability_advisor.source_query_assets import SEMGREP_QUERY_RULES, query_pack_sample_coverage
-from reachability_advisor.source_query_families import QUERY_PACKS, query_family_ids_for_component
+from reachability_advisor.source_query_assets import (
+    SEMGREP_QUERY_RULES,
+    query_pack_sample_coverage,
+)
+from reachability_advisor.source_query_families import (
+    PROVEN_QUERY_FAMILIES,
+    QUERY_PACKS,
+    query_family_ids_for_component,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -206,12 +225,21 @@ class ReadinessTests(unittest.TestCase):
     def test_readiness_blocks_missing_critical_query_family_coverage(self) -> None:
         report = release_readiness_report(
             mapping_report={"artifacts": []},
-            source_coverage={"summary": {"critical_external_evidence_coverage": 1.0, "critical_query_family_coverage": 0.5}},
+            source_coverage={
+                "summary": {
+                    "critical_external_evidence_coverage": 1.0,
+                    "critical_query_family_coverage": 0.5,
+                    "critical_proven_query_family_coverage": 0.5,
+                }
+            },
         )
 
         self.assertEqual(report["status"], "blocked")
-        self.assertIn("critical_source_query_family_coverage", {item["kind"] for item in report["blockers"]})
+        blocker_kinds = {item["kind"] for item in report["blockers"]}
+        self.assertIn("critical_source_query_family_coverage", blocker_kinds)
+        self.assertIn("critical_source_proven_query_family_coverage", blocker_kinds)
         self.assertEqual(report["summary"]["critical_query_family_coverage"], 0.5)
+        self.assertEqual(report["summary"]["critical_proven_query_family_coverage"], 0.5)
 
     def test_readiness_reports_weak_matches_and_low_confidence_paths(self) -> None:
         report = release_readiness_report(
@@ -379,6 +407,8 @@ class SourceEvidencePlanTests(unittest.TestCase):
             self.assertTrue((pack.root / "govulncheck" / "profiles-go.json").exists())
             self.assertEqual(manifest["release_gate"]["critical_external_evidence_coverage"], 1.0)
             self.assertEqual(manifest["release_gate"]["critical_query_family_coverage"], 1.0)
+            self.assertEqual(manifest["release_gate"]["critical_proven_query_family_coverage"], 1.0)
+            self.assertTrue(manifest["release_gate"]["requires_proven_query_family"])
             self.assertTrue((pack.root / "query-packs" / "http-client.json").exists())
             self.assertTrue((pack.root / "semgrep" / "query-packs" / "http-client.yml").exists())
             self.assertTrue((pack.root / "codeql" / "query-packs" / "http-client" / "reachability-suite.qls").exists())
@@ -395,6 +425,9 @@ class SourceEvidencePlanTests(unittest.TestCase):
         expectations = json.loads((ROOT / "fixtures" / "source-vulnerable-apps" / "coverage-expectations.json").read_text(encoding="utf-8"))
         declared_samples = {sample for pack in QUERY_PACKS for sample in pack.expected_samples}
         declared_families = {pack.id for pack in QUERY_PACKS}
+        expectation_samples = {sample["id"] for sample in expectations["samples"]}
+        self.assertEqual(declared_samples, expectation_samples)
+        self.assertEqual(set(PROVEN_QUERY_FAMILIES), declared_families)
         for sample in expectations["samples"]:
             self.assertTrue((ROOT / "fixtures" / "source-vulnerable-apps" / sample["path"]).exists())
             self.assertIn(sample["id"], declared_samples)
@@ -412,6 +445,9 @@ class SourceEvidencePlanTests(unittest.TestCase):
 
         coverage = query_pack_sample_coverage(expectations, ROOT / "fixtures" / "source-vulnerable-apps")
         self.assertEqual(coverage["summary"]["coverage"], 1.0)
+        self.assertEqual(coverage["summary"]["true_positive_coverage"], 1.0)
+        self.assertEqual({row["query_family"] for row in coverage["query_families"]}, set(PROVEN_QUERY_FAMILIES))
+        self.assertTrue(all(row["true_positive_coverage"] == 1.0 for row in coverage["query_families"]))
 
         for public_case in expectations["pinned_public_cases"]:
             self.assertRegex(public_case["repository"], r"^[^/]+/[^/]+$")
@@ -425,6 +461,41 @@ class SourceEvidencePlanTests(unittest.TestCase):
             with self.subTest(pack=pack.id):
                 self.assertGreater(len(SEMGREP_QUERY_RULES.get(pack.id, ())), 0)
                 self.assertGreater(len(pack.codeql_queries), 0)
+
+    def test_critical_query_family_gate_requires_proven_family(self) -> None:
+        artifact = Artifact(name="app")
+        component = Component(name="requests", version="2.19.0", purl="pkg:pypi/requests@2.19.0")
+        finding = SimpleNamespace(
+            artifact=artifact,
+            component=component,
+            vulnerability=VulnerabilityRecord(
+                id="GHSA-requests",
+                package_name="requests",
+                package_purl=component.purl,
+                severity="critical",
+                cvss=9.8,
+            ),
+            source=SourceEvidence(
+                reachability=Reachability.FUNCTION_REACHABLE,
+                confidence=Confidence.HIGH,
+                evidence_source="semgrep",
+                query_families=["http-client"],
+            ),
+            tier=Tier.HIGH,
+        )
+        sbom = SbomDocument(path=Path("bom.json"), artifact=artifact, components=[component])
+
+        original_proven_query_family_ids = source_module.proven_query_family_ids
+        source_module.proven_query_family_ids = lambda: ()
+        try:
+            report = source_coverage_report([sbom], {}, {}, [finding])
+        finally:
+            source_module.proven_query_family_ids = original_proven_query_family_ids
+
+        self.assertEqual(report["summary"]["critical_query_family_coverage"], 0.0)
+        self.assertEqual(report["summary"]["critical_proven_query_family_coverage"], 0.0)
+        self.assertEqual(report["summary"]["critical_findings_missing_proven_query_family"], 1)
+        self.assertEqual(report["artifacts"][0]["critical_packages"][0]["unproven_query_families"], ["http-client"])
 
 
 class RenderedIacPlanTests(unittest.TestCase):
