@@ -28,6 +28,7 @@
         "critical_findings_requiring_proven_query_family": {"type": "integer", "minimum": 0},
         "critical_findings_with_proven_query_family": {"type": "integer", "minimum": 0},
         "critical_findings_missing_proven_query_family": {"type": "integer", "minimum": 0},
+        "critical_findings_without_maintained_query_family": {"type": "integer", "minimum": 0},
         "source_diagnostic_counts": {"type": "object"},
         "source_evidence_coverage": {"type": "number", "minimum": 0, "maximum": 1},
         "source_rule_coverage": {"type": "number", "minimum": 0, "maximum": 1},
@@ -65,6 +66,7 @@
         }
       }
     },
+    "security_evidence": {"type": "object"},
     "production_readiness": {
       "type": "object",
       "properties": {

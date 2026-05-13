@@ -185,6 +185,7 @@ def check_action_metadata() -> None:
         "terraform-source",
         "kubernetes-manifest",
         "reachability-rules",
+        "security-evidence-in",
         "artifact-alias",
         "artifact-manifest",
         "baseline",
@@ -196,8 +197,12 @@ def check_action_metadata() -> None:
         "require-external-source-evidence",
         "min-external-evidence-usable-ratio",
         "min-critical-external-source-coverage",
+        "min-critical-query-family-coverage",
+        "min-critical-proven-query-family-coverage",
+        "min-critical-security-profile-coverage",
         "--baseline-out",
         "--artifact-manifest",
+        "--security-evidence-in",
         "--min-artifact-match-coverage",
         "--min-strong-artifact-identity-coverage",
         "--fail-on-mapping-warnings",
@@ -205,6 +210,9 @@ def check_action_metadata() -> None:
         "--require-external-source-evidence",
         "--min-external-evidence-usable-ratio",
         "--min-critical-external-source-coverage",
+        "--min-critical-query-family-coverage",
+        "--min-critical-proven-query-family-coverage",
+        "--min-critical-security-profile-coverage",
         "--readiness-out",
         "output-dir",
         "scan_code=$?",
@@ -351,8 +359,23 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
     require_text(hcl_audit_md, "HCL Static Audit")
     checks.append({"name": "generated HCL audit Markdown", "status": "passed", "document": str(hcl_audit_md)})
 
+    source_pack_root = out_dir / "source-evidence-pack"
+    run_cli(["source-evidence-pack", "--output-dir", str(source_pack_root)])
+    source_pack = require_json(source_pack_root / "source-evidence-pack.json")
+    if source_pack.get("kind") != "reachability-advisor-source-evidence-pack":
+        raise ReleaseCheckError("source evidence pack manifest has an unexpected kind")
+    checks.append({"name": "generated source evidence pack", "status": "passed", "document": str(source_pack_root / "source-evidence-pack.json")})
+
+    security_pack_root = out_dir / "security-evidence-pack"
+    run_cli(["security-evidence-pack", "--output-dir", str(security_pack_root)])
+    security_pack = require_json(security_pack_root / "security-evidence-pack.json")
+    if security_pack.get("kind") != "reachability-advisor-security-evidence-pack":
+        raise ReleaseCheckError("security evidence pack manifest has an unexpected kind")
+    checks.append({"name": "generated security evidence pack", "status": "passed", "document": str(security_pack_root / "security-evidence-pack.json")})
+
     _check_vulnerability_imports(out_dir, checks)
     _check_external_source_evidence_imports(out_dir, checks)
+    _check_security_evidence_imports(out_dir, checks)
     _check_context_alias_and_custom_rule_imports(out_dir, checks)
 
     findings = out_dir / "findings.json"
@@ -897,6 +920,91 @@ def _check_external_source_evidence_imports(out_dir: Path, checks: list[dict[str
     if coverage_data.get("summary", {}).get("external_evidence_records") != 5:
         raise ReleaseCheckError("external source evidence coverage did not count all imported records")
     checks.append({"name": "external source evidence imports", "status": "passed", "document": str(findings)})
+
+
+def _check_security_evidence_imports(out_dir: Path, checks: list[dict[str, str]]) -> None:
+    root = out_dir / "security-evidence"
+    root.mkdir(parents=True, exist_ok=True)
+    sbom = root / "web-api.cdx.json"
+    sbom.write_text(
+        json.dumps(
+            {
+                "bomFormat": "CycloneDX",
+                "metadata": {"component": {"type": "application", "name": "web-api", "properties": [{"name": "oci:image:ref", "value": "registry.example/web-api:1"}]}},
+                "components": [{"name": "express", "version": "4.18.2", "purl": "pkg:npm/express@4.18.2"}],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    vulns = root / "vulns.json"
+    vulns.write_text(json.dumps({"vulnerabilities": []}, indent=2), encoding="utf-8")
+    context = root / "context.json"
+    context.write_text(json.dumps({"web-api": {"environment": "prod", "criticality": "high", "privilege": "limited"}}, indent=2), encoding="utf-8")
+    evidence = root / "security-evidence.json"
+    evidence.write_text(
+        json.dumps(
+            {
+                "security_evidence": [
+                    {
+                        "scanner_type": "sast",
+                        "tool": "semgrep",
+                        "artifact": "web-api",
+                        "rule_id": "js.express.xss",
+                        "weakness": "cross-site scripting",
+                        "cwe": "CWE-79",
+                        "severity": "high",
+                        "confidence": "high",
+                        "source": {"path": "src/routes/search.js", "line": 12, "column": 5},
+                        "sink": {"function": "res.send"},
+                        "evidence": {"dataflow": "req.query.q reaches res.send"},
+                    },
+                    {
+                        "scanner_type": "dast",
+                        "tool": "zap",
+                        "artifact": "web-api",
+                        "rule_id": "dast.xss.reflected",
+                        "weakness": "reflected xss",
+                        "cwe": "CWE-79",
+                        "severity": "medium",
+                        "confidence": "high",
+                        "method": "GET",
+                        "url": "https://web-api.example/search?q=%3Cscript%3E",
+                    },
+                ]
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    findings = root / "findings.json"
+    coverage = root / "source-coverage.json"
+    run_cli([
+        "scan",
+        "--sbom",
+        str(sbom),
+        "--vulns",
+        str(vulns),
+        "--context",
+        str(context),
+        "--security-evidence-in",
+        str(evidence),
+        "--out",
+        str(findings),
+        "--source-coverage-out",
+        str(coverage),
+        "--no-table",
+    ])
+    data = require_json(findings)
+    code_findings = [finding for finding in data.get("findings", []) if finding.get("finding_type") == "code_weakness"]
+    if len(code_findings) != 2:
+        raise ReleaseCheckError("security evidence import did not produce two code weakness findings")
+    if not any(finding.get("context", {}).get("exposure") == "public" for finding in code_findings if finding.get("weakness", {}).get("scanner_type") == "dast"):
+        raise ReleaseCheckError("DAST security evidence did not produce public exposure")
+    coverage_data = require_json(coverage)
+    if coverage_data.get("security_evidence", {}).get("mapped") != 2:
+        raise ReleaseCheckError("security evidence coverage did not count mapped records")
+    checks.append({"name": "SAST/DAST security evidence import", "status": "passed", "document": str(findings)})
 
 
 def _check_context_alias_and_custom_rule_imports(out_dir: Path, checks: list[dict[str, str]]) -> None:

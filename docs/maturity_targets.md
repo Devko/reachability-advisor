@@ -10,6 +10,7 @@ Target state:
 - Built-in source rules remain available, but they are fallback evidence.
 - Critical findings cannot pass a release gate on package-manager or dependency-graph evidence alone.
 - Critical findings cannot pass a release gate when external evidence exists but does not cover the risky package set.
+- Critical findings cannot pass a release gate when the package does not map to a maintained proven query family.
 - Every imported record must carry a package, package URL, or vulnerability selector. Artifact-only records are diagnostics, not upgrades.
 - Maintained Semgrep/CodeQL/govulncheck profiles exist per ecosystem and are measured in `source-coverage.json`.
 
@@ -23,6 +24,23 @@ Implemented controls:
 - Production gates require `critical_external_evidence_coverage=1.0`, `critical_query_family_coverage=1.0`, and `critical_proven_query_family_coverage=1.0` unless a stricter user threshold is supplied.
 - `--require-strong-source-for-critical` fails when critical findings only have `absent`, `unknown_due_to_no_rule`, `package_present`, or `dependency_reachable` evidence. Production profile enables the same gate.
 - `source-coverage.json` reports critical package rows, external evidence coverage per critical package, selected external evidence coverage, proven query-family coverage, rule gaps, and weak-source counts.
+- `--min-critical-query-family-coverage` and `--min-critical-proven-query-family-coverage` expose the production gates explicitly for CI.
+
+## SAST and DAST evidence
+
+Target state:
+
+- First-party code weakness evidence is imported separately from dependency reachability.
+- High and critical SAST/DAST records carry CWE, scanner type, source location or tested URL, confidence, and artifact mapping.
+- Release gates fail when high or critical SAST/DAST records do not map to a maintained profile.
+- Maintained profiles are tested against local vulnerable examples and public reference applications.
+
+Implemented controls:
+
+- `security-evidence-pack` writes maintained SAST/DAST profiles, Semgrep profile files, DAST profile metadata, and a release-gate contract.
+- `fixtures/security-vulnerable-apps/coverage-expectations.json` defines local vulnerable examples for XSS, command injection, SQL injection, unsafe deserialization, missing authorization, and dynamic web probes.
+- `source-coverage.json.security_evidence.summary.critical_profile_coverage` reports profile coverage for imported high and critical code weaknesses.
+- `--min-critical-security-profile-coverage` fails CI when imported high or critical SAST/DAST records lack a maintained profile.
 
 ## IAM effective access
 

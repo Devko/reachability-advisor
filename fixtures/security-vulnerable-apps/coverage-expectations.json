@@ -1,0 +1,79 @@
+{
+  "schema_version": "1.0",
+  "samples": [
+    {
+      "id": "node-express-xss",
+      "scanner_type": "sast",
+      "path": "node-express-xss",
+      "evidence_files": ["evidence/node-express-xss.json"],
+      "expected_profiles": ["sast-web-injection"],
+      "expected_cwes": ["CWE-79"]
+    },
+    {
+      "id": "nodejs-goof-command-injection",
+      "scanner_type": "sast",
+      "path": "nodejs-goof-command-injection",
+      "evidence_files": ["evidence/nodejs-goof-command-injection.json"],
+      "expected_profiles": ["sast-web-injection"],
+      "expected_cwes": ["CWE-78"]
+    },
+    {
+      "id": "python-flask-sqli",
+      "scanner_type": "sast",
+      "path": "python-flask-sqli",
+      "evidence_files": ["evidence/python-flask-sqli.json"],
+      "expected_profiles": ["sast-web-injection"],
+      "expected_cwes": ["CWE-89"]
+    },
+    {
+      "id": "python-yaml-deserialization",
+      "scanner_type": "sast",
+      "path": "python-yaml-deserialization",
+      "evidence_files": ["evidence/python-yaml-deserialization.json"],
+      "expected_profiles": ["sast-parser-deserialization"],
+      "expected_cwes": ["CWE-502"]
+    },
+    {
+      "id": "node-missing-authz",
+      "scanner_type": "sast",
+      "path": "node-missing-authz",
+      "evidence_files": ["evidence/node-missing-authz.json"],
+      "expected_profiles": ["sast-authz-access-control"],
+      "expected_cwes": ["CWE-862"]
+    },
+    {
+      "id": "dast-reflected-xss",
+      "scanner_type": "dast",
+      "path": "dast-reflected-xss",
+      "evidence_files": ["evidence/dast-reflected-xss.json"],
+      "expected_profiles": ["dast-web-app"],
+      "expected_cwes": ["CWE-79"]
+    },
+    {
+      "id": "dast-ssrf-probe",
+      "scanner_type": "dast",
+      "path": "dast-ssrf-probe",
+      "evidence_files": ["evidence/dast-ssrf-probe.json"],
+      "expected_profiles": ["dast-web-app"],
+      "expected_cwes": ["CWE-918"]
+    }
+  ],
+  "public_reference_cases": [
+    {
+      "id": "snyk-labs-nodejs-goof",
+      "repository": "snyk-labs/nodejs-goof",
+      "url": "https://github.com/snyk-labs/nodejs-goof",
+      "profiles": ["sast-web-injection"],
+      "cwes": ["CWE-78", "CWE-79"],
+      "notes": "Vulnerable Node application reference for command-injection and web weakness profile validation. Pin the commit in the external validation job."
+    },
+    {
+      "id": "appsecco-dvna",
+      "repository": "appsecco/dvna",
+      "url": "https://github.com/appsecco/dvna",
+      "profiles": ["sast-web-injection", "sast-authz-access-control", "dast-web-app"],
+      "cwes": ["CWE-79", "CWE-89", "CWE-862"],
+      "notes": "Intentionally vulnerable Node application reference for broader SAST/DAST coverage checks. Pin the commit in the external validation job."
+    }
+  ]
+}

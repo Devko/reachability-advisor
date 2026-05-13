@@ -376,16 +376,25 @@ reachability-advisor source-evidence-pack \
   --language javascript \
   --output-dir reachability/source-evidence-pack
 
+reachability-advisor security-evidence-pack \
+  --output-dir reachability/security-evidence-pack
+
 semgrep scan \
   --config reachability/source-evidence-pack/semgrep-reachability.yml \
   --json \
   --output reachability/semgrep.json
+
+semgrep scan \
+  --config reachability/security-evidence-pack/semgrep/security.yml \
+  --sarif \
+  --output reachability/security-semgrep.sarif
 
 reachability-advisor scan \
   --sbom sboms/app.cdx.json \
   --vulns vulns/app.grype.json \
   --source-root app=. \
   --source-evidence-in reachability/semgrep.json \
+  --security-evidence-in reachability/security-semgrep.sarif \
   --terraform-plan reachability/tfplan.json \
   --analysis-profile production \
   --source-coverage-out reachability/source-coverage.json \
@@ -403,6 +412,8 @@ reachability-advisor source-evidence-plan \
 ```
 
 `source-evidence-pack` writes maintained Semgrep rules, per-ecosystem Semgrep profiles, package-family query packs, CodeQL suite/profile files, govulncheck metadata, and the release-gate selector contract. The maintained family rules are tested against checked-in vulnerable samples; pinned public repositories in `fixtures/source-vulnerable-apps/coverage-expectations.json` give maintainers reproducible larger targets. Use `semgrep-reachability.yml` for all maintained rules, `semgrep/profiles/npm.yml`, `semgrep/profiles/maven-gradle.yml`, `semgrep/profiles/python.yml`, and `semgrep/profiles/go.yml` when a pipeline scans one ecosystem at a time, or `semgrep/query-packs/<family>.yml` when it runs family-specific jobs. `source-evidence-plan` emits CodeQL commands for JavaScript/TypeScript, Java/Kotlin, Python, and Go. It emits `govulncheck` only for Go. If no supported language or package-manager hint is supplied, it emits the generic Semgrep workflow and no CodeQL command.
+
+`security-evidence-pack` is for first-party weaknesses, not dependency reachability. It writes SAST Semgrep profiles and DAST profile metadata keyed by CWE. Import SAST/DAST SARIF or normalized JSON with `--security-evidence-in`; high and critical imported records should reach `critical_profile_coverage` of `1.0`.
 
 For CodeQL, pass SARIF output as `--source-evidence-in`. CodeQL `codeFlows` are imported as high-confidence data-flow evidence when the result or rule metadata includes a package, package URL, or vulnerability selector. Generic CodeQL query ids are retained as symbols and are not treated as vulnerability ids unless they look like CVE/GHSA/OSV-style ids.
 
@@ -427,6 +438,9 @@ reachability-advisor scan \
   --min-strong-artifact-identity-coverage 1.0 \
   --min-source-rule-coverage 0.8 \
   --min-critical-external-source-coverage 1.0 \
+  --min-critical-query-family-coverage 1.0 \
+  --min-critical-proven-query-family-coverage 1.0 \
+  --min-critical-security-profile-coverage 1.0 \
   --fail-on-mapping-warnings \
   --out reachability/findings.json
 ```

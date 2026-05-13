@@ -1,0 +1,81 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "Semgrep OSS",
+          "semanticVersion": "1.99.0",
+          "rules": [
+            {
+              "id": "javascript.express.security.audit.xss.direct-response-write",
+              "name": "Unsanitized Express response",
+              "shortDescription": {"text": "Untrusted input reaches an HTML response sink"},
+              "defaultConfiguration": {"level": "error"},
+              "properties": {
+                "category": "security",
+                "confidence": "HIGH",
+                "artifact": "web-api",
+                "cwe": ["CWE-79: Improper Neutralization of Input During Web Page Generation"],
+                "vulnerability_class": ["Cross-Site Scripting (XSS)"],
+                "references": ["https://semgrep.dev/docs/"]
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "javascript.express.security.audit.xss.direct-response-write",
+          "level": "error",
+          "message": {"text": "Untrusted request data reaches res.send."},
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {"uri": "src/routes/search.js"},
+                "region": {
+                  "startLine": 12,
+                  "startColumn": 7,
+                  "snippet": {"text": "res.send(req.query.q)"}
+                }
+              }
+            }
+          ],
+          "properties": {
+            "artifact": "web-api",
+            "route": "GET /search",
+            "sink": "res.send",
+            "remediation": "Encode untrusted output before writing HTML responses."
+          },
+          "codeFlows": [
+            {
+              "threadFlows": [
+                {
+                  "locations": [
+                    {
+                      "location": {
+                        "physicalLocation": {
+                          "artifactLocation": {"uri": "src/routes/search.js"},
+                          "region": {"startLine": 10, "startColumn": 15}
+                        }
+                      }
+                    },
+                    {
+                      "location": {
+                        "physicalLocation": {
+                          "artifactLocation": {"uri": "src/routes/search.js"},
+                          "region": {"startLine": 12, "startColumn": 7}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

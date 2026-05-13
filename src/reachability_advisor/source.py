@@ -1289,6 +1289,7 @@ def source_coverage_report(
         "critical_findings_requiring_proven_query_family": 0,
         "critical_findings_with_proven_query_family": 0,
         "critical_findings_missing_proven_query_family": 0,
+        "critical_findings_without_maintained_query_family": 0,
         "source_diagnostic_counts": {},
     }
     proven_families = set(proven_query_family_ids())
@@ -1335,7 +1336,12 @@ def source_coverage_report(
                 has_external_evidence = finding.source.evidence_source != "builtin"
                 evidence_query_families = _evidence_query_families(finding, required_query_families) if has_external_evidence else set()
                 unproven_query_families = sorted(required_query_families - proven_families)
-                missing_query_families = sorted((required_query_families - evidence_query_families) | set(unproven_query_families))
+                family_gap = not required_query_families
+                if family_gap:
+                    totals["critical_findings_without_maintained_query_family"] += 1
+                unmapped_family = {"unmapped-package-family"} if family_gap else set()
+                missing_query_families = sorted((required_query_families - evidence_query_families) | set(unproven_query_families) | unmapped_family)
+                unproven_query_families = sorted(set(unproven_query_families) | unmapped_family)
                 package_key = finding.component.purl or finding.component.display_name
                 package_row = critical_packages.setdefault(
                     package_key,
@@ -1369,17 +1375,16 @@ def source_coverage_report(
                     package_row["external_evidence"] = True
                 else:
                     totals["critical_findings_missing_external_evidence"] += 1
-                if required_query_families:
-                    totals["critical_findings_requiring_query_family"] += 1
-                    totals["critical_findings_requiring_proven_query_family"] += 1
-                    artifact_query_family_required += 1
-                    if has_external_evidence and not missing_query_families:
-                        totals["critical_findings_with_required_query_family"] += 1
-                        totals["critical_findings_with_proven_query_family"] += 1
-                        artifact_query_family_covered += 1
-                    else:
-                        totals["critical_findings_missing_query_family"] += 1
-                        totals["critical_findings_missing_proven_query_family"] += 1
+                totals["critical_findings_requiring_query_family"] += 1
+                totals["critical_findings_requiring_proven_query_family"] += 1
+                artifact_query_family_required += 1
+                if has_external_evidence and not missing_query_families:
+                    totals["critical_findings_with_required_query_family"] += 1
+                    totals["critical_findings_with_proven_query_family"] += 1
+                    artifact_query_family_covered += 1
+                else:
+                    totals["critical_findings_missing_query_family"] += 1
+                    totals["critical_findings_missing_proven_query_family"] += 1
         critical_package_rows = [_critical_package_row(row) for row in critical_packages.values()]
         critical_package_rows = sorted(critical_package_rows, key=lambda row: str(row["component"]))
         critical_packages_with_external = sum(1 for row in critical_package_rows if row["external_evidence"])
@@ -1436,6 +1441,7 @@ def source_coverage_report(
             "Package-manager manifest evidence is weak dependency evidence. It does not prove runtime import or vulnerable API execution.",
             "External evidence must match a component/package, package URL, or vulnerability selector; artifact only narrows a selector match.",
             "Critical findings for maintained package families also need matching external query-family evidence.",
+            "Critical findings for packages outside the maintained family catalog are coverage gaps until a proven family is added.",
             "Critical query-family evidence only satisfies production gates when the family is in the maintained proven-query list.",
             "Built-in source rules are advisory fallback evidence. Production gates should import Semgrep, CodeQL/SARIF, govulncheck, or native evidence.",
             "Production profile fails when critical findings only have dependency-level or weaker source evidence.",

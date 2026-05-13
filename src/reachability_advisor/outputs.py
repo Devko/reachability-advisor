@@ -74,7 +74,7 @@ def write_sarif(findings: list[Finding], path: str | Path) -> None:
                 "id": rule_id,
                 "name": finding.vulnerability.id,
                 "shortDescription": {"text": finding.vulnerability.summary or f"Vulnerability {rule_id}"},
-                "help": {"text": "Reachability-aware dependency vulnerability finding."},
+                "help": {"text": "Reachability-aware dependency vulnerability finding." if finding.finding_type == "dependency_vulnerability" else "Exposure-aware first-party code weakness finding."},
                 "properties": {"security-severity": str(finding.vulnerability.cvss or finding.score / 10)},
             },
         )
@@ -99,6 +99,8 @@ def write_sarif(findings: list[Finding], path: str | Path) -> None:
                     "score": round(finding.score, 2),
                     "artifact": finding.artifact.name,
                     "component": finding.component.name,
+                    "finding_type": finding.finding_type,
+                    "weakness": finding.weakness,
                     "reachability": finding.source.reachability.value,
                 },
             }
@@ -141,6 +143,7 @@ def write_diagnostics(findings: list[Finding], path: str | Path) -> None:
                 "source": "Reachability Advisor",
                 "code": finding.vulnerability.id,
                 "finding_key": finding.key,
+                "finding_type": finding.finding_type,
                 "artifact": finding.artifact.name,
                 "component": finding.component.name,
                 "tier": finding.tier.value,
@@ -175,6 +178,16 @@ def _diagnostic_severity(tier: Tier) -> int:
 
 
 def _finding_message(finding: Finding) -> str:
+    if finding.finding_type == "code_weakness":
+        weakness = finding.weakness.get("weakness") or finding.vulnerability.summary or finding.vulnerability.id
+        tool = finding.weakness.get("tool") or finding.source.evidence_source
+        location = f" at {finding.component.name}" if finding.component.name else ""
+        return (
+            f"{finding.vulnerability.id} ({weakness}) reported by {tool}{location} "
+            f"is {finding.tier.value} (score {finding.score:.1f}); "
+            f"source={reachability_label(finding.source.reachability)}; exposure={finding.context.exposure}; "
+            f"owner={finding.context.owner or 'unknown'}"
+        )
     return (
         f"{finding.vulnerability.id} in {finding.component.name}@{finding.component.version or 'unknown'} "
         f"is {finding.tier.value} (score {finding.score:.1f}); "
@@ -192,13 +205,13 @@ def write_markdown_report(findings: list[Finding], path: str | Path, max_finding
         "",
         f"Generated at: {datetime.now(timezone.utc).isoformat()}",
         "",
-        "This report prioritizes dependency vulnerabilities using SBOM presence, source reachability, Terraform deployment context, and policy state. It does not prove exploitability and must not be used for automatic suppression without review.",
+        "This report prioritizes dependency vulnerabilities and first-party code weaknesses using SBOM, scanner, source, Terraform, Kubernetes, network, IAM, and policy evidence. It does not prove exploitability and must not be used for automatic suppression without review.",
         "",
         "## Remediation queue",
         "",
     ]
     if not findings:
-        lines.append("No matching vulnerable components were found.")
+        lines.append("No matching vulnerable components or code weaknesses were found.")
     for index, remediation in enumerate(remediations[:max_findings], start=1):
         lines.extend(_remediation_markdown(index, remediation))
     if len(remediations) > max_findings:
@@ -249,16 +262,28 @@ def _remediation_markdown(index: int, remediation: dict[str, Any]) -> list[str]:
 
 def _finding_markdown(index: int, finding: Finding) -> list[str]:
     owner = finding.context.owner or "unknown owner"
+    title = (
+        f"{finding.vulnerability.id} in `{finding.component.name}`"
+        if finding.finding_type == "dependency_vulnerability"
+        else f"{finding.vulnerability.id} `{finding.weakness.get('weakness') or finding.vulnerability.summary or 'code weakness'}`"
+    )
+    component_label = (
+        f"{finding.component.name}@{finding.component.version or 'unknown'}"
+        if finding.finding_type == "dependency_vulnerability"
+        else finding.component.name
+    )
     lines = [
-        f"### {index}. {finding.tier.value.upper()}: {finding.vulnerability.id} in `{finding.component.name}`",
+        f"### {index}. {finding.tier.value.upper()}: {title}",
         "",
         f"- Artifact: `{finding.artifact.name}`",
-        f"- Component: `{finding.component.name}@{finding.component.version or 'unknown'}`",
+        f"- Component: `{component_label}`",
         f"- Score: `{finding.score:.1f}`; confidence: `{finding.confidence.value}`",
         f"- Owner: `{owner}`",
         f"- Source signal: `{reachability_label(finding.source.reachability)}` (`{finding.source.reachability.value}`) - {finding.source.reason}",
         f"- Context: exposure=`{finding.context.exposure}`, environment=`{finding.context.environment}`, privilege=`{finding.context.privilege}`, criticality=`{finding.context.criticality}`",
     ]
+    if finding.finding_type == "code_weakness":
+        lines.append(f"- Scanner: `{finding.weakness.get('tool', 'unknown')}`; type=`{finding.weakness.get('scanner_type', 'unknown')}`; CWE=`{finding.weakness.get('cwe') or 'unknown'}`")
     if finding.context.iam_impacts:
         lines.append(f"- IAM impacts: `{', '.join(finding.context.iam_impacts)}`")
     if finding.fix_commands:
@@ -299,7 +324,7 @@ def _escape_annotation(message: str) -> str:
 
 
 def render_table(findings: list[Finding], limit: int = 20) -> str:
-    rows = [("Tier", "Score", "Artifact", "Component", "Vulnerability", "Reachability", "Owner")]
+    rows = [("Tier", "Score", "Artifact", "Component", "Finding", "Reachability", "Owner")]
     for finding in findings[:limit]:
         rows.append(
             (
@@ -307,7 +332,7 @@ def render_table(findings: list[Finding], limit: int = 20) -> str:
                 f"{finding.score:.1f}",
                 finding.artifact.name,
                 finding.component.name,
-                finding.vulnerability.id,
+                finding.vulnerability.id if finding.finding_type == "dependency_vulnerability" else f"{finding.vulnerability.id} ({finding.weakness.get('weakness', 'code weakness')})",
                 reachability_label(finding.source.reachability),
                 finding.context.owner or "unknown",
             )
@@ -333,8 +358,15 @@ def explain_finding(data: dict[str, Any], key: str | None = None, artifact: str 
             break
     if selected is None:
         raise ValueError("finding not found")
+    is_code_weakness = selected.get("finding_type") == "code_weakness"
+    weakness = selected.get("weakness", {}) if isinstance(selected.get("weakness"), dict) else {}
+    title = (
+        f"{selected['vulnerability']['id']} in {selected['component']['name']}"
+        if not is_code_weakness
+        else f"{selected['vulnerability']['id']} {weakness.get('weakness') or 'code weakness'}"
+    )
     lines = [
-        f"# Explanation: {selected['vulnerability']['id']} in {selected['component']['name']}",
+        f"# Explanation: {title}",
         "",
         f"Artifact: `{selected['artifact']['name']}`",
         f"Tier: `{selected['tier']}`; score: `{selected['score']}`; confidence: `{selected['confidence']}`",
@@ -345,6 +377,8 @@ def explain_finding(data: dict[str, Any], key: str | None = None, artifact: str 
     ]
     if selected["context"].get("iam_impacts"):
         lines.append(f"- IAM impacts: `{', '.join(selected['context']['iam_impacts'])}`")
+    if is_code_weakness:
+        lines.append(f"- Scanner: `{weakness.get('tool', 'unknown')}`; type=`{weakness.get('scanner_type', 'unknown')}`; CWE=`{weakness.get('cwe') or 'unknown'}`")
     lines.extend(["", "## Rationale"])
     for reason in selected.get("rationale", []):
         lines.append(f"- {reason}")

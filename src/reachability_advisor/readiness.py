@@ -98,6 +98,20 @@ def release_readiness_report(
                 "message": f"critical proven query-family coverage is {critical_proven_query_family:.4f}; expected 1.0",
             }
         )
+    security_summary = {}
+    security_report = source_coverage.get("security_evidence")
+    if isinstance(security_report, dict) and isinstance(security_report.get("summary"), dict):
+        security_summary = security_report["summary"]
+    raw_security_profile = security_summary.get("critical_profile_coverage")
+    if raw_security_profile is not None:
+        critical_security_profile = float(raw_security_profile)
+        if critical_security_profile < 1.0:
+            blockers.append(
+                {
+                    "kind": "critical_security_profile_coverage",
+                    "message": f"critical SAST/DAST profile coverage is {critical_security_profile:.4f}; expected 1.0",
+                }
+            )
 
     for gap in _visibility_gaps(terraform_coverage):
         kind = str(gap.get("type") or gap.get("reason") or "visibility_gap")
@@ -119,6 +133,7 @@ def release_readiness_report(
             "critical_external_evidence_coverage": critical_external,
             "critical_query_family_coverage": critical_query_family,
             "critical_proven_query_family_coverage": critical_proven_query_family,
+            "critical_security_profile_coverage": security_summary.get("critical_profile_coverage"),
             "terraform_resources": terraform_summary.get("total_resources", 0),
             "kubernetes_resources": kubernetes_summary.get("total_resources", 0),
             "artifacts_missing_release_identity": sum(1 for artifact in artifact_rows if "image digest or exact image reference" in artifact["missing"]),

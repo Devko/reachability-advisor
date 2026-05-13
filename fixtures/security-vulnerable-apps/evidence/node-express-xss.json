@@ -1,0 +1,17 @@
+{
+  "security_evidence": [
+    {
+      "scanner_type": "sast",
+      "tool": "semgrep",
+      "artifact": "web-api",
+      "rule_id": "security.sast-web-injection.cwe-79",
+      "weakness": "cross-site scripting",
+      "cwe": "CWE-79",
+      "severity": "high",
+      "confidence": "high",
+      "source": {"path": "node-express-xss/routes/search.js", "line": 5, "column": 3},
+      "sink": {"function": "res.send"},
+      "evidence": {"dataflow": "req.query.q reaches res.send"}
+    }
+  ]
+}

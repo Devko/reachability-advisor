@@ -35,11 +35,13 @@
         "required": ["key", "artifact", "component", "vulnerability", "score", "tier", "source_reachability"],
         "properties": {
           "key": {"type": "string"},
+          "finding_type": {"enum": ["dependency_vulnerability", "code_weakness"]},
           "score": {"type": "number", "minimum": 0, "maximum": 100},
           "tier": {"enum": ["urgent", "high", "medium", "low", "informational"]},
           "artifact": {"type": "object"},
           "component": {"type": "object"},
           "vulnerability": {"type": "object"},
+          "weakness": {"type": "object"},
           "source_reachability": {
             "type": "object",
             "required": ["state", "label"],

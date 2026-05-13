@@ -1,0 +1,17 @@
+{
+  "security_evidence": [
+    {
+      "scanner_type": "sast",
+      "tool": "semgrep",
+      "artifact": "accounts-api",
+      "rule_id": "security.sast-authz-access-control.cwe-862",
+      "weakness": "missing authorization",
+      "cwe": "CWE-862",
+      "severity": "high",
+      "confidence": "medium",
+      "source": {"path": "node-missing-authz/routes/accounts.js", "line": 4, "column": 1},
+      "sink": {"function": "loadAccount"},
+      "evidence": {"dataflow": "accountId route parameter reaches account lookup without an authorization guard"}
+    }
+  ]
+}

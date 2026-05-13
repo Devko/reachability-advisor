@@ -1,11 +1,12 @@
 # Reachability Advisor
 
-Reachability Advisor ranks dependency vulnerabilities with deployment reachability evidence.
+Reachability Advisor ranks dependency vulnerabilities and first-party code weaknesses with deployment reachability evidence.
 
 Release-gate inputs:
 
 - one CycloneDX SBOM per deployable artifact;
 - Grype JSON, OSV-style JSON, or normalized local vulnerability data from the same artifact;
+- optional SAST/DAST finding evidence for first-party weaknesses such as XSS, SSRF, SQL injection, or insecure direct object access;
 - source roots for code reachability;
 - Terraform plan JSON and/or rendered Kubernetes manifests for workload, network, and IAM context;
 - optional CI artifact manifest when SBOM metadata does not preserve image digests or registry refs.
@@ -40,13 +41,14 @@ License: **GNU GPL v3.0 or later**.
 2. Terraform plan analysis is the release-gate deployment-context path.
 3. Rendered Kubernetes manifests add workload, Service, Ingress, and RBAC context for Kubernetes deployments.
 4. Semgrep, CodeQL/SARIF, govulncheck, or native source evidence is the production path for code reachability. Built-in source rules are fallback evidence.
-5. Source-only or HCL-static analysis is for early feedback, not release confidence.
-6. Critical findings need external analyzer coverage for the risky package set in production scans.
-7. Weak evidence never suppresses a vulnerability or marks it `not_affected`.
-8. Every finding has a unified effective exposure path: asset -> network path -> identity -> reachable code/package -> vulnerability -> score.
-9. Every score includes rationale and every artifact match is visible in `--mapping-out`.
-10. Every Terraform resource in a valid plan is represented in `--terraform-coverage-out`; unsupported resources are reported as visibility gaps.
-11. This project does not provide live cloud inventory, posture management, ticketing, dashboards, secrets scanning, malware scanning, or DSPM.
+5. SAST and DAST findings are first-party code weaknesses, not dependency vulnerabilities. Import them with `--security-evidence-in`.
+6. Source-only or HCL-static analysis is for early feedback, not release confidence.
+7. Critical dependency findings need external analyzer coverage for the risky package set in production scans.
+8. Weak evidence never suppresses a vulnerability or marks it `not_affected`.
+9. Every finding has a unified effective exposure path: asset -> network path -> identity -> reachable code/package -> vulnerability or weakness -> score.
+10. Every score includes rationale and every artifact match is visible in `--mapping-out`.
+11. Every Terraform resource in a valid plan is represented in `--terraform-coverage-out`; unsupported resources are reported as visibility gaps.
+12. This project does not provide live cloud inventory, posture management, ticketing, dashboards, secrets scanning, malware scanning, or DSPM.
 
 ## Install
 
@@ -120,6 +122,15 @@ reachability-advisor source-evidence-plan \
 ```
 
 `source-evidence-pack` writes maintained Semgrep rules per package family, per-ecosystem npm/Maven-Gradle/Python/Go profiles, package-family query packs, CodeQL suite/profile files, govulncheck metadata, and the release-gate selector contract. The checked-in source fixtures measure whether those family assets cover the expected vulnerable samples. `source-evidence-plan` writes the commands that run the tools in CI.
+
+Generate SAST/DAST evidence profiles when importing first-party code weaknesses:
+
+```bash
+reachability-advisor security-evidence-pack \
+  --output-dir reachability/security-evidence-pack
+```
+
+The security pack writes maintained SAST/DAST profile metadata, Semgrep profile files, DAST profile JSON, and a release-gate contract for high/critical code weaknesses. The checked-in fixtures under `fixtures/security-vulnerable-apps/` measure CWE/profile coverage for XSS, command injection, SQL injection, unsafe deserialization, missing authorization, and dynamic web probes.
 
 For source-only validation, Grype can also emit both sides of the handoff from the same directory scan:
 
@@ -455,13 +466,14 @@ The `ide/vscode` directory contains a VS Code extension. It discovers local scan
 | Vulnerability input | Grype JSON, local JSON, and small OSV-Scanner-style JSON. Records normalize severity, CVSS, EPSS, KEV, VEX, fix data, references, source attribution, and timestamps into each finding |
 | Source reachability | JVM, Node, Python, and Go rules with same-function input/sink evidence, bounded handler-to-sink paths, CycloneDX dependency-graph evidence, and package-manager manifest evidence for Maven/Gradle, npm/pnpm/Yarn, Poetry/requirements, and Go modules |
 | Custom source rules | `--reachability-rules` JSON and `export-semgrep-rules` starter YAML |
-| External source evidence | `--source-evidence-in` for Reachability Advisor JSON, Semgrep JSON, SARIF/CodeQL, and govulncheck JSONL. `source-evidence-pack` writes maintained Semgrep/CodeQL/govulncheck assets for npm, Maven/Gradle, Python, and Go plus package-family query packs. Production gates reject artifact-only, unscoped, dependency-only, missing query-family, or unproven query-family evidence for critical findings |
+| External source evidence | `--source-evidence-in` for Reachability Advisor JSON, Semgrep JSON, SARIF/CodeQL, and govulncheck JSONL. `source-evidence-pack` writes maintained Semgrep/CodeQL/govulncheck assets for npm, Maven/Gradle, Python, and Go plus package-family query packs. Production gates reject artifact-only, unscoped, dependency-only, missing query-family, unproven query-family, or unmapped package-family evidence for critical findings |
+| SAST/DAST security evidence | `--security-evidence-in` for first-party code weaknesses. SARIF 2.1.0 is the preferred multi-tool format; normalized JSON and Semgrep JSON are also supported. `security-evidence-pack` writes maintained SAST/DAST profiles with expected CWE coverage. Findings keep `finding_type: code_weakness`, scanner metadata, CWE, source location or tested URL, profile coverage, and share the same network/IAM/scoring graph as dependency findings |
 | Terraform context | Primary deployment context. AWS, Azure, GCP, and Kubernetes plan/source support with coverage reporting, artifact matching, network graphing, provider resource-graph building, typed edge precedence, typed path blockers, AWS route/security-group/NACL/ALB/API Gateway/WAF evaluation, AWS/Azure/GCP route precedence, private endpoint direction, NSG/firewall deny-before-allow behavior, service-mesh authz, route/private-endpoint/firewall-tag hints, IAM allow/deny capability records, structured provider policy AST evaluation for principal/action/resource/condition matching, AWS `sts:AssumeRole` trust constraints, Azure RBAC deny assignments/PIM/role conditions, GCP deny policies/principal access boundaries/Workload Identity, Kubernetes RBAC scope/high-risk verbs, provider-specific effective exposure and IAM decisions, deny precedence, per-provider evaluation order, normalized effective access models, and IAM impact classification |
 | Kubernetes manifests | Rendered YAML/JSON workload, Service, Ingress, RBAC, and NetworkPolicy context with artifact matching and coverage reporting |
 | Artifact manifest | `--artifact-manifest` for CI-supplied image digests, registry refs, Git SHA, SBOM paths, Helm values images, Kustomize images, and Terraform image outputs |
 | Context JSON | Explicit override/enrichment keyed by artifact name |
 | Outputs | JSON with remediation groups and raw findings, unified effective exposure graph JSON, baseline JSON, PR delta JSON/Markdown, SARIF, diagnostics JSON, Markdown, interactive HTML, annotations, Terraform coverage JSON, Kubernetes coverage JSON, source coverage JSON, mapping JSON, readiness JSON |
-| CI quality gates | Built-in scan gates for artifact match coverage, strong artifact identity coverage, mapping warnings, source rule coverage, external evidence presence, external selector usability, critical external coverage, critical query-family coverage, critical proven query-family coverage, weak workload matches, low-confidence network/IAM evidence, readiness blockers, and readiness warnings |
+| CI quality gates | Built-in scan gates for artifact match coverage, strong artifact identity coverage, mapping warnings, source rule coverage, external evidence presence, external selector usability, critical external coverage, critical query-family coverage, critical proven query-family coverage, critical security-profile coverage, weak workload matches, low-confidence network/IAM evidence, readiness blockers, and readiness warnings |
 
 ## Import/export contract
 
@@ -475,9 +487,10 @@ It verifies:
 
 - vulnerability imports: local JSON, Grype `matches[]`, OSV-Scanner-style JSON, and normalized source-attributed intelligence fields;
 - source-evidence imports: native Reachability Advisor JSON, Reachability Advisor findings JSON, Semgrep JSON/dataflow traces, SARIF/CodeQL code flows, and govulncheck JSONL;
+- security-evidence imports: normalized SAST/DAST JSON, Semgrep JSON, and SARIF as first-party code weakness findings;
 - deployment/context inputs: Terraform plan JSON, a synthetic no-cloud Terraform plan E2E fixture, Terraform source paths through `hcl-audit`, rendered Kubernetes YAML/JSON, context JSON, artifact aliases, and CI artifact manifests;
 - configuration inputs: custom reachability rules and runtime policy JSON;
-- exports: findings JSON, remediation groups, evidence graph JSON, baseline JSON, PR delta JSON/Markdown, SARIF, diagnostics JSON, PR summary Markdown, GitHub annotations, self-contained HTML graph, source coverage, Terraform coverage, Kubernetes coverage, mapping reports, readiness reports, HCL audit JSON/Markdown, SBOM plan JSON/Markdown, source-evidence pack/plan JSON, rendered-IaC plan JSON/Markdown, artifact-manifest validation JSON, scoring benchmark JSON, real-app benchmark snapshot regression JSON, complex benchmark JSON/Markdown, Semgrep starter rules, fixture validation, fixture run reports, and single-finding explanations.
+- exports: findings JSON, remediation groups, evidence graph JSON, baseline JSON, PR delta JSON/Markdown, SARIF, diagnostics JSON, PR summary Markdown, GitHub annotations, self-contained HTML graph, source coverage, Terraform coverage, Kubernetes coverage, mapping reports, readiness reports, HCL audit JSON/Markdown, SBOM plan JSON/Markdown, source-evidence pack/plan JSON, security-evidence pack JSON, rendered-IaC plan JSON/Markdown, artifact-manifest validation JSON, scoring benchmark JSON, real-app benchmark snapshot regression JSON, complex benchmark JSON/Markdown, Semgrep starter rules, fixture validation, fixture run reports, and single-finding explanations.
 - target-state documentation: [docs/maturity_targets.md](docs/maturity_targets.md).
 
 ## Run quality gates
@@ -495,11 +508,11 @@ make package
 Current validation snapshot:
 
 ```text
-Ran 526 tests: OK
+Ran 535 tests: OK
 Coverage: 93%
 Coverage gate: 93% passed
 Fixture packs: 9 passed, 0 failed
-Release import/export contract: 53 checks passed
+Release import/export contract: 56 checks passed
 Package build: sdist and wheel
 ```
 

@@ -1,0 +1,17 @@
+{
+  "security_evidence": [
+    {
+      "scanner_type": "sast",
+      "tool": "semgrep",
+      "artifact": "nodejs-goof",
+      "rule_id": "security.sast-web-injection.cwe-78",
+      "weakness": "command injection",
+      "cwe": "CWE-78",
+      "severity": "critical",
+      "confidence": "high",
+      "source": {"path": "nodejs-goof-command-injection/routes/index.js", "line": 6, "column": 3},
+      "sink": {"function": "child_process.exec"},
+      "evidence": {"dataflow": "req.query.name reaches child_process.exec"}
+    }
+  ]
+}

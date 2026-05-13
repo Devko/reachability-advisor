@@ -1,12 +1,13 @@
 # Algorithms
 
-Reachability Advisor scores dependency vulnerabilities from SBOM, vulnerability, source-reachability, and deployment-context evidence.
+Reachability Advisor scores dependency vulnerabilities and first-party code weaknesses from SBOM, scanner, source-reachability, and deployment-context evidence.
 
 ## Pipeline
 
 ```text
 CycloneDX SBOMs
   + vulnerability intelligence (Grype JSON, OSV-style JSON, or normalized local JSON)
+  + SAST/DAST security evidence, when first-party weaknesses should be prioritized
   + source roots
   + Terraform plan JSON
   + CI artifact manifest, when SBOM metadata lacks image identity
@@ -14,6 +15,7 @@ CycloneDX SBOMs
   + custom source rules, when needed
   -> SBOM artifact identity
   -> vulnerability/component matches
+  -> security weakness/artifact matches
   -> source reachability evidence
   -> artifact-to-Terraform workload matches
   -> exposure / identity / data context
@@ -29,7 +31,7 @@ CycloneDX SBOMs
 Every finding is normalized into one path:
 
 ```text
-asset -> network path -> identity -> reachable code/package -> vulnerability -> score
+asset -> network path -> identity -> reachable code/package -> vulnerability or weakness -> score
 ```
 
 This path is the per-finding evidence model. The separate network, IAM, code, and vulnerability arrays remain for reporting and debugging.
@@ -44,7 +46,7 @@ Each effective edge records:
 - `blockers`: concrete constraints such as IAM conditions, private endpoints, network policy denies, or auth gates;
 - `unknowns`: missing evidence that prevents stronger conclusions.
 
-The graph is evidence-first. A high score must be traceable from the score node back through the vulnerable package, source evidence, identity, and network path to the asset. Missing network, identity, or source evidence is recorded as `unknowns`; it is not proof of safety.
+The graph is evidence-first. A high score must be traceable from the score node back through the vulnerable package or code weakness, source/scanner evidence, identity, and network path to the asset. Missing network, identity, or source evidence is recorded as `unknowns`; it is not proof of safety.
 
 ## SBOM acquisition model
 
@@ -117,6 +119,21 @@ The default analyzer builds one source index per artifact for Python, JavaScript
 Rules are visible in `src/reachability_advisor/source.py`. Additional project-specific rules can be supplied with `--reachability-rules`. Use `export-semgrep-rules` to generate starter Semgrep YAML from built-in and custom rules. Use `--source-evidence-in` to import evidence from Reachability Advisor JSON, Semgrep JSON including native `dataflow_trace`, CodeQL/SARIF data-flow paths, plain SARIF, or govulncheck JSONL.
 
 When multiple source evidence providers match the same finding, the scanner picks the strongest record by reachability state, confidence, selector specificity, then provider precedence. Exact package URL or vulnerability selectors beat package-name-only selectors. CodeQL, Semgrep, govulncheck, and native Reachability Advisor evidence are preserved as provider names in `source_reachability.evidence_source`, `source-coverage.json`, and the evidence graph.
+
+## SAST and DAST evidence
+
+`--security-evidence-in` imports scanner findings that are not dependency CVEs. Typical examples are XSS, SSRF, SQL injection, command injection, insecure deserialization, and access-control weaknesses in first-party code. SARIF 2.1.0 is the preferred interchange format because it carries rule metadata, source locations, and optional code-flow paths across different static analysis tools.
+
+These findings are emitted with `finding_type: code_weakness`. The dependency fields remain present for compatibility: `vulnerability.id` is the scanner rule id, `vulnerability.aliases` can carry the CWE, and `weakness` carries scanner type, tool, CWE, route, URL, sink, dataflow, and remediation text.
+
+Scoring uses the same exposure model as dependency findings:
+
+1. SAST evidence supplies code reachability. Data-flow or taint evidence is treated as `attacker_controlled`; location-only evidence is treated as `function_reachable`.
+2. DAST evidence supplies runtime reachability. HTTP(S) targets are treated as public unless the record sets an explicit `exposure`.
+3. Network and IAM context still come from Terraform, rendered Kubernetes manifests, context JSON, or effective exposure evaluators.
+4. A DAST finding without matching artifact identity is reported as unmapped evidence rather than guessed across every SBOM.
+
+Use `--source-evidence-in` when the external tool is proving reachability of a dependency vulnerability. Use `--security-evidence-in` when the tool is reporting a first-party code weakness.
 
 External source evidence must include a component/package, package URL, or vulnerability selector. Artifact-only records are retained for diagnostics but do not upgrade findings, because artifact names can only narrow a dependency match. `source-coverage.json` reports unmatchable external records under `external_evidence_selector_diagnostics`.
 

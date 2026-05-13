@@ -43,6 +43,8 @@ def _visual_payload(findings: list[Finding], metadata: dict[str, Any] | None = N
         artifact = finding["artifact"]
         component = finding["component"]
         vulnerability = finding["vulnerability"]
+        weakness = finding.get("weakness") if isinstance(finding.get("weakness"), dict) else {}
+        finding_type = str(finding.get("finding_type") or "dependency_vulnerability")
         source = finding["source_reachability"]
         context = finding.get("context") or {}
         artifact_name = str(artifact.get("name") or "unknown-artifact")
@@ -76,6 +78,9 @@ def _visual_payload(findings: list[Finding], metadata: dict[str, Any] | None = N
             "id": vuln_id,
             "assetId": asset_id,
             "findingKey": finding["key"],
+            "kind": "vulnerability" if finding_type == "dependency_vulnerability" else "code_weakness",
+            "findingType": finding_type,
+            "weakness": weakness,
             "label": str(vulnerability.get("id") or "unknown-vulnerability"),
             "tier": finding.get("tier") or "informational",
             "score": safe_float(finding.get("score")),
@@ -381,16 +386,20 @@ def _stats(findings: list[dict[str, Any]]) -> dict[str, Any]:
     }
     tiers = dict.fromkeys(TIER_RANK, 0)
     exposures: dict[str, int] = {}
+    by_type: dict[str, int] = {}
     for finding in findings:
         tiers[str(finding.get("tier") or "informational")] = tiers.get(str(finding.get("tier") or "informational"), 0) + 1
         exposure = str(finding.get("context", {}).get("exposure") or "unknown")
         exposures[exposure] = exposures.get(exposure, 0) + 1
+        finding_type = str(finding.get("finding_type") or "dependency_vulnerability")
+        by_type[finding_type] = by_type.get(finding_type, 0) + 1
     return {
         "finding_count": len(findings),
         "artifact_count": len({item for item in artifacts if item}),
         "component_count": len({item for item in components if item[1]}),
         "tiers": tiers,
         "exposures": exposures,
+        "finding_types": by_type,
     }
 
 
@@ -885,7 +894,7 @@ li {
 </section>
 <main class="layout">
   <section class="graph-shell">
-    <div id="graph" role="img" aria-label="Network entry, asset, and vulnerability graph">
+    <div id="graph" role="img" aria-label="Network entry, asset, vulnerability, and code weakness graph">
       <div id="surface">
         <svg id="edges"></svg>
         <div id="cards"></div>
@@ -990,6 +999,7 @@ function renderStats() {
   const s = DATA.stats;
   const parts = [
     `${s.finding_count} findings`,
+    `${(s.finding_types || {}).code_weakness || 0} code weaknesses`,
     `${s.artifact_count} assets`,
     `${s.component_count} components`,
     `${s.tiers.urgent || 0} urgent`,
@@ -1112,7 +1122,7 @@ function renderLaneLabels() {
     laneLabel("Entry", entryX, laneY, entryWidth),
     laneLabel("Network path", pathX, laneY, pathWidth),
     laneLabel("Asset", assetX, laneY, assetWidth),
-    laneLabel("Vulnerabilities", vulnX, laneY, vulnWidth),
+    laneLabel("Findings", vulnX, laneY, vulnWidth),
   ];
 }
 
@@ -1266,9 +1276,10 @@ function assetBody(asset) {
 
 function renderVulnerabilityCard(vuln, position) {
   const card = createCard("vuln-card", vuln.tier, position, vuln);
-  const subtitle = `${compactComponent(vuln.component, vuln.componentVersion)} | code ${vuln.codeExposure} | ${vuln.exposure} network | ${vuln.privilege} IAM`;
+  const weakness = vuln.findingType === "code_weakness" ? ` | ${vuln.weakness?.weakness || "code weakness"}` : "";
+  const subtitle = `${compactComponent(vuln.component, vuln.componentVersion)}${weakness} | code ${vuln.codeExposure} | ${vuln.exposure} network | ${vuln.privilege} IAM`;
   card.append(
-    cardTop(vuln.label, [priorityChip(vuln.tier), scoreChip(vuln.score), vuln.knownExploited ? tag("known exploited", "urgent") : null], subtitle),
+    cardTop(vuln.label, [priorityChip(vuln.tier), scoreChip(vuln.score), vuln.findingType === "code_weakness" ? tag(vuln.weakness?.scanner_type || "scanner", "count") : null, vuln.knownExploited ? tag("known exploited", "urgent") : null], subtitle),
     vulnBody(vuln)
   );
   return card;
@@ -1411,14 +1422,18 @@ function renderFindingList(findings) {
     });
     const title = document.createElement("div");
     title.className = "item-title";
-    title.append(text(`${finding.vulnerability.id} in ${finding.component.name}`));
+    const findingTitle = finding.finding_type === "code_weakness"
+      ? `${finding.vulnerability.id} ${finding.weakness?.weakness || "code weakness"}`
+      : `${finding.vulnerability.id} in ${finding.component.name}`;
+    title.append(text(findingTitle));
     const chip = document.createElement("span");
     chip.className = `chip ${finding.tier}`;
     chip.textContent = `priority ${finding.tier} ${Number(finding.score).toFixed(1)}`;
     title.append(chip);
     const meta = document.createElement("div");
     meta.className = "item-meta";
-    meta.textContent = `${finding.artifact.name} | code ${codeExposureFromState(finding.source_reachability || {})} | source ${(finding.source_reachability || {}).state} | exposure ${(finding.context || {}).exposure || "unknown"} | privilege ${(finding.context || {}).privilege || "unknown"}`;
+    const scanner = finding.finding_type === "code_weakness" ? ` | scanner ${(finding.weakness || {}).tool || "unknown"}` : "";
+    meta.textContent = `${finding.artifact.name}${scanner} | code ${codeExposureFromState(finding.source_reachability || {})} | source ${(finding.source_reachability || {}).state} | exposure ${(finding.context || {}).exposure || "unknown"} | privilege ${(finding.context || {}).privilege || "unknown"}`;
     item.append(title, meta);
     return item;
   }));
@@ -1426,7 +1441,7 @@ function renderFindingList(findings) {
 
 function renderDetails(datum) {
   if (!datum) {
-    details.innerHTML = '<h2>Details</h2><div class="empty">Select an asset or vulnerability. Use mouse wheel to zoom and drag the graph background to pan.</div>';
+    details.innerHTML = '<h2>Details</h2><div class="empty">Select an asset or finding. Use mouse wheel to zoom and drag the graph background to pan.</div>';
     return;
   }
   const section = document.createElement("section");
@@ -1448,10 +1463,15 @@ function renderDetails(datum) {
     appendList(section, "Blockers and constraints", (datum.blockers || []).map(blocker => `${blocker.kind}: ${blocker.evidence}`));
     appendList(section, "Network evidence", networkPathsForAsset(datum.assetId).map(path => path.evidence || path.summary).filter(Boolean));
   } else if (datum.findingKey) {
-    section.append(heading(`${datum.label} in ${datum.component}`));
-    section.append(chips([priorityChip(datum.tier), scoreChip(datum.score)]));
+    const title = datum.findingType === "code_weakness" ? `${datum.label} ${datum.weakness?.weakness || "code weakness"}` : `${datum.label} in ${datum.component}`;
+    const scannerChips = datum.findingType === "code_weakness" ? [tag(datum.weakness?.scanner_type || "scanner", "count"), datum.weakness?.cwe ? tag(datum.weakness.cwe, "count") : null] : [];
+    section.append(heading(title));
+    section.append(chips([priorityChip(datum.tier), scoreChip(datum.score), ...scannerChips]));
     section.append(kv({
       component: `${datum.component}@${datum.componentVersion}`,
+      "finding type": datum.findingType === "code_weakness" ? "first-party code weakness" : "dependency vulnerability",
+      scanner: datum.findingType === "code_weakness" ? datum.weakness?.tool : undefined,
+      CWE: datum.findingType === "code_weakness" ? (datum.weakness?.cwe || "unknown") : undefined,
       "code exposure": datum.codeExposure,
       "code detail": datum.codeExposureDetail,
       "source state": datum.reachability,

@@ -1,0 +1,17 @@
+{
+  "security_evidence": [
+    {
+      "scanner_type": "sast",
+      "tool": "semgrep",
+      "artifact": "yaml-api",
+      "rule_id": "security.sast-parser-deserialization.cwe-502",
+      "weakness": "unsafe deserialization",
+      "cwe": "CWE-502",
+      "severity": "high",
+      "confidence": "high",
+      "source": {"path": "python-yaml-deserialization/app.py", "line": 9, "column": 12},
+      "sink": {"function": "yaml.load"},
+      "evidence": {"dataflow": "request.data reaches yaml.load"}
+    }
+  ]
+}

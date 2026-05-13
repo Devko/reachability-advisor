@@ -1,0 +1,17 @@
+{
+  "security_evidence": [
+    {
+      "scanner_type": "sast",
+      "tool": "semgrep",
+      "artifact": "flask-api",
+      "rule_id": "security.sast-web-injection.cwe-89",
+      "weakness": "sql injection",
+      "cwe": "CWE-89",
+      "severity": "high",
+      "confidence": "high",
+      "source": {"path": "python-flask-sqli/app.py", "line": 10, "column": 12},
+      "sink": {"function": "sqlite3.execute"},
+      "evidence": {"dataflow": "request.args.id reaches SQL query string"}
+    }
+  ]
+}

@@ -192,6 +192,8 @@ class Finding:
     tier: Tier
     confidence: Confidence
     rationale: list[str]
+    finding_type: str = "dependency_vulnerability"
+    weakness: dict[str, Any] = field(default_factory=dict)
     fix_commands: list[str] = field(default_factory=list)
     policy_status: str = "active"
     score_details: dict[str, Any] = field(default_factory=dict)
@@ -199,6 +201,7 @@ class Finding:
     def to_json(self) -> dict[str, Any]:
         return {
             "key": self.key,
+            "finding_type": self.finding_type,
             "artifact": {
                 "name": self.artifact.name,
                 "reference": self.artifact.reference,
@@ -227,6 +230,7 @@ class Finding:
                 "references": self.vulnerability.references,
                 "intelligence": self.vulnerability.intelligence,
             },
+            "weakness": self.weakness,
             "source_reachability": {
                 "state": self.source.reachability.value,
                 "label": reachability_label(self.source.reachability),

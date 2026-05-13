@@ -74,12 +74,14 @@ def build_evidence_graph(findings: list[Finding], metadata: dict[str, Any] | Non
                 "version": finding.component.version,
                 "purl": finding.component.purl,
                 "scope": finding.component.scope,
+                "finding_type": finding.finding_type,
             },
         )
         vulnerabilities.setdefault(
             vulnerability_id,
             {
                 "id": vulnerability_id,
+                "kind": "vulnerability" if finding.finding_type == "dependency_vulnerability" else "code_weakness",
                 "advisory_id": finding.vulnerability.id,
                 "aliases": finding.vulnerability.aliases,
                 "severity": finding.vulnerability.severity,
@@ -87,6 +89,7 @@ def build_evidence_graph(findings: list[Finding], metadata: dict[str, Any] | Non
                 "epss": finding.vulnerability.epss,
                 "known_exploited": finding.vulnerability.known_exploited,
                 "intelligence": finding.vulnerability.intelligence,
+                "weakness": finding.weakness,
                 "summary": finding.vulnerability.summary,
             },
         )
@@ -97,6 +100,8 @@ def build_evidence_graph(findings: list[Finding], metadata: dict[str, Any] | Non
                 "asset_id": asset_id,
                 "component_id": component_id,
                 "vulnerability_id": vulnerability_id,
+                "finding_type": finding.finding_type,
+                "weakness": finding.weakness,
                 "tier": finding.tier.value,
                 "score": round(finding.score, 2),
                 "confidence": finding.confidence.value,
@@ -108,7 +113,7 @@ def build_evidence_graph(findings: list[Finding], metadata: dict[str, Any] | Non
             [
                 {"id": f"{asset_id}->{finding_id}", "source": asset_id, "target": finding_id, "kind": "asset_finding", "finding_key": finding.key},
                 {"id": f"{finding_id}->{component_id}", "source": finding_id, "target": component_id, "kind": "finding_component", "finding_key": finding.key},
-                {"id": f"{component_id}->{vulnerability_id}", "source": component_id, "target": vulnerability_id, "kind": "component_vulnerability", "finding_key": finding.key},
+                {"id": f"{component_id}->{vulnerability_id}", "source": component_id, "target": vulnerability_id, "kind": "component_vulnerability" if finding.finding_type == "dependency_vulnerability" else "component_code_weakness", "finding_key": finding.key},
             ]
         )
         code_edges.append(_code_edge(finding, asset_id, component_id, finding_id))
@@ -186,7 +191,7 @@ def _stronger_value(left: Any, right: Any, rank: dict[str, int]) -> str:
 def _code_edge(finding: Finding, asset_id: str, component_id: str, finding_id: str) -> dict[str, Any]:
     return {
         "id": f"code:{finding.key}",
-        "kind": "code_reachability",
+        "kind": "code_reachability" if finding.finding_type == "dependency_vulnerability" else "code_weakness_reachability",
         "source": asset_id,
         "target": component_id,
         "finding_id": finding_id,
@@ -201,6 +206,8 @@ def _code_edge(finding: Finding, asset_id: str, component_id: str, finding_id: s
         "matched_symbols": finding.source.matched_symbols,
         "dependency_path": finding.source.dependency_path,
         "diagnostics": finding.source.diagnostics,
+        "finding_type": finding.finding_type,
+        "weakness": finding.weakness,
     }
 
 

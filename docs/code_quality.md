@@ -2,7 +2,7 @@
 
 ## Current gates
 
-- Unit and workflow tests: 526.
+- Unit and workflow tests: 535.
 - Coverage threshold: 93%.
 - Current measured coverage: passes the 93% line/branch-aware coverage gate.
 - Test runner: `scripts/run_tests.py`.
@@ -11,7 +11,7 @@
 - Static type configuration: strict `mypy` across `src`.
 - Sample workflow: `make sample`.
 - Terraform fixture workflow: `make fixtures`.
-- Release validation: `make release-check` currently covers 53 import/export and release-contract checks.
+- Release validation: `make release-check` currently covers 56 import/export and release-contract checks.
 - Complex real-world app validation: `make external-complex` (AWS Retail Store, Google Online Boutique, Bank of Anthos, Azure AKS Store, and Instana Robot Shop).
 - Package build: `make package` (`python -m build --no-isolation`).
 - CI matrix: Python 3.10, 3.11, 3.12.

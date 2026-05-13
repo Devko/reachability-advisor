@@ -1,0 +1,17 @@
+{
+  "security_evidence": [
+    {
+      "scanner_type": "dast",
+      "tool": "generic-dast",
+      "artifact": "web-api",
+      "rule_id": "dast.ssrf.probe",
+      "weakness": "server-side request forgery",
+      "cwe": "CWE-918",
+      "severity": "critical",
+      "confidence": "high",
+      "method": "GET",
+      "url": "https://web-api.example/fetch?url=https://probe.example/callback",
+      "evidence": {"callback": "scanner-controlled probe URL was requested by the server"}
+    }
+  ]
+}

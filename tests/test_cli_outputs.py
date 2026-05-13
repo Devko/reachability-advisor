@@ -12,6 +12,7 @@ from reachability_advisor.models import Tier
 from reachability_advisor.outputs import explain_finding, load_findings_json
 from reachability_advisor.policy import ExceptionRule, RuntimePolicy
 from reachability_advisor.scoring import ScorePolicy
+from reachability_advisor.security_evidence import load_security_evidence
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -97,6 +98,267 @@ class CliTests(unittest.TestCase):
             self.assertGreaterEqual(len(report_data["vulnerabilities"]), 2)
             self.assertEqual(len(report_data["links"]), len(report_data["vulnerabilities"]))
             self.assertIn("::error", (out / "annotations.txt").read_text(encoding="utf-8"))
+
+    def test_scan_imports_sast_and_dast_security_evidence_as_code_weaknesses(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            sbom = out / "web-api.cdx.json"
+            vulns = out / "vulns.json"
+            context = out / "context.json"
+            security = out / "security-evidence.json"
+            findings_path = out / "findings.json"
+            sarif_path = out / "findings.sarif"
+            diagnostics_path = out / "diagnostics.json"
+            source_coverage_path = out / "source-coverage.json"
+            html_path = out / "graph.html"
+            sbom.write_text(
+                json.dumps(
+                    {
+                        "bomFormat": "CycloneDX",
+                        "metadata": {"component": {"name": "web-api", "properties": [{"name": "oci:image:ref", "value": "registry.example/web-api:1"}]}},
+                        "components": [{"name": "express", "version": "4.18.2", "purl": "pkg:npm/express@4.18.2"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            vulns.write_text(json.dumps({"vulnerabilities": []}), encoding="utf-8")
+            context.write_text(json.dumps({"artifacts": {"web-api": {"environment": "prod", "criticality": "high", "privilege": "limited"}}}), encoding="utf-8")
+            security.write_text(
+                json.dumps(
+                    {
+                        "security_evidence": [
+                            {
+                                "scanner_type": "sast",
+                                "tool": "semgrep",
+                                "artifact": "web-api",
+                                "rule_id": "js.express.xss",
+                                "weakness": "cross-site scripting",
+                                "cwe": "CWE-79",
+                                "severity": "high",
+                                "confidence": "high",
+                                "source": {"path": "src/routes/search.js", "line": 12, "column": 5, "snippet": "res.send(req.query.q)"},
+                                "sink": {"function": "res.send"},
+                                "evidence": {"dataflow": "req.query.q reaches res.send"},
+                                "remediation": "Encode untrusted output before writing HTML responses.",
+                            },
+                            {
+                                "scanner_type": "dast",
+                                "tool": "zap",
+                                "artifact": "web-api",
+                                "rule_id": "dast.xss.reflected",
+                                "weakness": "reflected xss",
+                                "cwe": "79",
+                                "severity": "medium",
+                                "confidence": "high",
+                                "method": "GET",
+                                "url": "https://web-api.example/search?q=%3Cscript%3E",
+                                "message": "Reflected payload was observed in the response body.",
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            code = main([
+                "scan",
+                "--sbom", str(sbom),
+                "--vulns", str(vulns),
+                "--context", str(context),
+                "--security-evidence-in", str(security),
+                "--out", str(findings_path),
+                "--sarif-out", str(sarif_path),
+                "--diagnostics-out", str(diagnostics_path),
+                "--source-coverage-out", str(source_coverage_path),
+                "--html-out", str(html_path),
+                "--no-table",
+            ])
+
+            self.assertEqual(code, 0)
+            data = json.loads(findings_path.read_text(encoding="utf-8"))
+            code_findings = [finding for finding in data["findings"] if finding["finding_type"] == "code_weakness"]
+            self.assertEqual(len(code_findings), 2)
+            self.assertEqual(data["metadata"]["security_evidence_records"], 2)
+            self.assertEqual(data["metadata"]["security_evidence_mapped"], 2)
+            self.assertEqual({finding["weakness"]["scanner_type"] for finding in code_findings}, {"sast", "dast"})
+            self.assertTrue(any(finding["context"]["exposure"] == "public" for finding in code_findings if finding["weakness"]["scanner_type"] == "dast"))
+            self.assertTrue(any(edge["kind"] == "code_has_weakness" for edge in data["evidence_graph"]["effective_exposure_graph"]["edges"]))
+            sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
+            self.assertTrue(any(result["properties"]["finding_type"] == "code_weakness" for result in sarif["runs"][0]["results"]))
+            diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+            self.assertTrue(any(diagnostic["finding_type"] == "code_weakness" for diagnostic in diagnostics["diagnostics"]))
+            source_coverage = json.loads(source_coverage_path.read_text(encoding="utf-8"))
+            self.assertEqual(source_coverage["security_evidence"]["mapped"], 2)
+            self.assertEqual(source_coverage["security_evidence"]["summary"]["critical_profile_coverage"], 1.0)
+            self.assertIn("sast-web-injection", source_coverage["security_evidence"]["profile_records"][0]["profiles"])
+            html = html_path.read_text(encoding="utf-8")
+            self.assertIn("code weaknesses", html)
+
+    def test_scan_security_profile_gate_rejects_uncovered_critical_weakness(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            sbom = out / "web-api.cdx.json"
+            vulns = out / "vulns.json"
+            security = out / "security-evidence.json"
+            coverage = out / "source-coverage.json"
+            sbom.write_text(
+                json.dumps(
+                    {
+                        "bomFormat": "CycloneDX",
+                        "metadata": {"component": {"name": "web-api"}},
+                        "components": [{"name": "express", "version": "4.18.2", "purl": "pkg:npm/express@4.18.2"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            vulns.write_text(json.dumps({"vulnerabilities": []}), encoding="utf-8")
+            security.write_text(
+                json.dumps(
+                    {
+                        "security_evidence": [
+                            {
+                                "scanner_type": "sast",
+                                "tool": "custom-sast",
+                                "artifact": "web-api",
+                                "rule_id": "custom.critical.unknown",
+                                "weakness": "critical custom weakness",
+                                "severity": "critical",
+                                "confidence": "high",
+                                "source": {"path": "src/app.js", "line": 1},
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            code = main([
+                "scan",
+                "--sbom", str(sbom),
+                "--vulns", str(vulns),
+                "--security-evidence-in", str(security),
+                "--source-coverage-out", str(coverage),
+                "--min-critical-security-profile-coverage", "1.0",
+                "--no-table",
+            ])
+
+            self.assertEqual(code, 10)
+            report = json.loads(coverage.read_text(encoding="utf-8"))
+            self.assertEqual(report["security_evidence"]["summary"]["critical_profile_coverage"], 0.0)
+            self.assertEqual(report["security_evidence"]["summary"]["critical_records_missing_profile"], 1)
+
+    def test_semgrep_json_can_be_loaded_as_security_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "semgrep.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "results": [
+                            {
+                                "check_id": "javascript.lang.security.audit.xss",
+                                "path": "src/app.js",
+                                "start": {"line": 9, "col": 3},
+                                "extra": {
+                                    "message": "Unsanitized output",
+                                    "severity": "ERROR",
+                                    "metadata": {"artifact": "web-api", "cwe": ["CWE-79"], "confidence": "high", "category": "xss"},
+                                },
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            records = load_security_evidence([path])
+
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0].scanner_type, "sast")
+            self.assertEqual(records[0].tool, "semgrep")
+            self.assertEqual(records[0].artifact, "web-api")
+            self.assertEqual(records[0].cwe, "CWE-79")
+
+    def test_semgrep_oss_sarif_sample_imports_as_code_weakness(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            sbom = out / "web-api.cdx.json"
+            vulns = out / "vulns.json"
+            findings_path = out / "findings.json"
+            semgrep_sarif = ROOT / "samples/security-evidence/semgrep-ce-xss.sarif"
+            sbom.write_text(
+                json.dumps(
+                    {
+                        "bomFormat": "CycloneDX",
+                        "metadata": {"component": {"name": "web-api", "properties": [{"name": "oci:image:ref", "value": "registry.example/web-api:1"}]}},
+                        "components": [{"name": "express", "version": "4.18.2", "purl": "pkg:npm/express@4.18.2"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            vulns.write_text(json.dumps({"vulnerabilities": []}), encoding="utf-8")
+
+            records = load_security_evidence([semgrep_sarif])
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0].tool, "Semgrep OSS")
+            self.assertEqual(records[0].cwe, "CWE-79")
+            self.assertEqual(records[0].weakness, "cross_site_scripting_xss")
+
+            code = main([
+                "scan",
+                "--sbom", str(sbom),
+                "--vulns", str(vulns),
+                "--security-evidence-in", str(semgrep_sarif),
+                "--out", str(findings_path),
+                "--no-table",
+            ])
+
+            self.assertEqual(code, 0)
+            data = json.loads(findings_path.read_text(encoding="utf-8"))
+            self.assertEqual(len(data["findings"]), 1)
+            finding = data["findings"][0]
+            self.assertEqual(finding["finding_type"], "code_weakness")
+            self.assertEqual(finding["weakness"]["tool"], "Semgrep OSS")
+            self.assertEqual(finding["weakness"]["cwe"], "CWE-79")
+            self.assertEqual(finding["source_reachability"]["state"], "attacker_controlled")
+
+    def test_real_world_nodejs_goof_sarif_imports_as_code_weakness(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            sbom = out / "nodejs-goof.cdx.json"
+            vulns = out / "vulns.json"
+            findings_path = out / "findings.json"
+            sarif = ROOT / "samples/security-evidence/semgrep-nodejs-goof-command-injection.sarif"
+            sbom.write_text(
+                json.dumps(
+                    {
+                        "bomFormat": "CycloneDX",
+                        "metadata": {"component": {"name": "nodejs-goof", "properties": [{"name": "oci:image:ref", "value": "ghcr.io/snyk-labs/nodejs-goof:sample"}]}},
+                        "components": [{"name": "express", "version": "4.18.2", "purl": "pkg:npm/express@4.18.2"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            vulns.write_text(json.dumps({"vulnerabilities": []}), encoding="utf-8")
+
+            code = main([
+                "scan",
+                "--sbom", str(sbom),
+                "--vulns", str(vulns),
+                "--security-evidence-in", str(sarif),
+                "--out", str(findings_path),
+                "--no-table",
+            ])
+
+            self.assertEqual(code, 0)
+            data = json.loads(findings_path.read_text(encoding="utf-8"))
+            self.assertEqual(len(data["findings"]), 1)
+            finding = data["findings"][0]
+            self.assertEqual(finding["artifact"]["name"], "nodejs-goof")
+            self.assertEqual(finding["finding_type"], "code_weakness")
+            self.assertEqual(finding["weakness"]["weakness"], "command_injection")
+            self.assertEqual(finding["weakness"]["cwe"], "CWE-78")
+            self.assertEqual(finding["source_reachability"]["state"], "attacker_controlled")
+            self.assertEqual(finding["source_reachability"]["locations"][0]["path"].replace("\\", "/"), "routes/index.js")
 
     def test_scan_quality_gate_fails_on_low_artifact_mapping_coverage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -624,6 +886,7 @@ class CliTests(unittest.TestCase):
             manifest = out / "artifact-manifest.json"
             manifest_report = out / "artifact-manifest-report.json"
             pack = out / "pack"
+            security_pack = out / "security-pack"
             iac_plan = out / "iac-plan.json"
 
             init_code = main([
@@ -645,14 +908,18 @@ class CliTests(unittest.TestCase):
             ])
             validate_code = main(["artifact-manifest", "validate", "--manifest", str(manifest), "--out", str(manifest_report), "--fail-on-warning"])
             pack_code = main(["source-evidence-pack", "--output-dir", str(pack), "--language", "go"])
+            security_pack_code = main(["security-evidence-pack", "--output-dir", str(security_pack)])
             iac_code = main(["rendered-iac-plan", "--terraform-dir", "infra", "--helm-chart", "charts/app", "--kustomize-dir", "deploy/prod", "--out-json", str(iac_plan)])
 
             self.assertEqual(init_code, 0)
             self.assertEqual(validate_code, 0)
             self.assertEqual(pack_code, 0)
+            self.assertEqual(security_pack_code, 0)
             self.assertEqual(iac_code, 0)
             self.assertTrue((pack / "semgrep-reachability.yml").exists())
             self.assertTrue((pack / "source-evidence-pack.json").exists())
+            self.assertTrue((security_pack / "security-evidence-pack.json").exists())
+            self.assertTrue((security_pack / "semgrep" / "security.yml").exists())
             self.assertEqual(json.loads(manifest_report.read_text(encoding="utf-8"))["status"], "ready")
             commands = json.loads(iac_plan.read_text(encoding="utf-8"))["commands"]
             self.assertTrue(any(command["tool"] == "terraform" for command in commands))

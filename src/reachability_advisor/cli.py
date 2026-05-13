@@ -69,6 +69,12 @@ from .readiness import load_release_readiness_inputs, release_readiness_report
 from .sbom import SbomError, load_sboms
 from .sbom_plan import recommend_sbom_commands, render_sbom_plan_markdown, write_sbom_plan_json
 from .scoring import generate_findings_with_source_report
+from .security_evidence import (
+    SecurityEvidenceError,
+    generate_security_findings,
+    load_security_evidence,
+)
+from .security_profiles import write_security_evidence_pack
 from .source import (
     BUILTIN_RULES,
     load_external_source_evidence,
@@ -95,7 +101,7 @@ class UserFacingError(Exception):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="reachability-advisor", description="Dependency vulnerability prioritization with source, Terraform, network, and IAM context.")
+    parser = argparse.ArgumentParser(prog="reachability-advisor", description="Security prioritization with dependency, source, Terraform, network, IAM, SAST, and DAST context.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     scan = sub.add_parser("scan", help="Scan SBOMs and produce CI/IDE-friendly outputs.")
@@ -117,6 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--require-artifact-provenance", action="store_true", help="Exit 10 unless artifact manifests provide digest, SBOM path, Git SHA, and signature/attestation markers.")
     scan.add_argument("--reachability-rules", help="Custom source reachability rules JSON.")
     scan.add_argument("--source-evidence-in", action="append", default=[], help="External source evidence JSON, Semgrep JSON, SARIF, or govulncheck JSONL. Repeatable.")
+    scan.add_argument("--security-evidence-in", action="append", default=[], help="First-party SAST/DAST evidence JSON, Semgrep JSON, or SARIF. Repeatable.")
     scan.add_argument(
         "--analysis-profile",
         choices=["advisory", "production"],
@@ -130,6 +137,9 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--require-external-source-evidence", action="store_true", help="Exit 10 when no external source analyzer evidence was imported.")
     scan.add_argument("--min-external-evidence-usable-ratio", type=float, help="Exit 10 when imported external source evidence selector usability is below this 0..1 ratio.")
     scan.add_argument("--min-critical-external-source-coverage", type=float, help="Exit 10 when critical finding coverage by external source evidence is below this 0..1 ratio. Production defaults to 1.0.")
+    scan.add_argument("--min-critical-query-family-coverage", type=float, help="Exit 10 when critical findings lack relevant source query-family evidence. Production defaults to 1.0.")
+    scan.add_argument("--min-critical-proven-query-family-coverage", type=float, help="Exit 10 when critical findings lack proven maintained query-family coverage. Production defaults to 1.0.")
+    scan.add_argument("--min-critical-security-profile-coverage", type=float, help="Exit 10 when imported critical SAST/DAST findings lack a maintained security profile.")
     scan.add_argument("--require-strong-source-for-critical", action="store_true", help="Exit 10 when critical findings only have dependency-level or weaker source evidence. Production profile enables this gate.")
     scan.add_argument("--policy", help="Policy JSON with exceptions and fail tier.")
     scan.add_argument("--out", help="Findings JSON output path.")
@@ -158,6 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--policy")
     validate.add_argument("--reachability-rules")
     validate.add_argument("--source-evidence-in", action="append", default=[])
+    validate.add_argument("--security-evidence-in", action="append", default=[])
     validate.add_argument("--artifact-manifest", action="append", default=[])
     validate.add_argument("--json-out")
 
@@ -215,6 +226,10 @@ def build_parser() -> argparse.ArgumentParser:
     source_pack.add_argument("--language", choices=["javascript", "typescript", "java", "python", "go", "golang"], help="Primary language profile.")
     source_pack.add_argument("--package-manager", choices=["npm", "pnpm", "yarn", "maven", "gradle", "pypi", "poetry", "pip", "go", "golang"], help="Package manager/ecosystem hint.")
     source_pack.add_argument("--json", action="store_true", help="Print pack manifest JSON.")
+
+    security_pack = sub.add_parser("security-evidence-pack", help="Write maintained SAST/DAST profile assets and coverage metadata.")
+    security_pack.add_argument("--output-dir", default="reachability/security-evidence-pack", help="Directory for generated SAST/DAST evidence profiles.")
+    security_pack.add_argument("--json", action="store_true", help="Print pack manifest JSON.")
 
     artifact_manifest = sub.add_parser("artifact-manifest", help="Create or validate CI artifact identity manifests.")
     artifact_manifest_sub = artifact_manifest.add_subparsers(dest="artifact_manifest_command", required=True)
@@ -372,6 +387,7 @@ def run_scan(args: argparse.Namespace) -> int:
             args.policy,
             args.reachability_rules,
             args.source_evidence_in,
+            args.security_evidence_in,
             args.artifact_manifest,
         )
         for issue in issues:
@@ -423,6 +439,7 @@ def run_scan(args: argparse.Namespace) -> int:
         kubernetes_coverage = kubernetes_analysis.coverage
     contexts = enrich_context_map_with_effective_exposure(contexts)
     external_source_evidence = load_external_source_evidence(args.source_evidence_in)
+    security_evidence = load_security_evidence(args.security_evidence_in)
     findings, source_coverage = generate_findings_with_source_report(
         sboms,
         vulnerabilities,
@@ -432,6 +449,13 @@ def run_scan(args: argparse.Namespace) -> int:
         reachability_rules=reachability_rules,
         external_source_evidence=external_source_evidence,
     )
+    security_findings, security_evidence_report = generate_security_findings(
+        security_evidence,
+        sboms,
+        contexts,
+        policy=runtime_policy.score_policy,
+    )
+    findings = sorted([*findings, *security_findings], key=lambda finding: finding.score, reverse=True)
     findings = apply_exceptions(findings, runtime_policy)
     mapping_report = build_mapping_report(sboms, source_roots, terraform_coverage, kubernetes_coverage)
     if args.artifact_manifest:
@@ -448,9 +472,15 @@ def run_scan(args: argparse.Namespace) -> int:
         "kubernetes_resources": kubernetes_coverage.get("summary", {}).get("total_resources", 0),
         "source_files": source_coverage.get("summary", {}).get("files_scanned", 0),
         "external_source_evidence_records": source_coverage.get("summary", {}).get("external_evidence_records", 0),
+        "security_evidence_records": security_evidence_report.get("records", 0),
+        "security_evidence_mapped": security_evidence_report.get("mapped", 0),
+        "security_evidence_unmapped": security_evidence_report.get("unmapped", 0),
+        "code_weakness_findings": len(security_findings),
         "analysis_profile": args.analysis_profile,
         "artifact_manifest_entries": artifact_manifest_report.get("entries", 0),
     }
+    if security_evidence:
+        source_coverage["security_evidence"] = security_evidence_report
     _annotate_analysis_profile(args, source_coverage, terraform_coverage, kubernetes_coverage)
     if args.out:
         write_json_findings(findings, args.out, metadata=metadata)
@@ -555,13 +585,22 @@ def _quality_gate_failures(
     source_rule_minimum = _profile_minimum(args.min_source_rule_coverage, 0.8 if production else None)
     external_usable_minimum = _profile_minimum(args.min_external_evidence_usable_ratio, 0.8 if production else None)
     critical_external_minimum = _profile_minimum(args.min_critical_external_source_coverage, 1.0 if production else None)
-    critical_query_family_minimum = 1.0 if production else None
-    critical_proven_query_family_minimum = 1.0 if production else None
+    critical_query_family_minimum = _profile_minimum(args.min_critical_query_family_coverage, 1.0 if production else None)
+    critical_proven_query_family_minimum = _profile_minimum(args.min_critical_proven_query_family_coverage, 1.0 if production else None)
     ratio_gate("source rule coverage", source_summary.get("source_rule_coverage"), source_rule_minimum)
     ratio_gate("external source evidence usable ratio", source_summary.get("external_evidence_usable_ratio"), external_usable_minimum)
     ratio_gate("critical external source evidence coverage", source_summary.get("critical_external_evidence_coverage"), critical_external_minimum)
     ratio_gate("critical source query-family coverage", source_summary.get("critical_query_family_coverage"), critical_query_family_minimum)
     ratio_gate("critical proven source query-family coverage", source_summary.get("critical_proven_query_family_coverage"), critical_proven_query_family_minimum)
+    security_report_raw = source_coverage.get("security_evidence")
+    security_report = security_report_raw if isinstance(security_report_raw, dict) else {}
+    security_summary_raw = security_report.get("summary")
+    security_summary = security_summary_raw if isinstance(security_summary_raw, dict) else {}
+    security_profile_minimum = _profile_minimum(
+        args.min_critical_security_profile_coverage,
+        1.0 if production and int(security_summary.get("records") or 0) > 0 else None,
+    )
+    ratio_gate("critical security profile coverage", security_summary.get("critical_profile_coverage"), security_profile_minimum)
     if args.fail_on_mapping_warnings and int(mapping_summary.get("mapping_warnings_count") or 0) > 0:
         failures.append(f"mapping report contains {mapping_summary.get('mapping_warnings_count')} warning(s)")
     if (args.require_external_source_evidence or production) and int(source_summary.get("external_evidence_records") or 0) == 0:
@@ -636,6 +675,7 @@ def run_validate(args: argparse.Namespace) -> int:
         args.policy,
         args.reachability_rules,
         args.source_evidence_in,
+        args.security_evidence_in,
         args.artifact_manifest,
     )
     report = issues_report(issues)
@@ -752,6 +792,17 @@ def run_source_evidence_pack(args: argparse.Namespace) -> int:
         print(json.dumps(pack.to_json(), indent=2))
     else:
         print(f"Wrote source evidence pack to {pack.root}")
+        for path in pack.files:
+            print(path)
+    return 0
+
+
+def run_security_evidence_pack(args: argparse.Namespace) -> int:
+    pack = write_security_evidence_pack(args.output_dir)
+    if args.json:
+        print(json.dumps(pack.to_json(), indent=2))
+    else:
+        print(f"Wrote security evidence pack to {pack.root}")
         for path in pack.files:
             print(path)
     return 0
@@ -886,6 +937,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_source_evidence_plan(args)
         if args.command == "source-evidence-pack":
             return run_source_evidence_pack(args)
+        if args.command == "security-evidence-pack":
+            return run_security_evidence_pack(args)
         if args.command == "artifact-manifest":
             return run_artifact_manifest(args)
         if args.command == "rendered-iac-plan":
@@ -903,7 +956,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         parser.error("unknown command")
         return 2
-    except (UserFacingError, SbomError, VulnerabilityError, ContextError, FixtureError, HclAuditError, KubernetesManifestError, ArtifactManifestError, BenchmarkSnapshotError, ValueError) as exc:
+    except (UserFacingError, SbomError, VulnerabilityError, ContextError, FixtureError, HclAuditError, KubernetesManifestError, ArtifactManifestError, BenchmarkSnapshotError, SecurityEvidenceError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return exc.exit_code if isinstance(exc, UserFacingError) else 2
 

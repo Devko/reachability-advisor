@@ -6,6 +6,7 @@ Release-gate inputs:
 
 - CycloneDX SBOM JSON;
 - Grype JSON, OSV-style JSON, or normalized vulnerability JSON;
+- normalized SAST/DAST evidence, Semgrep JSON, or SARIF for first-party code weaknesses;
 - source-root mappings;
 - external source evidence from Semgrep, CodeQL/SARIF, govulncheck, or native JSON;
 - Terraform plan JSON and/or rendered Kubernetes manifests;
@@ -224,6 +225,97 @@ Supported imported formats:
 
 For CodeQL, generic query ids such as `js/request-forgery` are kept as matched symbols, not treated as vulnerability selectors. Rule ids are used as vulnerability selectors only when they look like vulnerability ids such as `CVE-*`, `GHSA-*`, `GO-*`, `OSV-*`, or `PYSEC-*`.
 
+## Security evidence for SAST and DAST
+
+Use `--security-evidence-in` for first-party code weaknesses. This is separate from dependency reachability evidence. The scanner imports these records as `finding_type: code_weakness` and scores them with the same network, IAM, criticality, baseline, policy, SARIF, Markdown, JSON, and HTML paths used by dependency findings.
+
+Prefer SARIF 2.1.0 when a scanner can emit it. SARIF is the broad static-analysis interchange format, so one adapter can cover Semgrep, CodeQL, and other tools that preserve rule metadata, source locations, and code-flow records. Native scanner JSON remains useful when a tool emits richer fields than SARIF or does not support SARIF.
+
+Native JSON:
+
+```json
+{
+  "security_evidence": [
+    {
+      "scanner_type": "sast",
+      "tool": "semgrep",
+      "artifact": "web-api",
+      "rule_id": "js.express.xss",
+      "weakness": "cross-site scripting",
+      "cwe": "CWE-79",
+      "severity": "high",
+      "confidence": "high",
+      "source": {"path": "src/routes/search.js", "line": 12, "column": 5},
+      "sink": {"function": "res.send"},
+      "evidence": {"dataflow": "req.query.q reaches res.send"},
+      "remediation": "Encode untrusted output before writing HTML responses."
+    },
+    {
+      "scanner_type": "dast",
+      "tool": "zap",
+      "artifact": "web-api",
+      "rule_id": "dast.xss.reflected",
+      "weakness": "reflected xss",
+      "cwe": "CWE-79",
+      "severity": "medium",
+      "confidence": "high",
+      "method": "GET",
+      "url": "https://web-api.example/search?q=%3Cscript%3E"
+    }
+  ]
+}
+```
+
+Supported imported formats:
+
+- native `security_evidence[]` JSON;
+- simple `findings[]` JSON with the same fields;
+- Semgrep JSON (`results[]`) with `extra.metadata.artifact`, `cwe`, confidence, and remediation metadata when available;
+- SARIF (`runs[]`) with scanner metadata in `result.properties` or `driver.rules[].properties`; code-flow records promote the weakness to attacker-controlled source evidence.
+
+Artifact matching is explicit. Prefer `artifact`, image reference, registry reference, or digest metadata that matches a supplied SBOM artifact. Unmatched SAST/DAST records are reported under `source-coverage.json.security_evidence.unmapped_records`.
+
+High and critical SAST/DAST records should carry a CWE that maps to a maintained security profile. The scanner reports this as `source-coverage.json.security_evidence.summary.critical_profile_coverage`. Use `--min-critical-security-profile-coverage 1.0` to fail when imported critical code weaknesses are outside the maintained profile catalog.
+
+Checked-in examples:
+
+- `samples/security-evidence/semgrep-ce-xss.sarif` is a compact Semgrep SARIF example for an Express XSS finding.
+- `samples/security-evidence/semgrep-nodejs-goof-command-injection.sarif` is based on the open-source `snyk-labs/nodejs-goof` vulnerable demo application and exercises command-injection evidence with a SARIF code-flow path.
+
+## Security evidence pack JSON
+
+Generated with `security-evidence-pack --output-dir`.
+
+```json
+{
+  "schema_version": "1.0",
+  "kind": "reachability-advisor-security-evidence-pack",
+  "version": "2026-05-13",
+  "profiles": [
+    {
+      "id": "sast-web-injection",
+      "scanner_type": "sast",
+      "cwes": ["CWE-22", "CWE-78", "CWE-79", "CWE-89", "CWE-94", "CWE-918"],
+      "tools": ["semgrep", "codeql", "sarif"]
+    },
+    {
+      "id": "dast-web-app",
+      "scanner_type": "dast",
+      "cwes": ["CWE-22", "CWE-79", "CWE-89", "CWE-352", "CWE-601", "CWE-918"],
+      "tools": ["sarif", "generic-json", "dast-json"]
+    }
+  ],
+  "release_gate": {
+    "critical_profile_coverage": 1.0,
+    "requires_cwe": true,
+    "requires_maintained_profile": true,
+    "selector_contract": "artifact plus scanner rule, source location, tested URL, CWE, or route"
+  }
+}
+```
+
+The pack writes Semgrep profile files for static findings and DAST profile metadata for dynamic findings. The fixtures under `fixtures/security-vulnerable-apps/` provide local vulnerable examples and normalized evidence for the maintained profiles. Tests require 100% expected profile/CWE coverage for those examples.
+
 ## Source evidence pack JSON
 
 Generated with `source-evidence-pack --output-dir`.
@@ -302,6 +394,7 @@ Generated with `--source-coverage-out`.
     "critical_findings_requiring_query_family": 4,
     "critical_findings_with_required_query_family": 3,
     "critical_findings_missing_query_family": 1,
+    "critical_findings_without_maintained_query_family": 0,
     "source_rule_coverage": 0.9167,
     "critical_query_family_coverage": 0.75,
     "critical_proven_query_family_coverage": 0.75,
@@ -956,7 +1049,7 @@ Generated with `--evidence-graph-out`. The findings JSON also embeds the same st
 The evidence graph is the machine-readable graph used by the HTML report. Its per-finding model is `effective_exposure_graph`:
 
 ```text
-asset -> network path -> identity -> reachable code/package -> vulnerability -> score
+asset -> network path -> identity -> reachable code/package -> vulnerability or weakness -> score
 ```
 
 Every effective edge carries `evidence_layer`, `origin_layer`, `evidence_source`, `confidence`, `provider`, `language`, `blockers`, `unknowns`, and `blocker_state`. Integrations that need the full prioritization chain should read this graph.
@@ -1020,8 +1113,8 @@ It visualizes:
 
 - attacker entry and ingress/path cards derived from Terraform network-path evidence, such as Internet -> public security group/load balancer/application gateway -> workload;
 - deployable asset cards with network, IAM, code exposure, source, environment, owner, and criticality context;
-- vulnerability cards linked to the affected asset, including a plain code-exposure label such as `request-controlled path`, `reachable vulnerable API`, `dependency evidence`, `SBOM only`, or `no source rule`;
-- colors that emphasize the highest tier/criticality on each asset and vulnerability;
+- finding cards linked to the affected asset, including dependency vulnerabilities and imported code weaknesses with a plain code-exposure label such as `request-controlled path`, `reachable vulnerable API`, `dependency evidence`, `SBOM only`, or `no source rule`;
+- colors that emphasize the highest tier/criticality on each asset and finding;
 - a searchable, filterable findings list with click-through details.
 
 The graph supports mouse-wheel zoom, drag-to-pan, tier filtering, exposure filtering, active-only filtering, and text search. Use `--out` findings JSON for automation.

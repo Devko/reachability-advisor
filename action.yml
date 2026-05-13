@@ -1,6 +1,6 @@
 name: Reachability Advisor
-summary: Dependency vulnerability prioritization with source, Terraform, network, and IAM context
-description: Runs Reachability Advisor and emits findings, evidence graph, baseline, PR delta, SARIF, diagnostics, Markdown, HTML, annotations, mapping, source coverage, and deployment coverage.
+summary: Security prioritization with dependency, source, Terraform, network, IAM, SAST, and DAST context
+description: Runs Reachability Advisor and emits findings, evidence graph, baseline, PR delta, SARIF, diagnostics, Markdown, HTML, annotations, mapping, source coverage, security evidence coverage, and deployment coverage.
 inputs:
   sbom:
     description: One or more CycloneDX SBOM paths. Use newline-separated paths for multiple artifacts.
@@ -52,6 +52,10 @@ inputs:
     description: Newline-separated external source evidence files. Supports Reachability Advisor JSON, Semgrep JSON, SARIF, and govulncheck JSONL.
     required: false
     default: ""
+  security-evidence-in:
+    description: Newline-separated first-party SAST/DAST finding files. Supports normalized JSON, Semgrep JSON, and SARIF.
+    required: false
+    default: ""
   analysis-profile:
     description: advisory or production. Production requires external source evidence and rendered deployment evidence.
     required: false
@@ -86,6 +90,18 @@ inputs:
     default: ""
   min-critical-external-source-coverage:
     description: Optional 0..1 gate for critical findings covered by external source analyzer evidence. Production defaults to 1.0.
+    required: false
+    default: ""
+  min-critical-query-family-coverage:
+    description: Optional 0..1 gate for critical findings covered by relevant source query-family evidence. Production defaults to 1.0.
+    required: false
+    default: ""
+  min-critical-proven-query-family-coverage:
+    description: Optional 0..1 gate for critical findings covered by proven maintained query families. Production defaults to 1.0.
+    required: false
+    default: ""
+  min-critical-security-profile-coverage:
+    description: Optional 0..1 gate for imported high/critical SAST/DAST findings covered by maintained security profiles.
     required: false
     default: ""
   require-release-ready:
@@ -223,6 +239,7 @@ runs:
         add_repeated_args "--artifact-alias" "${{ inputs.artifact-alias }}"
         add_repeated_args "--artifact-manifest" "${{ inputs.artifact-manifest }}"
         add_repeated_args "--source-evidence-in" "${{ inputs.source-evidence-in }}"
+        add_repeated_args "--security-evidence-in" "${{ inputs.security-evidence-in }}"
         add_repeated_args "--kubernetes-manifest" "${{ inputs.kubernetes-manifest }}"
 
         args+=(--analysis-profile "${{ inputs.analysis-profile }}")
@@ -242,6 +259,9 @@ runs:
         if [[ "${{ inputs.require-strong-source-for-critical }}" == "true" ]]; then args+=(--require-strong-source-for-critical); fi
         if [[ -n "${{ inputs.min-external-evidence-usable-ratio }}" ]]; then args+=(--min-external-evidence-usable-ratio "${{ inputs.min-external-evidence-usable-ratio }}"); fi
         if [[ -n "${{ inputs.min-critical-external-source-coverage }}" ]]; then args+=(--min-critical-external-source-coverage "${{ inputs.min-critical-external-source-coverage }}"); fi
+        if [[ -n "${{ inputs.min-critical-query-family-coverage }}" ]]; then args+=(--min-critical-query-family-coverage "${{ inputs.min-critical-query-family-coverage }}"); fi
+        if [[ -n "${{ inputs.min-critical-proven-query-family-coverage }}" ]]; then args+=(--min-critical-proven-query-family-coverage "${{ inputs.min-critical-proven-query-family-coverage }}"); fi
+        if [[ -n "${{ inputs.min-critical-security-profile-coverage }}" ]]; then args+=(--min-critical-security-profile-coverage "${{ inputs.min-critical-security-profile-coverage }}"); fi
         if [[ "${{ inputs.require-release-ready }}" == "true" ]]; then args+=(--require-release-ready); fi
         if [[ "${{ inputs.fail-on-readiness-warnings }}" == "true" ]]; then args+=(--fail-on-readiness-warnings); fi
         if [[ -n "${{ inputs.fail-on-tier }}" ]]; then args+=(--fail-on-tier "${{ inputs.fail-on-tier }}"); fi

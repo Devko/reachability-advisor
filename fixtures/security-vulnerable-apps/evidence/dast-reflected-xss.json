@@ -1,0 +1,17 @@
+{
+  "security_evidence": [
+    {
+      "scanner_type": "dast",
+      "tool": "generic-dast",
+      "artifact": "web-api",
+      "rule_id": "dast.reflected-xss",
+      "weakness": "reflected xss",
+      "cwe": "CWE-79",
+      "severity": "high",
+      "confidence": "high",
+      "method": "GET",
+      "url": "https://web-api.example/search?q=%3Cscript%3E",
+      "evidence": {"response": "payload was reflected in HTML response"}
+    }
+  ]
+}
