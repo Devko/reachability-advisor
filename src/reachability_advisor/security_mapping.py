@@ -37,7 +37,7 @@ def map_security_evidence_record(
                     confidence=Confidence.HIGH,
                     reason="explicit artifact matched SBOM artifact",
                 )
-    target = record.url or record.artifact
+    target = record.url or record.artifact or record.resource_id or record.component
     if target:
         best_artifact = None
         best_match = None
@@ -71,6 +71,19 @@ def unmapped_runtime_artifact(record: SecurityEvidenceRecord) -> Artifact:
     return Artifact(name=f"unmapped:{_normalize_label(host)}", reference=record.url, properties={"mapping:confidence": "unknown"})
 
 
+def unmapped_posture_artifact(record: SecurityEvidenceRecord) -> Artifact:
+    resource = record.resource_id or record.component or record.rule_id or "posture"
+    return Artifact(
+        name=f"unmapped:posture:{_normalize_label(resource)[:64]}",
+        reference=record.resource_id,
+        properties={
+            "mapping:confidence": "unknown",
+            "posture:provider": record.provider or "",
+            "posture:resource_type": record.resource_type or "",
+        },
+    )
+
+
 def _url_mentions_artifact(url: str, artifact: str) -> bool:
     parsed = urlparse(url)
     haystack = f"{parsed.netloc} {parsed.path}".lower()
@@ -99,5 +112,6 @@ def _normalize_label(value: str) -> str:
 __all__ = [
     "SecurityEvidenceMappingDecision",
     "map_security_evidence_record",
+    "unmapped_posture_artifact",
     "unmapped_runtime_artifact",
 ]

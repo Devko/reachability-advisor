@@ -53,7 +53,7 @@ inputs:
     required: false
     default: ""
   security-evidence-in:
-    description: Newline-separated generic first-party SAST/DAST finding files. Supports normalized JSON, Semgrep JSON, SARIF, ZAP JSON, and Nuclei JSONL.
+    description: Newline-separated generic first-party SAST/DAST/CSPM finding files. Supports normalized JSON, Semgrep JSON, SARIF, ZAP JSON, Nuclei JSONL, and posture scanner JSON.
     required: false
     default: ""
   sast-in:
@@ -62,6 +62,10 @@ inputs:
     default: ""
   dast-in:
     description: Newline-separated DAST evidence files. Defaults imported records to scanner_type=dast.
+    required: false
+    default: ""
+  cspm-in:
+    description: Newline-separated CSPM/posture evidence files. Defaults imported records to scanner_type=cspm.
     required: false
     default: ""
   analysis-profile:
@@ -251,6 +255,7 @@ runs:
         add_repeated_args "--security-evidence-in" "${{ inputs.security-evidence-in }}"
         add_repeated_args "--sast-in" "${{ inputs.sast-in }}"
         add_repeated_args "--dast-in" "${{ inputs.dast-in }}"
+        add_repeated_args "--cspm-in" "${{ inputs.cspm-in }}"
         add_repeated_args "--kubernetes-manifest" "${{ inputs.kubernetes-manifest }}"
 
         args+=(--analysis-profile "${{ inputs.analysis-profile }}")

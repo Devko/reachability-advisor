@@ -62,6 +62,7 @@ reachability-advisor scan \
   --vuln-in grype.json \
   --sast-in semgrep.json \
   --dast-in zap.json \
+  --cspm-in checkov.json \
   --source-root app=. \
   --terraform-plan tfplan.json \
   --kubernetes-manifest rendered.yaml \

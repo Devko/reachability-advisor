@@ -112,6 +112,7 @@ jobs:
             --source-evidence-in reachability/semgrep.json \
             --sast-in reachability/semgrep.json \
             # Add --dast-in reachability/zap.json or --dast-in reachability/nuclei.jsonl when runtime scanner output is available.
+            # Add --cspm-in reachability/checkov.json or --cspm-in reachability/trivy-config.json when posture scanner output is available.
             --terraform-plan reachability/tfplan.json \
             --terraform-coverage-out reachability/terraform-coverage.json \
             "${k8s_args[@]}" \

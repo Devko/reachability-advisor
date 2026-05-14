@@ -32,6 +32,16 @@ class SecurityEvidenceRecord:
     sink: str | None = None
     dataflow: str | None = None
     exposure: str | None = None
+    provider: str | None = None
+    resource_id: str | None = None
+    resource_type: str | None = None
+    service: str | None = None
+    control: str | None = None
+    expected: str | None = None
+    actual: str | None = None
+    evidence_source: str | None = None
+    blockers: list[str] = field(default_factory=list)
+    unknowns: list[str] = field(default_factory=list)
     remediation: str | None = None
     references: list[str] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)

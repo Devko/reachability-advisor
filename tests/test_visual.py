@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
+from reachability_advisor.attack_path_view import build_attack_paths
 from reachability_advisor.models import (
     Artifact,
     Component,
@@ -9,7 +11,10 @@ from reachability_advisor.models import (
     ContextEvidence,
     Finding,
     Reachability,
+    RuntimeEvidence,
+    RuntimeEvidenceState,
     SourceEvidence,
+    SourceLocation,
     Tier,
     VulnerabilityRecord,
 )
@@ -26,18 +31,38 @@ def finding_for_visual(
     reachability: Reachability = Reachability.ATTACKER_CONTROLLED,
     component: str = "demo",
     vulnerability: str = "CVE-DEMO",
+    finding_type: str = "dependency_vulnerability",
+    weakness: dict[str, object] | None = None,
+    runtime_evidence: RuntimeEvidence | None = None,
+    unknowns: list[str] | None = None,
+    source_locations: list[SourceLocation] | None = None,
+    privilege: str = "limited",
+    criticality: str = "high",
+    iam_impacts: list[str] | None = None,
+    effective_access: list[dict[str, object]] | None = None,
+    rationale: list[str] | None = None,
+    score_details: dict[str, object] | None = None,
+    evidence_summary: list[str] | None = None,
+    fix_commands: list[str] | None = None,
 ) -> Finding:
     return Finding(
         key=f"{asset}|{component}|1.0|{vulnerability}",
         artifact=Artifact(name=asset, reference=f"repo/{asset}:1.0"),
         component=Component(name=component, version="1.0", purl=f"pkg:npm/{component}@1.0"),
         vulnerability=VulnerabilityRecord(id=vulnerability, package_name=component, severity="high", cvss=8.0, summary="demo vulnerability"),
-        source=SourceEvidence(reachability=reachability, confidence=Confidence.HIGH, reason="test evidence"),
+        source=SourceEvidence(
+            reachability=reachability,
+            confidence=Confidence.HIGH,
+            reason="test evidence",
+            locations=source_locations or [],
+        ),
         context=ContextEvidence(
             environment="prod",
             exposure=exposure,
-            privilege="limited",
-            criticality="high",
+            privilege=privilege,
+            criticality=criticality,
+            iam_impacts=iam_impacts if iam_impacts is not None else ["secrets:read"],
+            effective_access=effective_access or [],
             owner="@team",
             confidence=Confidence.MEDIUM,
             evidence=evidence,
@@ -45,7 +70,14 @@ def finding_for_visual(
         score=score,
         tier=tier,
         confidence=Confidence.HIGH,
-        rationale=["test rationale"],
+        rationale=rationale if rationale is not None else ["test rationale"],
+        finding_type=finding_type,
+        weakness=weakness or {},
+        fix_commands=fix_commands or [],
+        score_details=score_details or {},
+        runtime_evidence=runtime_evidence or RuntimeEvidence(),
+        unknowns=unknowns or [],
+        evidence_summary=evidence_summary or [],
     )
 
 
@@ -232,7 +264,7 @@ class VisualPayloadTests(unittest.TestCase):
         self.assertEqual(hops["Ingress edge"]["provider"], "AWS")
         self.assertTrue(any(edge["target"] == "asset:api" and edge["role"] == "hop-asset" for edge in architecture["edges"]))
 
-    def test_attack_path_view_groups_route_to_affected_assets(self) -> None:
+    def test_attack_path_view_builds_per_finding_dependency_story(self) -> None:
         payload = _visual_payload([
             finding_for_visual(
                 "api",
@@ -246,14 +278,23 @@ class VisualPayloadTests(unittest.TestCase):
         attack_paths = payload["attackPaths"]
         self.assertEqual(len(attack_paths), 1)
         path = attack_paths[0]
-        self.assertEqual(path["entryLabel"], "Internet / attacker")
+        self.assertEqual(path["findingKey"], "api|demo|1.0|CVE-DEMO")
+        self.assertEqual(path["findingType"], "dependency_vulnerability")
+        self.assertEqual(path["findingTypeLabel"], "dependency vulnerability")
+        self.assertEqual(path["artifact"]["name"], "api")
         self.assertEqual(path["provider"], "AWS")
-        self.assertEqual(path["assetIds"], ["asset:api"])
-        self.assertEqual(path["findingCount"], 1)
-        self.assertIn("Ingress edge", path["hopLabels"])
+        self.assertEqual(path["tier"], "urgent")
+        self.assertIn("SBOM", path["evidenceLayers"])
+        self.assertIn("Source", path["evidenceLayers"])
+        self.assertIn("Terraform", path["evidenceLayers"])
+        node_types = [node["type"] for node in path["nodes"]]
+        for expected_type in ["entry", "ingress", "workload", "artifact", "source", "vulnerability", "identity", "data"]:
+            self.assertIn(expected_type, node_types)
+        node_ids = {node["id"] for node in path["nodes"]}
+        self.assertTrue(all(edge["from"] in node_ids and edge["to"] in node_ids for edge in path["edges"]))
         self.assertTrue(path["id"].startswith("attack:path:"))
 
-    def test_attack_path_view_reuses_shared_path_for_multiple_assets(self) -> None:
+    def test_attack_path_view_uses_one_story_per_finding_even_on_shared_network_path(self) -> None:
         payload = _visual_payload([
             finding_for_visual(
                 "api",
@@ -271,11 +312,273 @@ class VisualPayloadTests(unittest.TestCase):
             ),
         ])
 
-        self.assertEqual(len(payload["attackPaths"]), 1)
+        self.assertEqual(len(payload["attackPaths"]), 2)
+        self.assertEqual({path["artifact"]["name"] for path in payload["attackPaths"]}, {"api", "worker"})
+        self.assertEqual({path["findingKey"] for path in payload["attackPaths"]}, {"api|express|1.0|CVE-API", "worker|requests|1.0|CVE-WORKER"})
+        self.assertTrue(all(any(node["type"] == "ingress" for node in path["nodes"]) for path in payload["attackPaths"]))
+
+    def test_risk_scenario_maps_urgent_to_critical_without_cve_title(self) -> None:
+        payload = _visual_payload([
+            finding_for_visual(
+                "api",
+                "public",
+                ["terraform network path: public via aws_lb.edge public load balancer -> aws_ecs_service.api"],
+                tier=Tier.URGENT,
+                score=99.0,
+                vulnerability="CVE-CRITICAL-DEMO",
+            )
+        ])
+
+        scenario = payload["riskScenarios"][0]
+        self.assertEqual(scenario["priorityLabel"], "Critical")
+        self.assertNotIn("CVE-CRITICAL-DEMO", scenario["title"])
+        self.assertGreaterEqual(scenario["categoryCounts"]["vulnerabilities"], 1)
+
+    def test_risk_scenario_collapses_multiple_cves_on_same_asset_path(self) -> None:
+        payload = _visual_payload([
+            finding_for_visual(
+                "api",
+                "public",
+                ["terraform network path: public via aws_lb.edge public load balancer -> aws_ecs_service.api"],
+                component="express",
+                vulnerability="CVE-API-1",
+            ),
+            finding_for_visual(
+                "api",
+                "public",
+                ["terraform network path: public via aws_lb.edge public load balancer -> aws_ecs_service.api"],
+                component="lodash",
+                vulnerability="CVE-API-2",
+            ),
+        ])
+
+        self.assertEqual(len(payload["riskScenarios"]), 1)
+        scenario = payload["riskScenarios"][0]
+        self.assertEqual(scenario["totalFindings"], 2)
+        self.assertEqual(set(scenario["findingKeys"]), {"api|express|1.0|CVE-API-1", "api|lodash|1.0|CVE-API-2"})
+
+    def test_attack_path_groups_reuse_shared_route_for_multiple_assets(self) -> None:
+        payload = _visual_payload([
+            finding_for_visual(
+                "api",
+                "public",
+                ["terraform network path: public via aws_lb.edge public load balancer -> aws_lb_target_group.shared -> aws_ecs_service.api"],
+                component="express",
+                vulnerability="CVE-API",
+            ),
+            finding_for_visual(
+                "worker",
+                "public",
+                ["terraform network path: public via aws_lb.edge public load balancer -> aws_lb_target_group.shared -> aws_ecs_service.worker"],
+                component="requests",
+                vulnerability="CVE-WORKER",
+            ),
+        ])
+
+        self.assertEqual(len(payload["attackPathGroups"]), 1)
+        group = payload["attackPathGroups"][0]
+        self.assertEqual(set(group["assetIds"]), {"asset:api", "asset:worker"})
+        self.assertEqual(group["assetCount"], 2)
+        self.assertEqual(set(group["scenarioIds"]), {scenario["id"] for scenario in payload["riskScenarios"]})
+        self.assertTrue(group["routeNodes"])
+
+    def test_risk_scenario_category_counts_cover_issue_buckets(self) -> None:
+        path = ["context network path: public via kubernetes_ingress.edge -> kubernetes_deployment.search-api"]
+        payload = _visual_payload([
+            finding_for_visual("search-api", "public", path, component="requests", vulnerability="CVE-DEP"),
+            finding_for_visual(
+                "search-api",
+                "public",
+                path,
+                finding_type="static_code_weakness",
+                component="semgrep",
+                vulnerability="semgrep.xss",
+                weakness={"scanner_type": "sast", "tool": "Semgrep", "cwe": "CWE-79", "weakness": "reflected XSS"},
+                source_locations=[SourceLocation(Path("app/search.py"), 42)],
+            ),
+            finding_for_visual(
+                "search-api",
+                "public",
+                path,
+                reachability=Reachability.PACKAGE_PRESENT,
+                finding_type="dynamic_runtime_observation",
+                component="zap",
+                vulnerability="ZAP-10016",
+                weakness={"scanner_type": "dast", "tool": "ZAP", "weakness": "reflected XSS"},
+                runtime_evidence=RuntimeEvidence(state=RuntimeEvidenceState.VULNERABILITY_OBSERVED, confidence=Confidence.MEDIUM, tool="ZAP"),
+            ),
+            finding_for_visual(
+                "search-api",
+                "public",
+                path,
+                finding_type="cloud_posture_finding",
+                component="cspm",
+                vulnerability="cspm.public-ingress",
+                weakness={"scanner_type": "cspm", "tool": "CSPM", "weakness": "public ingress"},
+            ),
+        ])
+
+        scenario = payload["riskScenarios"][0]
+        self.assertEqual(scenario["categoryCounts"]["vulnerabilities"], 2)
+        self.assertEqual(scenario["categoryCounts"]["events"], 1)
+        self.assertEqual(scenario["categoryCounts"]["insecure_configuration"], 1)
+        self.assertGreaterEqual(scenario["categoryCounts"]["identity_data_access"], 1)
+        self.assertGreaterEqual(scenario["categoryCounts"]["visibility_gaps"], 1)
+
+    def test_attack_path_view_models_sast_as_static_source_evidence(self) -> None:
+        payload = _visual_payload([
+            finding_for_visual(
+                "search-api",
+                "public",
+                ["context network path: public via kubernetes_ingress.edge -> kubernetes_deployment.search-api"],
+                finding_type="static_code_weakness",
+                component="semgrep",
+                vulnerability="semgrep.xss",
+                weakness={"scanner_type": "sast", "tool": "Semgrep", "cwe": "CWE-79", "weakness": "reflected XSS"},
+                source_locations=[SourceLocation(Path("app/search.py"), 42, snippet="return request.args['q']")],
+            )
+        ])
+
         path = payload["attackPaths"][0]
-        self.assertEqual(set(path["assetIds"]), {"asset:api", "asset:worker"})
-        self.assertEqual(path["assetCount"], 2)
-        self.assertEqual(path["findingCount"], 2)
+        node_types = [node["type"] for node in path["nodes"]]
+        self.assertEqual(path["findingType"], "static_code_weakness")
+        self.assertIn("SAST", path["evidenceLayers"])
+        self.assertIn("source", node_types)
+        self.assertIn("weakness", node_types)
+        self.assertNotIn("runtime", node_types)
+
+    def test_attack_path_view_models_dast_as_runtime_observation_with_source_unknown(self) -> None:
+        payload = _visual_payload([
+            finding_for_visual(
+                "search-api",
+                "public",
+                ["context network path: public via kubernetes_ingress.edge -> kubernetes_deployment.search-api"],
+                reachability=Reachability.PACKAGE_PRESENT,
+                finding_type="dynamic_runtime_observation",
+                component="zap",
+                vulnerability="ZAP-10016",
+                weakness={"scanner_type": "dast", "tool": "ZAP", "cwe": "CWE-79", "weakness": "reflected XSS"},
+                runtime_evidence=RuntimeEvidence(
+                    state=RuntimeEvidenceState.VULNERABILITY_OBSERVED,
+                    confidence=Confidence.MEDIUM,
+                    tool="ZAP",
+                    url="https://api.example.test/search?q=x",
+                    method="GET",
+                    parameter="q",
+                    evidence_source="zap",
+                ),
+            )
+        ])
+
+        path = payload["attackPaths"][0]
+        node_types = [node["type"] for node in path["nodes"]]
+        self.assertEqual(path["findingType"], "dynamic_runtime_observation")
+        self.assertIn("DAST", path["evidenceLayers"])
+        self.assertIn("runtime", node_types)
+        self.assertIn("weakness", node_types)
+        self.assertIn("unknown", node_types)
+        self.assertNotIn("source", node_types)
+        self.assertIn("source mapping unavailable", path["unknowns"])
+
+    def test_attack_path_builder_keeps_unmapped_runtime_observation_conservative(self) -> None:
+        finding = finding_for_visual(
+            "orphan-api",
+            "unknown",
+            [],
+            reachability=Reachability.PACKAGE_PRESENT,
+            finding_type="dynamic_runtime_observation",
+            component="zap",
+            vulnerability="ZAP-40012",
+            weakness={"scanner_type": "dast", "tool": "ZAP", "weakness": "SQL injection"},
+            runtime_evidence=RuntimeEvidence(state=RuntimeEvidenceState.VULNERABILITY_OBSERVED, confidence=Confidence.LOW, tool="ZAP"),
+            privilege="unknown",
+            criticality="unknown",
+            iam_impacts=[],
+            rationale=[],
+            evidence_summary=["DAST scanner observed a vulnerable endpoint"],
+        )
+
+        path = build_attack_paths([finding], [], [], [None, {"findings": ["not-a-dict"], "suggested_fix": "unused"}])[0]
+        node_types = [node["type"] for node in path["nodes"]]
+        self.assertEqual(path["provider"], "Context")
+        self.assertEqual(path["shortReason"], "vulnerability_observed by ZAP")
+        self.assertIn("network path unavailable", path["unknowns"])
+        self.assertIn("source mapping unavailable", path["unknowns"])
+        self.assertIn("unknown", node_types)
+        self.assertNotIn("identity", node_types)
+        self.assertNotIn("data", node_types)
+        runtime_nodes = [node for node in path["nodes"] if node["type"] == "runtime"]
+        self.assertEqual(runtime_nodes[0]["label"], "vulnerability_observed")
+
+    def test_attack_path_builder_shows_blockers_effective_access_and_remediation(self) -> None:
+        finding = finding_for_visual(
+            "payments",
+            "external",
+            ["context network path: external via azurerm_application_gateway.edge -> azurerm_linux_web_app.payments"],
+            reachability=Reachability.UNKNOWN_DUE_TO_NO_RULE,
+            component="jackson-databind",
+            vulnerability="GHSA-demo",
+            effective_access=[{"principal": "payments-mi", "action": "secrets/get", "decision": "allow", "resource": "keyvault", "confidence": "medium"}],
+            iam_impacts=[],
+            criticality="",
+            rationale=[],
+            score_details={"graph_decision": {"drivers": ["public app gateway"], "blockers": ["application gateway auth required"]}},
+        )
+        network_path = {
+            "id": "network:payments:0",
+            "assetIds": ["asset:payments"],
+            "label": "azurerm_application_gateway.edge",
+            "entryLabel": "External source",
+            "entrySubtitle": "partner CIDR",
+            "pathType": "external exposure",
+            "exposure": "external",
+            "confidence": "medium",
+            "evidence": "context network path: external via azurerm_application_gateway.edge",
+            "provider": "Azure",
+            "steps": ["azurerm_application_gateway.edge", "azurerm_linux_web_app.payments"],
+            "blockers": [{"kind": "auth", "reason": "application gateway authorizer"}],
+            "summary": "External gateway reaches payments.",
+            "tier": "high",
+            "score": 75.0,
+        }
+        visual_vulnerability = {
+            "findingKey": finding.key,
+            "severity": "critical",
+        }
+        remediation = {
+            "suggested_fix": "Upgrade jackson-databind",
+            "fix_commands": ["mvn versions:use-latest-releases"],
+            "findings": [{"key": finding.key}],
+        }
+
+        path = build_attack_paths([finding], [network_path], [visual_vulnerability], [remediation])[0]
+        node_types = [node["type"] for node in path["nodes"]]
+        blocker_labels = [node["label"] for node in path["nodes"] if node["type"] == "blocker"]
+        self.assertEqual(path["provider"], "Azure")
+        self.assertEqual(path["remediation"][0], "Upgrade jackson-databind")
+        self.assertIn("public app gateway", path["why"])
+        self.assertIn("auth", blocker_labels)
+        self.assertIn("application gateway auth required", blocker_labels)
+        self.assertIn("identity", node_types)
+        self.assertIn("no source rule", path["unknowns"])
+        self.assertIn("Terraform", path["evidenceLayers"])
+
+    def test_attack_path_builder_handles_context_and_provider_fallbacks(self) -> None:
+        findings = [
+            finding_for_visual("aws-api", "public", ["context network path: public via aws_lb.edge -> aws_ecs_service.api"], rationale=[]),
+            finding_for_visual("gcp-api", "public", ["context network path: public via google_compute_forwarding_rule.edge -> google_cloud_run_service.api"], rationale=[]),
+            finding_for_visual("k8s-api", "public", ["context network path: public via kubernetes_ingress.edge -> kubernetes_deployment.api"], rationale=[]),
+            finding_for_visual("private-job", "private", [], rationale=[], privilege="unknown", criticality="", iam_impacts=[]),
+        ]
+        payload = _visual_payload(findings)
+        providers = {path["artifact"]["name"]: path["provider"] for path in payload["attackPaths"]}
+        short_reasons = {path["artifact"]["name"]: path["shortReason"] for path in payload["attackPaths"]}
+        self.assertEqual(providers["aws-api"], "AWS")
+        self.assertEqual(providers["gcp-api"], "GCP")
+        self.assertEqual(providers["k8s-api"], "Kubernetes")
+        self.assertEqual(providers["private-job"], "Context")
+        self.assertIn("aws_lb.edge", short_reasons["aws-api"])
+        self.assertIn("No direct or lateral ingress path", short_reasons["private-job"])
 
     def test_architecture_view_shows_internal_lateral_path_and_private_asset(self) -> None:
         payload = _visual_payload([
@@ -384,15 +687,41 @@ class VisualPayloadTests(unittest.TestCase):
         self.assertIn("Attack Paths</button>", html)
         self.assertIn("Architecture</button>", html)
         self.assertIn("Evidence Paths</button>", html)
-        self.assertIn("Findings</button>", html)
-        self.assertIn('let viewMode = "attack"', html)
+        self.assertIn("Risk</button>", html)
+        self.assertNotIn("Findings</button>", html)
+        self.assertIn('id="riskTab" type="button" class="active" data-view="risk"', html)
+        self.assertIn('let viewMode = "risk"', html)
         self.assertIn("function layoutAttackPaths", html)
-        self.assertIn("function attackEntryGroupKey", html)
-        self.assertIn("function attackBoundaryGroupKey", html)
-        self.assertIn("function collectAttackRisks", html)
+        self.assertIn("function layoutRiskScenarios", html)
+        self.assertIn("function renderRiskBoard", html)
+        self.assertIn("function renderRiskRow", html)
+        self.assertIn("function openScenarioAttackPath", html)
+        self.assertIn("Attack Path", html)
+        self.assertIn("Open path", html)
+        self.assertIn("risk-path-link", html)
         self.assertIn("function renderAttackPathCard", html)
-        self.assertIn("function renderAttackRiskCard", html)
-        self.assertIn("Evidence and impact", html)
+        self.assertIn("function renderAttackScenarioCard", html)
+        self.assertIn("function renderAttackSummary", html)
+        self.assertIn("function renderAttackNodeCard", html)
+        self.assertIn("function nodeIcon", html)
+        self.assertIn("function rawDisclosure", html)
+        self.assertIn("function appendCategoryPanels", html)
+        self.assertIn("function appendNodeLinks", html)
+        self.assertIn("detail-link-button", html)
+        self.assertIn("const overviewLimit", html)
+        self.assertIn("function compactRouteNodes", html)
+        self.assertIn("function renderAttackOverviewLane", html)
+        self.assertIn("attack-overview-lane", html)
+        self.assertIn("risk-board", html)
+        self.assertIn("Issue categories", html)
+        self.assertIn("shown on map", html)
+        self.assertIn("Why this is prioritized", html)
+        self.assertIn("Unknowns / visibility gaps", html)
+        self.assertIn("Recommended next steps", html)
+        self.assertIn("Path nodes", html)
+        self.assertIn("Raw evidence", html)
+        self.assertIn("attack-list-card", html)
+        self.assertIn("attack-node-card", html)
         self.assertIn("function layoutArchitecture", html)
         self.assertIn("function renderArchitectureAsset", html)
         self.assertIn("zone-panel", html)
@@ -414,7 +743,26 @@ class VisualPayloadTests(unittest.TestCase):
         self.assertIn("function effectivePathLabels", html)
         self.assertIn('id="topLimit"', html)
         self.assertIn('id="highestPerAsset"', html)
+        self.assertIn('id="findingType"', html)
+        self.assertIn('id="confidence"', html)
+        self.assertIn('id="evidenceLayer"', html)
+        self.assertIn("pre.textContent = JSON.stringify", html)
+        self.assertIn("card.tabIndex = 0", html)
         self.assertIn("top per asset", html)
+
+    def test_attack_path_html_escapes_scanner_controlled_text(self) -> None:
+        html = render_html_report([
+            finding_for_visual(
+                "api",
+                "public",
+                ["terraform network path: public via aws_lb.edge -> aws_ecs_service.api"],
+                component="pkg<script>alert(1)</script>",
+                vulnerability="CVE-<script>alert(1)</script>",
+            )
+        ])
+
+        self.assertNotIn("CVE-<script>alert(1)</script>", html)
+        self.assertIn("CVE-\\u003cscript\\u003ealert(1)\\u003c/script\\u003e", html)
 
     def test_graph_model_connects_network_paths_assets_and_vulnerabilities(self) -> None:
         payload = _visual_payload([

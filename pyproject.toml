@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "reachability-advisor"
-version = "1.0.0"
-description = "Security finding prioritization for dependency, SAST, and DAST results using source and deployment context."
+version = "1.1.0"
+description = "Security finding prioritization for dependency, SAST, DAST, and CSPM results using source and deployment context."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "GPL-3.0-or-later"
@@ -18,6 +18,8 @@ keywords = [
   "sca",
   "sast",
   "dast",
+  "cspm",
+  "cloud-security-posture",
   "vulnerability-management",
   "security-prioritization",
   "scanner-correlation",

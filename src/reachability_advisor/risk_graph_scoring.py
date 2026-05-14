@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .finding_types import (
+    CLOUD_POSTURE_FINDING,
     DYNAMIC_RUNTIME_OBSERVATION,
     STATIC_CODE_WEAKNESS,
     canonical_finding_type,
@@ -110,6 +111,8 @@ def evaluate_graph_risk(finding: Finding) -> GraphRiskDecision:
         tier, rule = _runtime_tier(finding, exposure, impact, runtime_observed, strong_correlation, network_decision, blockers)
     elif finding_type == STATIC_CODE_WEAKNESS:
         tier, rule = _static_tier(finding, exposure, impact, source_strength, strong_correlation, medium_correlation, network_decision, blockers)
+    elif finding_type == CLOUD_POSTURE_FINDING:
+        tier, rule = _posture_tier(finding, exposure, impact, critical_context, network_decision, blockers, strong_correlation, medium_correlation)
     elif is_dependency_finding(finding_type):
         tier, rule = _dependency_tier(finding, exposure, impact, source_strength, critical_context, exploit_signal, network_decision, blockers)
     else:
@@ -141,6 +144,7 @@ def graph_dimensions(finding: Finding, decision: GraphRiskDecision) -> list[dict
         _dimension("vulnerability_impact", _impact_level(finding), "Technical impact from CVSS/severity, KEV, EPSS, and scanner severity."),
         _dimension("source_reachability", finding.source.reachability.value, "Static source evidence on whether vulnerable code/package is used."),
         _dimension("runtime_evidence", finding.runtime_evidence.state.value, "Runtime scanner observation, separate from source reachability."),
+        _dimension("posture_evidence", finding.posture_evidence.rule_id or "none", "CSPM posture evidence from scanner imports or native local IaC checks."),
         _dimension("deployment_exposure", finding.context.exposure, "Network path state from context, Terraform, Kubernetes, or DAST mapping."),
         _dimension("identity_blast_radius", _identity_value(finding), "Effective access, IAM capability, privilege, and data impact context."),
         _dimension("corroboration", _correlation_value(finding), "Non-destructive relation to other scanner findings."),
@@ -237,6 +241,31 @@ def _runtime_tier(
     return Tier.LOW, "runtime evidence not observed"
 
 
+def _posture_tier(
+    finding: Finding,
+    exposure: str,
+    impact: str,
+    critical_context: bool,
+    network_decision: str,
+    blockers: list[str],
+    strong_correlation: bool,
+    medium_correlation: bool,
+) -> tuple[Tier, str]:
+    """Tier CSPM as risky configuration context, not exploit proof."""
+
+    public_like = exposure in {"public", "external"}
+    high_impact = impact in {"critical", "high"}
+    if high_impact and public_like and critical_context and not blockers and network_decision != "blocked":
+        return Tier.HIGH, "risky cloud posture on exposed sensitive or privileged resource"
+    if high_impact and (public_like or critical_context or strong_correlation):
+        return Tier.MEDIUM, "high-risk cloud posture with exposure, blast radius, or strong correlated context"
+    if impact == "medium" and (public_like or critical_context or medium_correlation):
+        return Tier.MEDIUM, "medium-risk posture with deployment or identity context"
+    if finding.posture_evidence.confidence.value == "low" or finding.context.exposure == "unknown":
+        return Tier.LOW, "posture finding lacks enough mapping or exposure evidence for higher priority"
+    return (Tier.MEDIUM if impact in {"critical", "high", "medium"} else Tier.LOW, "posture finding without exploit proof")
+
+
 def _apply_path_constraints(
     tier: Tier,
     finding: Finding,
@@ -256,6 +285,8 @@ def _apply_path_constraints(
         return _min_tier(tier, Tier.HIGH), "provider blocker constrains confirmed graph path"
     if finding.component.scope in {"test", "dev", "development"} and source_strength in {"package_present", "unknown", "absent"}:
         return _min_tier(tier, Tier.LOW), "dev/test dependency without source usage caps confirmed priority"
+    if canonical_finding_type(finding.finding_type) == CLOUD_POSTURE_FINDING and tier == Tier.URGENT:
+        return Tier.HIGH, "CSPM posture evidence alone cannot be urgent"
     if exposure in {"private", "isolated", "none"} and source_strength != "attacker_controlled" and not exploit_signal and not _critical_context(finding):
         return _min_tier(tier, Tier.MEDIUM), "private/no-ingress path caps confirmed priority"
     return tier, ""
@@ -510,6 +541,8 @@ def _visibility_gaps(finding: Finding, unknowns: list[str]) -> list[str]:
         gaps.append("effective identity blast radius not proven")
     if canonical_finding_type(finding.finding_type) == DYNAMIC_RUNTIME_OBSERVATION and not finding.source.locations:
         gaps.append("runtime finding has no source mapping")
+    if canonical_finding_type(finding.finding_type) == CLOUD_POSTURE_FINDING and finding.artifact.name.startswith("unmapped:"):
+        gaps.append("posture finding is not mapped to a workload artifact")
     return gaps
 
 

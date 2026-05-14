@@ -4,7 +4,7 @@ Scores are priority signals, not exploitability claims.
 
 The scorer is graph-first. It evaluates the strongest credible evidence path:
 
-`asset -> network path -> identity/effective access -> source/runtime/package evidence -> finding`
+`asset -> network path -> identity/effective access -> source/runtime/package/posture evidence -> finding`
 
 The graph decision chooses the tier. The numeric `score` is then projected into
 that tier's 0-100 band for sorting and CI thresholds. Additive point math is
@@ -58,6 +58,20 @@ DAST graph decisions use:
 
 DAST informational observations stay low unless corroborated. Runtime-observed high/critical findings can rank high even when source mapping is unknown, but the unknown is shown explicitly.
 
+## Cloud Posture Findings
+
+CSPM graph decisions use:
+
+- scanner severity;
+- affected resource, service, and provider;
+- expected versus actual posture state;
+- mapped workload, ingress, identity, or data context;
+- deployment exposure;
+- IAM/data blast radius;
+- correlation with dependency, SAST, or DAST findings.
+
+CSPM is posture evidence, not exploit proof. Scanner severity alone cannot make a posture finding urgent. High priority requires risky posture plus exposed, sensitive, privileged, or strongly correlated context.
+
 ## Graph Decision Fields
 
 Each finding includes `scoring.graph_decision`:
@@ -72,6 +86,6 @@ Each finding includes `scoring.graph_decision`:
 
 ## Dimensions
 
-Scoring output includes dimensions for `vulnerability_impact`, `source_reachability`, `runtime_evidence`, `deployment_exposure`, `identity_blast_radius`, `data_sensitivity`, `corroboration`, `confidence_penalty`, and `uncertainty_premium`. Their `points` value is `0.0` because dimensions explain the graph decision; they are not an additive ledger.
+Scoring output includes dimensions for `vulnerability_impact`, `source_reachability`, `runtime_evidence`, `posture_evidence`, `deployment_exposure`, `identity_blast_radius`, `data_sensitivity`, `corroboration`, `confidence_penalty`, and `uncertainty_premium`. Their `points` value is `0.0` because dimensions explain the graph decision; they are not an additive ledger.
 
 Weak same-artifact correlation has low score impact. Strong route/CWE SAST+DAST correlation can raise confidence.

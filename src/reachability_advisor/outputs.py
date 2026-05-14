@@ -13,6 +13,7 @@ from .finding_types import (
     canonical_finding_type,
     is_dependency_finding,
     is_dynamic_finding,
+    is_posture_finding,
     is_security_finding,
     is_static_finding,
 )
@@ -74,6 +75,10 @@ def _is_dynamic(finding: Finding) -> bool:
     return is_dynamic_finding(finding.finding_type)
 
 
+def _is_posture(finding: Finding) -> bool:
+    return is_posture_finding(finding.finding_type)
+
+
 def _is_security_finding(finding: Finding) -> bool:
     return is_security_finding(finding.finding_type)
 
@@ -129,6 +134,7 @@ def write_sarif(findings: list[Finding], path: str | Path) -> None:
                     "weakness": finding.weakness,
                     "reachability": finding.source.reachability.value,
                     "runtime_evidence": finding.runtime_evidence.to_json(),
+                    "posture_evidence": finding.posture_evidence.to_json(),
                     "correlated_evidence": [item.to_json() for item in finding.correlated_evidence],
                     "unknowns": finding.unknowns,
                 },
@@ -161,6 +167,8 @@ def _sarif_rule_help(finding: Finding) -> str:
         return "Reachability-aware dependency vulnerability finding."
     if _is_dynamic(finding):
         return "Runtime scanner observation. Source reachability is reported only when source evidence exists."
+    if _is_posture(finding):
+        return "Cloud posture finding from imported CSPM evidence or native local IaC checks. It is configuration context, not exploit proof."
     return "Static scanner finding with source evidence when a real source location or data flow is available."
 
 
@@ -204,6 +212,7 @@ def write_diagnostics(findings: list[Finding], path: str | Path) -> None:
                     "effective_exposure": finding.context.effective_exposure,
                     "context_evidence": finding.context.evidence[:12],
                     "runtime_evidence": finding.runtime_evidence.to_json(),
+                    "posture_evidence": finding.posture_evidence.to_json(),
                     "correlated_evidence": [item.to_json() for item in finding.correlated_evidence],
                     "unknowns": finding.unknowns,
                 },
@@ -275,6 +284,7 @@ def _typed_markdown_sections(findings: list[Finding], max_findings: int = 15) ->
         ("Investigate", [finding for finding in findings if finding.tier == Tier.MEDIUM]),
         ("Runtime-observed findings", [finding for finding in findings if _is_dynamic(finding)]),
         ("Static findings", [finding for finding in findings if _is_static(finding)]),
+        ("Cloud posture findings", [finding for finding in findings if _is_posture(finding)]),
         ("Dependency findings", [finding for finding in findings if _is_dependency(finding)]),
         ("Correlated findings", [finding for finding in findings if finding.correlated_evidence]),
         ("Visibility gaps", [finding for finding in findings if finding.unknowns]),
@@ -299,6 +309,9 @@ def _markdown_summary(finding: Finding) -> str:
         return f"runtime evidence `{state}`, source `{finding.source.reachability.value}`{unknowns}"
     if _is_static(finding):
         return f"static evidence `{finding.source.evidence_source}`, source `{finding.source.reachability.value}`"
+    if _is_posture(finding):
+        posture = finding.posture_evidence
+        return f"posture `{posture.rule_id}`, resource `{posture.resource_id or finding.component.name}`, expected `{posture.expected or 'unknown'}`, actual `{posture.actual or 'unknown'}`"
     return f"dependency `{finding.component.display_name}`, source `{finding.source.reachability.value}`"
 
 
@@ -365,6 +378,10 @@ def _finding_markdown(index: int, finding: Finding) -> list[str]:
     if _is_dynamic(finding):
         runtime = finding.runtime_evidence
         lines.append(f"- Runtime evidence: state=`{runtime.state.value}`, confidence=`{runtime.confidence.value}`, url=`{runtime.url or 'unknown'}`, method=`{runtime.method or 'unknown'}`")
+    if _is_posture(finding):
+        posture = finding.posture_evidence
+        lines.append(f"- Posture evidence: resource=`{posture.resource_id or 'unknown'}`, type=`{posture.resource_type or 'unknown'}`, provider=`{posture.provider or 'unknown'}`")
+        lines.append(f"- Expected/actual: `{posture.expected or 'unknown'}` / `{posture.actual or 'unknown'}`")
     if finding.correlated_evidence:
         lines.append("- Correlated evidence:")
         for item in finding.correlated_evidence[:3]:
@@ -472,6 +489,9 @@ def explain_finding(data: dict[str, Any], key: str | None = None, artifact: str 
     runtime = selected.get("runtime_evidence", {}) if isinstance(selected.get("runtime_evidence"), dict) else {}
     if finding_type == "dynamic_runtime_observation":
         lines.append(f"- Runtime evidence: state=`{runtime.get('state', 'unknown')}`, url=`{runtime.get('url') or 'unknown'}`, method=`{runtime.get('method') or 'unknown'}`")
+    posture = selected.get("posture_evidence", {}) if isinstance(selected.get("posture_evidence"), dict) else {}
+    if finding_type == "cloud_posture_finding":
+        lines.append(f"- Posture evidence: resource=`{posture.get('resource_id') or 'unknown'}`, provider=`{posture.get('provider') or 'unknown'}`, expected=`{posture.get('expected') or 'unknown'}`, actual=`{posture.get('actual') or 'unknown'}`")
     unknowns = selected.get("unknowns", [])
     if isinstance(unknowns, list) and unknowns:
         lines.extend(["", "## Unknowns"])

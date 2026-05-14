@@ -29,7 +29,12 @@ from .context import ContextError, load_context_file
 from .correlation import apply_correlations
 from .effective_exposure import enrich_context_map_with_effective_exposure
 from .evidence_graph import build_evidence_graph
-from .finding_types import DYNAMIC_RUNTIME_OBSERVATION, STATIC_CODE_WEAKNESS, count_canonical_types
+from .finding_types import (
+    CLOUD_POSTURE_FINDING,
+    DYNAMIC_RUNTIME_OBSERVATION,
+    STATIC_CODE_WEAKNESS,
+    count_canonical_types,
+)
 from .fixtures import (
     FixtureError,
     discover_fixture_packs,
@@ -67,6 +72,7 @@ from .outputs import (
     write_sarif,
 )
 from .policy import apply_exceptions, load_runtime_policy
+from .posture import native_posture_records
 from .readiness import load_release_readiness_inputs, release_readiness_report
 from .sbom import SbomError, load_sboms
 from .sbom_plan import recommend_sbom_commands, render_sbom_plan_markdown, write_sbom_plan_json
@@ -125,9 +131,10 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--require-artifact-provenance", action="store_true", help="Exit 10 unless artifact manifests provide digest, SBOM path, Git SHA, and signature/attestation markers.")
     scan.add_argument("--reachability-rules", help="Custom source reachability rules JSON.")
     scan.add_argument("--source-evidence-in", action="append", default=[], help="External source evidence JSON, Semgrep JSON, SARIF, or govulncheck JSONL. Repeatable.")
-    scan.add_argument("--security-evidence-in", action="append", default=[], help="Generic first-party SAST/DAST evidence JSON, Semgrep JSON, SARIF, ZAP JSON, or Nuclei JSONL. Repeatable.")
+    scan.add_argument("--security-evidence-in", action="append", default=[], help="Generic first-party SAST/DAST/CSPM evidence JSON, Semgrep JSON, SARIF, ZAP JSON, Nuclei JSONL, or posture scanner JSON. Repeatable.")
     scan.add_argument("--sast-in", action="append", default=[], help="SAST scanner evidence JSON, Semgrep JSON, or SARIF. Repeatable; defaults imported records to scanner_type=sast.")
     scan.add_argument("--dast-in", action="append", default=[], help="DAST scanner evidence JSON, ZAP JSON, or Nuclei JSONL. Repeatable; defaults imported records to scanner_type=dast.")
+    scan.add_argument("--cspm-in", action="append", default=[], help="CSPM/posture evidence JSON or SARIF from Checkov, Trivy config, KICS, tfsec, or normalized JSON. Repeatable; defaults imported records to scanner_type=cspm.")
     scan.add_argument(
         "--analysis-profile",
         choices=["advisory", "production"],
@@ -175,6 +182,7 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--security-evidence-in", action="append", default=[])
     validate.add_argument("--sast-in", action="append", default=[])
     validate.add_argument("--dast-in", action="append", default=[])
+    validate.add_argument("--cspm-in", action="append", default=[])
     validate.add_argument("--artifact-manifest", action="append", default=[])
     validate.add_argument("--json-out")
 
@@ -396,6 +404,7 @@ def run_scan(args: argparse.Namespace) -> int:
         *list(args.security_evidence_in or []),
         *list(args.sast_in or []),
         *list(args.dast_in or []),
+        *list(args.cspm_in or []),
     ]
     if not args.skip_validation:
         issues = validate_paths(
@@ -465,6 +474,8 @@ def run_scan(args: argparse.Namespace) -> int:
         *load_security_evidence(args.security_evidence_in),
         *load_security_evidence(args.sast_in, default_scanner_type="sast"),
         *load_security_evidence(args.dast_in, default_scanner_type="dast"),
+        *load_security_evidence(args.cspm_in, default_scanner_type="cspm"),
+        *native_posture_records(terraform_coverage, kubernetes_coverage, contexts),
     ]
     findings, source_coverage = generate_findings_with_source_report(
         sboms,
@@ -505,6 +516,7 @@ def run_scan(args: argparse.Namespace) -> int:
         "security_evidence_unmapped": security_evidence_report.get("unmapped", 0),
         "static_code_weakness_findings": security_finding_type_counts.get(STATIC_CODE_WEAKNESS, 0),
         "dynamic_runtime_observation_findings": security_finding_type_counts.get(DYNAMIC_RUNTIME_OBSERVATION, 0),
+        "cloud_posture_findings": security_finding_type_counts.get(CLOUD_POSTURE_FINDING, 0),
         "analysis_profile": args.analysis_profile,
         "artifact_manifest_entries": artifact_manifest_report.get("entries", 0),
     }
@@ -704,7 +716,7 @@ def run_validate(args: argparse.Namespace) -> int:
         args.policy,
         args.reachability_rules,
         args.source_evidence_in,
-        [*args.security_evidence_in, *args.sast_in, *args.dast_in],
+        [*args.security_evidence_in, *args.sast_in, *args.dast_in, *args.cspm_in],
         args.artifact_manifest,
     )
     report = issues_report(issues)

@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
-from .finding_types import canonical_finding_type
+from .finding_types import (
+    CLOUD_POSTURE_FINDING,
+    DEPENDENCY_VULNERABILITY,
+    DYNAMIC_RUNTIME_OBSERVATION,
+    STATIC_CODE_WEAKNESS,
+    canonical_finding_type,
+)
 from .models import Confidence, CorrelationEvidence, Finding
 from .scoring import apply_graph_score
 
@@ -28,19 +34,27 @@ def _correlate(left: Finding, right: Finding) -> tuple[str, Confidence, str] | N
     left_type = canonical_finding_type(left.finding_type)
     right_type = canonical_finding_type(right.finding_type)
     types = {left_type, right_type}
-    if types == {"static_code_weakness", "dynamic_runtime_observation"}:
+    if types == {STATIC_CODE_WEAKNESS, DYNAMIC_RUNTIME_OBSERVATION}:
         if _route_key(left) and _route_key(left) == _route_key(right) and _cwe(left) and _cwe(left) == _cwe(right):
             return ("sast_dast_route_match", Confidence.HIGH, "SAST and DAST evidence share route and CWE.")
         if _route_key(left) and _route_key(left) == _route_key(right):
             return ("sast_dast_route_match", Confidence.MEDIUM, "SAST and DAST evidence share route.")
         if _cwe(left) and _cwe(left) == _cwe(right):
             return ("multi_tool_same_cwe", Confidence.MEDIUM, "SAST and DAST evidence share CWE.")
-    if types == {"dependency_vulnerability", "dynamic_runtime_observation"} and left.artifact.name == right.artifact.name:
+    if types == {DEPENDENCY_VULNERABILITY, DYNAMIC_RUNTIME_OBSERVATION} and left.artifact.name == right.artifact.name:
         return ("sca_dast_same_artifact", Confidence.LOW, "Dependency and DAST findings affect the same artifact; this is context, not causality.")
-    if types == {"dependency_vulnerability", "static_code_weakness"} and left.artifact.name == right.artifact.name:
+    if types == {DEPENDENCY_VULNERABILITY, STATIC_CODE_WEAKNESS} and left.artifact.name == right.artifact.name:
         if _cwe(left) and _cwe(left) == _cwe(right):
             return ("sca_sast_same_sink_or_package_family", Confidence.MEDIUM, "Dependency and SAST findings share CWE in the same artifact.")
         return ("weak_possible_relation", Confidence.LOW, "Dependency and SAST findings share artifact only.")
+    if CLOUD_POSTURE_FINDING in types and left.artifact.name == right.artifact.name:
+        posture = left if left_type == CLOUD_POSTURE_FINDING else right
+        other = right if posture is left else left
+        if posture.context.exposure in {"public", "external"} and canonical_finding_type(other.finding_type) in {DEPENDENCY_VULNERABILITY, STATIC_CODE_WEAKNESS, DYNAMIC_RUNTIME_OBSERVATION}:
+            return ("cspm_deployment_match", Confidence.MEDIUM, "CSPM public exposure evidence applies to the same mapped workload.")
+        if posture.context.iam_impacts or posture.context.privilege in {"admin", "sensitive"}:
+            return ("cspm_blast_radius_context", Confidence.MEDIUM, "CSPM identity or data posture applies to the same mapped workload.")
+        return ("weak_possible_relation", Confidence.LOW, "CSPM and security finding share a mapped resource or artifact only.")
     return None
 
 

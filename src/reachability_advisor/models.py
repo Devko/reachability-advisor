@@ -202,6 +202,52 @@ class RuntimeEvidence:
 
 
 @dataclass
+class PostureEvidence:
+    scanner: str = "none"
+    tool: str = "none"
+    rule_id: str = ""
+    provider: str | None = None
+    resource_id: str | None = None
+    resource_type: str | None = None
+    service: str | None = None
+    control: str | None = None
+    category: str | None = None
+    expected: str | None = None
+    actual: str | None = None
+    remediation: str | None = None
+    confidence: Confidence = Confidence.LOW
+    evidence_source: str = "none"
+    input_path: str | None = None
+    location: SourceLocation | None = None
+    blockers: list[str] = field(default_factory=list)
+    unknowns: list[str] = field(default_factory=list)
+    diagnostics: list[dict[str, Any]] = field(default_factory=list)
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "scanner": self.scanner,
+            "tool": self.tool,
+            "rule_id": self.rule_id,
+            "provider": self.provider,
+            "resource_id": self.resource_id,
+            "resource_type": self.resource_type,
+            "service": self.service,
+            "control": self.control,
+            "category": self.category,
+            "expected": self.expected,
+            "actual": self.actual,
+            "remediation": self.remediation,
+            "confidence": self.confidence.value,
+            "evidence_source": self.evidence_source,
+            "input_path": self.input_path,
+            "location": self.location.to_json() if self.location else None,
+            "blockers": self.blockers,
+            "unknowns": self.unknowns,
+            "diagnostics": self.diagnostics,
+        }
+
+
+@dataclass
 class CorrelationEvidence:
     correlation_type: str
     related_finding_key: str
@@ -254,6 +300,7 @@ class Finding:
     policy_status: str = "active"
     score_details: dict[str, Any] = field(default_factory=dict)
     runtime_evidence: RuntimeEvidence = field(default_factory=RuntimeEvidence)
+    posture_evidence: PostureEvidence = field(default_factory=PostureEvidence)
     correlated_evidence: list[CorrelationEvidence] = field(default_factory=list)
     input_sources: list[dict[str, Any]] = field(default_factory=list)
     unknowns: list[str] = field(default_factory=list)
@@ -306,6 +353,7 @@ class Finding:
                 "locations": [location.to_json() for location in self.source.locations],
             },
             "runtime_evidence": self.runtime_evidence.to_json(),
+            "posture_evidence": self.posture_evidence.to_json(),
             "correlated_evidence": [item.to_json() for item in self.correlated_evidence],
             "input_sources": self.input_sources,
             "unknowns": self.unknowns,

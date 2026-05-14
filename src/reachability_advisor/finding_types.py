@@ -8,18 +8,21 @@ DEPENDENCY_VULNERABILITY = "dependency_vulnerability"
 STATIC_CODE_WEAKNESS = "static_code_weakness"
 DYNAMIC_RUNTIME_OBSERVATION = "dynamic_runtime_observation"
 CORRELATED_SECURITY_FINDING = "correlated_security_finding"
+CLOUD_POSTURE_FINDING = "cloud_posture_finding"
 
 CANONICAL_FINDING_TYPES = {
     DEPENDENCY_VULNERABILITY,
     STATIC_CODE_WEAKNESS,
     DYNAMIC_RUNTIME_OBSERVATION,
     CORRELATED_SECURITY_FINDING,
+    CLOUD_POSTURE_FINDING,
 }
 
 SECURITY_FINDING_TYPES = {
     STATIC_CODE_WEAKNESS,
     DYNAMIC_RUNTIME_OBSERVATION,
     CORRELATED_SECURITY_FINDING,
+    CLOUD_POSTURE_FINDING,
 }
 
 
@@ -45,6 +48,10 @@ def is_security_finding(value: str | None) -> bool:
     return canonical_finding_type(value) in SECURITY_FINDING_TYPES
 
 
+def is_posture_finding(value: str | None) -> bool:
+    return canonical_finding_type(value) == CLOUD_POSTURE_FINDING
+
+
 def finding_kind(value: str | None) -> str:
     finding_type = canonical_finding_type(value)
     return {
@@ -52,6 +59,7 @@ def finding_kind(value: str | None) -> str:
         STATIC_CODE_WEAKNESS: STATIC_CODE_WEAKNESS,
         DYNAMIC_RUNTIME_OBSERVATION: DYNAMIC_RUNTIME_OBSERVATION,
         CORRELATED_SECURITY_FINDING: CORRELATED_SECURITY_FINDING,
+        CLOUD_POSTURE_FINDING: CLOUD_POSTURE_FINDING,
     }.get(finding_type, "security_finding")
 
 
@@ -65,6 +73,7 @@ def count_canonical_types(values: Iterable[str | None]) -> dict[str, int]:
 
 __all__ = [
     "CANONICAL_FINDING_TYPES",
+    "CLOUD_POSTURE_FINDING",
     "CORRELATED_SECURITY_FINDING",
     "DEPENDENCY_VULNERABILITY",
     "DYNAMIC_RUNTIME_OBSERVATION",
@@ -75,6 +84,7 @@ __all__ = [
     "finding_kind",
     "is_dependency_finding",
     "is_dynamic_finding",
+    "is_posture_finding",
     "is_security_finding",
     "is_static_finding",
 ]

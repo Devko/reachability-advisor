@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .effective_graph import scoring_path_summary
-from .finding_types import DYNAMIC_RUNTIME_OBSERVATION, STATIC_CODE_WEAKNESS
+from .finding_types import CLOUD_POSTURE_FINDING, DYNAMIC_RUNTIME_OBSERVATION, STATIC_CODE_WEAKNESS
 from .models import (
     Artifact,
     Component,
@@ -28,11 +28,13 @@ from .security_evidence_model import SecurityEvidenceError, SecurityEvidenceReco
 from .security_mapping import (
     SecurityEvidenceMappingDecision,
     map_security_evidence_record,
+    unmapped_posture_artifact,
     unmapped_runtime_artifact,
 )
 from .security_profiles import profiles_for_security_record, security_evidence_profile_report
 from .security_runtime import (
     context_for_security_record,
+    posture_for_security_record,
     runtime_for_security_record,
     source_for_security_record,
 )
@@ -53,6 +55,8 @@ def generate_security_findings(
         if artifact is None:
             if record.scanner_type == "dast":
                 artifact = unmapped_runtime_artifact(record)
+            elif record.scanner_type == "cspm":
+                artifact = unmapped_posture_artifact(record)
             else:
                 unmapped.append(
                     {
@@ -75,7 +79,11 @@ def generate_security_findings(
                     "type": record.scanner_type,
                     "artifact": record.artifact,
                     "url": record.url,
-                    "reason": "DAST URL did not map to a supplied SBOM artifact or deployment workload",
+                    "reason": (
+                        "CSPM resource did not map to a supplied SBOM artifact or deployment workload"
+                        if record.scanner_type == "cspm"
+                        else "DAST URL did not map to a supplied SBOM artifact or deployment workload"
+                    ),
                     "match": mapping.match_json(),
                     "mapping_confidence": mapping.confidence.value,
                 }
@@ -94,6 +102,7 @@ def generate_security_findings(
         finding.weakness = _weakness_json(record)
         finding.fix_commands = [record.remediation] if record.remediation else []
         finding.runtime_evidence = runtime_for_security_record(record)
+        finding.posture_evidence = posture_for_security_record(record)
         finding.input_sources = [_input_source(record)]
         finding.unknowns = _unknowns_for_record(record, mapping)
         finding.evidence_summary = _evidence_summary(record, finding)
@@ -126,11 +135,11 @@ def generate_security_findings(
 
 def _component_for_record(record: SecurityEvidenceRecord) -> Component:
     source_path = str(record.source.path) if record.source else None
-    name = record.component or record.route or source_path or record.url or record.weakness
+    name = record.component or record.resource_id or record.route or source_path or record.url or record.weakness
     finding_type = _finding_type_for_record(record)
     return Component(
         name=str(name),
-        scope="runtime",
+        scope="posture" if record.scanner_type == "cspm" else "runtime",
         properties={
             "finding_type": finding_type,
             "scanner:type": record.scanner_type,
@@ -139,6 +148,9 @@ def _component_for_record(record: SecurityEvidenceRecord) -> Component:
             "source:path": source_path or "",
             "route": record.route or "",
             "url": record.url or "",
+            "resource:id": record.resource_id or "",
+            "resource:type": record.resource_type or "",
+            "provider": record.provider or "",
         },
     )
 
@@ -147,7 +159,7 @@ def _vulnerability_for_record(record: SecurityEvidenceRecord) -> VulnerabilityRe
     finding_type = _finding_type_for_record(record)
     return VulnerabilityRecord(
         id=record.rule_id,
-        package_name="first-party-code",
+        package_name=record.resource_type or ("cloud-posture" if record.scanner_type == "cspm" else "first-party-code"),
         aliases=[record.cwe] if record.cwe else [],
         severity=record.severity,
         cvss=record.cvss,
@@ -162,11 +174,18 @@ def _vulnerability_for_record(record: SecurityEvidenceRecord) -> VulnerabilityRe
             "url": record.url,
             "method": record.method,
             "route": record.route,
+            "provider": record.provider,
+            "resource_id": record.resource_id,
+            "resource_type": record.resource_type,
+            "service": record.service,
+            "control": record.control,
         },
     )
 
 
 def _finding_type_for_record(record: SecurityEvidenceRecord) -> str:
+    if record.scanner_type == "cspm":
+        return CLOUD_POSTURE_FINDING
     return DYNAMIC_RUNTIME_OBSERVATION if record.scanner_type == "dast" else STATIC_CODE_WEAKNESS
 
 
@@ -188,6 +207,12 @@ def _unknowns_for_record(record: SecurityEvidenceRecord, mapping: SecurityEviden
         unknowns.append("artifact mapping unavailable or weak one-SBOM fallback")
     if record.scanner_type == "dast" and not record.authentication_context:
         unknowns.append("authentication context unavailable")
+    if record.scanner_type == "cspm" and not record.resource_id:
+        unknowns.append("affected cloud resource unavailable")
+    if record.scanner_type == "cspm" and mapping.confidence == Confidence.LOW and not record.artifact:
+        unknowns.append("artifact or workload mapping unavailable or weak one-SBOM fallback")
+    if record.scanner_type == "cspm":
+        unknowns.extend(record.unknowns)
     return unknowns
 
 
@@ -195,6 +220,11 @@ def _evidence_summary(record: SecurityEvidenceRecord, finding: Finding) -> list[
     summary = [f"{record.scanner_type.upper()} {record.tool} reported {record.rule_id}"]
     if record.scanner_type == "dast" and record.url:
         summary.append(f"Runtime URL observed: {record.method or 'HTTP'} {record.url}")
+    if record.scanner_type == "cspm":
+        target = record.resource_id or record.component or "unknown resource"
+        summary.append(f"CSPM posture evidence: {record.tool} {record.rule_id} on {target}")
+        if record.expected or record.actual:
+            summary.append(f"Expected `{record.expected or 'unknown'}`; actual `{record.actual or 'unknown'}`")
     if finding.source.locations:
         summary.append(f"Source location: {finding.source.locations[0].path}:{finding.source.locations[0].line}")
     return summary
@@ -218,12 +248,20 @@ def _weakness_json(record: SecurityEvidenceRecord) -> dict[str, Any]:
         "dataflow": record.dataflow,
         "remediation": record.remediation,
         "profiles": list(profile_ids),
+        "provider": record.provider,
+        "resource_id": record.resource_id,
+        "resource_type": record.resource_type,
+        "service": record.service,
+        "control": record.control,
+        "expected": record.expected,
+        "actual": record.actual,
     }
 
 
 def _finding_key(artifact: Artifact, record: SecurityEvidenceRecord) -> str:
     location = f"{record.source.path}:{record.source.line}" if record.source else record.url or record.route or ""
-    return "|".join(["code", artifact.name, record.rule_id, _stable_token(location)])
+    prefix = "posture" if record.scanner_type == "cspm" else "code"
+    return "|".join([prefix, artifact.name, record.rule_id, _stable_token(location or record.resource_id or "")])
 
 
 def _stable_token(value: str) -> str:

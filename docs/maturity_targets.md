@@ -42,7 +42,7 @@ Implemented controls:
 - `runtime_evidence` records runtime state, confidence, tool, URL, method, parameter, request/response evidence, authentication context, evidence source, and diagnostics.
 - DAST records no longer set source reachability to request-controlled unless source evidence exists.
 - SAST emits `static_code_weakness`; DAST emits `dynamic_runtime_observation`.
-- `--vuln-in`, `--sast-in`, and `--dast-in` provide explicit scanner input lanes; `--security-evidence-in` remains the generic mixed scanner input.
+- `--vuln-in`, `--sast-in`, `--dast-in`, and `--cspm-in` provide explicit scanner input lanes; `--security-evidence-in` remains the generic mixed scanner input.
 - ZAP JSON and Nuclei JSONL adapters extract conservative runtime records.
 - SAST+DAST route/CWE matches create `sast_dast_route_match`; same-artifact-only relations remain weak.
 - `security-evidence-pack` writes maintained SAST/DAST profiles, Semgrep profile files, DAST profile metadata, and a release-gate contract.

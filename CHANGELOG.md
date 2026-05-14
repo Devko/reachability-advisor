@@ -1,14 +1,17 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 - 2026-05-14
 
 - v1.1: separated DAST runtime evidence from source reachability.
-- v1.1: added canonical finding types for dependency, static SAST, dynamic DAST, and correlated security findings.
-- v1.1: added `--vuln-in`, `--sast-in`, and `--dast-in` CLI aliases.
+- v1.1: added canonical finding types for dependency, static SAST, dynamic DAST, CSPM, and correlated security findings.
+- v1.1: added `--vuln-in`, `--sast-in`, `--dast-in`, and `--cspm-in` CLI aliases.
 - v1.1: added non-destructive scanner correlation and DAST URL-to-workload mapping behavior.
 - v1.1: added conservative ZAP JSON and Nuclei JSONL DAST adapters.
+- v1.1: added CSPM/posture evidence import for normalized JSON, SARIF, Checkov, Trivy config, KICS, and tfsec.
+- v1.1: added native local Terraform/Kubernetes posture checks for public ingress, broad IAM/RBAC, public data endpoints, disabled encryption, privileged workloads, and sensitive manifest values.
+- v1.1: added per-finding attack-path stories and risk scenario views to the HTML report.
 - v1.1: added `reachability-advisor demo` and `make demo` with checked-in multi-scanner samples.
-- v1.1: simplified README positioning around dependency, SAST, and DAST correlation.
+- v1.1: simplified README positioning around dependency, SAST, DAST, and CSPM correlation.
 - v1.1: added CodeQL, Scorecard, tag-based release workflow, issue templates, and a PR template.
 - Hardened release validation so the documented import/export contract is exercised end to end.
 - Fixed `explain --out` so nested output paths are created consistently with the other writers.

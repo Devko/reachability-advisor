@@ -1,6 +1,6 @@
 # Reachability Advisor
 
-Local-first attack-path prioritization for dependency, SAST, and DAST findings.
+Local-first attack-path prioritization for dependency, SAST, DAST, and CSPM findings.
 
 ![Reachability Advisor attack-path overview](docs/assets/reachability-advisor-attack-path.svg)
 
@@ -12,10 +12,10 @@ It does not replace scanners. It consumes their evidence, connects it to deploym
 
 ## What It Does
 
-- Ingests SBOM/SCA vulnerability data, source reachability evidence, SAST, DAST, Terraform plans, Kubernetes manifests, and artifact identity manifests.
+- Ingests SBOM/SCA vulnerability data, source reachability evidence, SAST, DAST, CSPM/posture evidence, Terraform plans, Kubernetes manifests, and artifact identity manifests.
 - Builds an evidence graph across assets, network paths, identities, source/runtime evidence, packages, and findings.
 - Uses graph-first scoring to separate confirmed risk, potential risk, blockers, unknowns, and visibility gaps.
-- Emits CI and developer outputs: JSON, SARIF, Markdown, IDE diagnostics, PR deltas, readiness reports, and an interactive HTML attack-path report.
+- Emits CI and developer outputs: JSON, SARIF, Markdown, IDE diagnostics, PR deltas, readiness reports, and an interactive HTML attack-path report with per-finding evidence stories.
 - Stays local-first: no live cloud calls, telemetry, auto-suppression, or automatic "not affected" conclusions.
 
 ## Quick Demo
@@ -30,7 +30,7 @@ Key outputs:
 
 - `outputs/demo/summary.md` - prioritized findings and visibility gaps.
 - `outputs/demo/findings.json` - machine-readable findings with evidence and graph decisions.
-- `outputs/demo/reachability-graph.html` - interactive attack-path report.
+- `outputs/demo/reachability-graph.html` - interactive attack-path report with path cards, evidence graph, and finding details.
 
 See [Quickstart](docs/quickstart.md) for install steps, sample scans, release gates, and common workflow commands.
 
@@ -38,7 +38,7 @@ See [Quickstart](docs/quickstart.md) for install steps, sample scans, release ga
 
 - **Dependency prioritization:** combine SBOM and Grype/OSV/local vulnerability data.
 - **AppSec triage:** correlate SAST and DAST findings with source, routes, artifacts, and runtime evidence.
-- **Deployment-aware risk:** add Terraform plan and rendered Kubernetes evidence to account for network exposure, IAM, and workload identity.
+- **Deployment-aware risk:** add Terraform plan, rendered Kubernetes evidence, and CSPM scanner output to account for network exposure, IAM, workload identity, and cloud posture.
 - **CI release gate:** fail on confirmed or high-potential paths while reporting unknowns as visibility gaps.
 - **Developer feedback:** export SARIF and IDE diagnostics only where real source locations exist.
 
@@ -49,6 +49,7 @@ Reachability Advisor keeps evidence types separate:
 - Dependency vulnerabilities are package and vulnerability records.
 - Static code weaknesses come from SAST/source evidence.
 - Dynamic runtime observations come from DAST/runtime evidence.
+- Cloud posture findings come from CSPM scanner output or native checks over local Terraform/Kubernetes evidence.
 - Correlations link findings without merging or suppressing originals.
 
 Details: [Evidence model](docs/evidence_model.md), [Scoring](docs/scoring.md), [Input adapters](docs/input_adapters.md).
@@ -59,7 +60,7 @@ Details: [Evidence model](docs/evidence_model.md), [Scoring](docs/scoring.md), [
 - Markdown summary
 - SARIF
 - IDE diagnostics JSON
-- Interactive HTML attack-path report
+- Interactive HTML attack-path report: Attack Paths, Architecture, Evidence Paths, and Findings views
 - Mapping, coverage, readiness, and baseline delta reports
 
 ## Safety Boundary

@@ -107,9 +107,50 @@ Minimal normalized DAST record:
 
 DAST creates runtime evidence. It does not set source reachability to request-controlled unless a source location or source data-flow record is also present.
 
+## CSPM Inputs
+
+Use `--cspm-in` for explicit cloud posture files or `--security-evidence-in` for generic security evidence with `scanner_type: "cspm"`.
+
+Supported formats:
+
+- normalized JSON with `security_evidence[]`;
+- SARIF 2.1.0 from posture/config scanners;
+- Checkov JSON with `results.failed_checks[]`;
+- Trivy config JSON with `Results[].Misconfigurations[]`;
+- KICS JSON with `queries[]`;
+- legacy tfsec JSON with `results[]`.
+
+Minimal normalized CSPM record:
+
+```json
+{
+  "security_evidence": [
+    {
+      "scanner_type": "cspm",
+      "tool": "checkov",
+      "rule_id": "CKV_AWS_20",
+      "weakness": "S3 bucket allows public reads",
+      "severity": "high",
+      "artifact": "web-api",
+      "provider": "aws",
+      "resource_id": "aws_s3_bucket.public",
+      "resource_type": "aws_s3_bucket",
+      "service": "s3",
+      "expected": "private bucket ACL",
+      "actual": "public-read ACL",
+      "source": {"path": "main.tf", "line": 12},
+      "remediation": "Remove public ACL and block public access."
+    }
+  ]
+}
+```
+
+CSPM creates posture evidence. It does not set source reachability or runtime evidence unless it is separately correlated with SAST, DAST, source, or deployment evidence.
+
 ## Limitations
 
 - Scanner-controlled text is preserved only as bounded report evidence.
 - Unmapped DAST URLs stay visible as visibility gaps.
+- Unmapped CSPM resources stay visible as posture findings with a workload-mapping visibility gap.
 - One-SBOM fallback is marked weak; it is not proof that the runtime route belongs to the artifact.
 - Correlation links findings but does not prove causality.

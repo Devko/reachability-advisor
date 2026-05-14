@@ -77,17 +77,18 @@ class GoldenOutputRegressionTests(unittest.TestCase):
             visual = json.loads(embedded.group(1)) if embedded else {}
             graph_model = visual_graph_model(visual)
 
-        self.assertEqual(len(findings["findings"]), 10)
-        self.assertEqual(len(findings["remediations"]), 10)
-        self.assertEqual(_count_by(findings["findings"], "tier"), {"high": 3, "low": 2, "medium": 4, "urgent": 1})
+        self.assertEqual(len(findings["findings"]), 16)
+        self.assertEqual(len(findings["remediations"]), 16)
+        self.assertEqual(_count_by(findings["findings"], "finding_type"), {"cloud_posture_finding": 6, "dependency_vulnerability": 10})
+        self.assertEqual(_count_by(findings["findings"], "tier"), {"high": 4, "low": 2, "medium": 9, "urgent": 1})
         self.assertEqual(
             [(item["artifact"]["name"], item["component"]["name"], item["tier"], item["max_score"]) for item in findings["remediations"][:5]],
             [
                 ("payments-api", "log4j-core", "urgent", 99.5),
+                ("notifier", "aws_lambda_function_url.notifier", "high", 79.0),
                 ("orders-api", "requests", "high", 76.5),
                 ("audit-api", "jackson-databind", "high", 76.5),
-                ("notifier", "lodash", "high", 73.0),
-                ("reports-api", "requests", "medium", 56.5),
+                ("notifier", "lodash", "high", 74.5),
             ],
         )
         self.assertEqual(terraform["summary"]["total_resources"], 26)
@@ -95,7 +96,7 @@ class GoldenOutputRegressionTests(unittest.TestCase):
         self.assertEqual(kubernetes["summary"]["exposure_counts"], {"internal": 1, "public": 1})
         self.assertEqual(source["summary"]["states"], {"attacker_controlled": 5, "function_reachable": 2, "package_present": 3})
         self.assertEqual(mapping["summary"]["artifacts_with_terraform_matches"], 7)
-        self.assertEqual({key: len(visual[key]) for key in ("assets", "vulnerabilities", "networkPaths", "links")}, {"assets": 7, "vulnerabilities": 10, "networkPaths": 11, "links": 10})
+        self.assertEqual({key: len(visual[key]) for key in ("assets", "vulnerabilities", "networkPaths", "links")}, {"assets": 12, "vulnerabilities": 16, "networkPaths": 12, "links": 16})
         self.assertTrue(all("pathType" in item for item in visual["networkPaths"]))
         effective = visual["evidenceGraph"]["effective_exposure_graph"]
         self.assertEqual(len(effective["paths"]), len(findings["findings"]))

@@ -9,11 +9,13 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .attack_path_view import build_attack_paths
 from .evidence_graph import build_evidence_graph
 from .finding_types import canonical_finding_type
 from .models import Finding, reachability_label
 from .numeric import safe_float
 from .remediation import build_remediation_groups
+from .scenario_view import build_scenario_view
 from .visual_graph import visual_graph_model
 from .visual_layout import EXPOSURE_RANK, TIER_RANK
 
@@ -132,7 +134,9 @@ def _visual_payload(findings: list[Finding], metadata: dict[str, Any] | None = N
     network_paths = _finalize_network_paths(ordered_assets)
     vulnerabilities.sort(key=lambda item: (item["assetId"], -TIER_RANK.get(item["tier"], 0), -safe_float(item["score"]), item["label"]))
     architecture = _architecture_view(ordered_assets, network_paths, vulnerabilities)
-    attack_paths = _attack_path_view(architecture, network_paths, vulnerabilities)
+    remediations = build_remediation_groups(findings)
+    attack_paths = build_attack_paths(findings, network_paths, vulnerabilities, remediations)
+    scenario_view = build_scenario_view(findings, network_paths, vulnerabilities, attack_paths)
     return {
         "metadata": {
             "tool": "reachability-advisor",
@@ -141,13 +145,16 @@ def _visual_payload(findings: list[Finding], metadata: dict[str, Any] | None = N
             **(metadata or {}),
         },
         "stats": _stats(finding_rows),
-        "remediations": build_remediation_groups(findings),
+        "remediations": remediations,
         "evidenceGraph": graph,
         "findings": finding_rows,
         "assets": ordered_assets,
         "networkPaths": network_paths,
         "architecture": architecture,
         "attackPaths": attack_paths,
+        "riskScenarios": scenario_view["riskScenarios"],
+        "attackPathGroups": scenario_view["attackPathGroups"],
+        "issueCategories": scenario_view["issueCategories"],
         "vulnerabilities": vulnerabilities,
         "links": links,
     }
@@ -403,7 +410,7 @@ def _architecture_view(assets: list[dict[str, Any]], network_paths: list[dict[st
         asset_id = str(vulnerability.get("assetId") or "")
         if not asset_id:
             continue
-        counts = finding_counts_by_asset.setdefault(asset_id, {"dependency_vulnerability": 0, "static_code_weakness": 0, "dynamic_runtime_observation": 0})
+        counts = finding_counts_by_asset.setdefault(asset_id, {"dependency_vulnerability": 0, "static_code_weakness": 0, "dynamic_runtime_observation": 0, "cloud_posture_finding": 0})
         finding_type = canonical_finding_type(str(vulnerability.get("findingType") or "dependency_vulnerability"))
         counts[finding_type] = counts.get(finding_type, 0) + 1
 
@@ -425,7 +432,7 @@ def _architecture_view(assets: list[dict[str, Any]], network_paths: list[dict[st
             "score": safe_float(asset.get("score")),
             "owner": asset.get("owner"),
             "findingCount": len(asset.get("findingKeys") or []),
-            "findingTypeCounts": finding_counts_by_asset.get(asset_id, {"dependency_vulnerability": 0, "static_code_weakness": 0, "dynamic_runtime_observation": 0}),
+            "findingTypeCounts": finding_counts_by_asset.get(asset_id, {"dependency_vulnerability": 0, "static_code_weakness": 0, "dynamic_runtime_observation": 0, "cloud_posture_finding": 0}),
             "exposures": asset.get("exposures") or [],
             "privileges": asset.get("privileges") or [],
             "criticalities": asset.get("criticalities") or [],
@@ -510,75 +517,6 @@ def _architecture_view(assets: list[dict[str, Any]], network_paths: list[dict[st
         "assets": arch_assets,
         "edges": edges,
     }
-
-
-def _attack_path_view(architecture: dict[str, Any], network_paths: list[dict[str, Any]], vulnerabilities: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    hops_by_id = {str(hop.get("id") or ""): hop for hop in architecture.get("hops", []) if isinstance(hop, dict)}
-    edges = [edge for edge in architecture.get("edges", []) if isinstance(edge, dict)]
-    finding_counts_by_asset: dict[str, dict[str, int]] = {}
-    finding_keys_by_asset: dict[str, list[str]] = {}
-    for vulnerability in vulnerabilities:
-        asset_id = str(vulnerability.get("assetId") or "")
-        if not asset_id:
-            continue
-        counts = finding_counts_by_asset.setdefault(asset_id, {"dependency_vulnerability": 0, "static_code_weakness": 0, "dynamic_runtime_observation": 0})
-        finding_type = canonical_finding_type(str(vulnerability.get("findingType") or "dependency_vulnerability"))
-        counts[finding_type] = counts.get(finding_type, 0) + 1
-        _append_unique(finding_keys_by_asset.setdefault(asset_id, []), vulnerability.get("findingKey"))
-
-    attack_paths: list[dict[str, Any]] = []
-    for path in network_paths:
-        path_id = str(path.get("id") or "")
-        if not path_id:
-            continue
-        path_edges = [edge for edge in edges if edge.get("pathId") == path_id]
-        route_edges = [edge for edge in path_edges if edge.get("role") == "route-hop"]
-        route_hop_ids: list[str] = []
-        for edge in route_edges:
-            _append_unique(route_hop_ids, edge.get("source"))
-            _append_unique(route_hop_ids, edge.get("target"))
-        if not route_hop_ids:
-            route_hop_ids = [_architecture_entry_hop(path)]
-        route_hops = [hops_by_id[hop_id] for hop_id in route_hop_ids if hop_id in hops_by_id]
-        asset_ids = _path_asset_ids(path)
-        counts = {"dependency_vulnerability": 0, "static_code_weakness": 0, "dynamic_runtime_observation": 0}
-        finding_keys: list[str] = []
-        for asset_id in asset_ids:
-            for key, value in finding_counts_by_asset.get(asset_id, {}).items():
-                counts[key] = counts.get(key, 0) + value
-            for finding_key in finding_keys_by_asset.get(asset_id, []):
-                _append_unique(finding_keys, finding_key)
-        route_labels = [str(hop.get("label") or "") for hop in route_hops if hop.get("label")]
-        boundary_labels = [label for label in route_labels if label != str(path.get("entryLabel") or "")]
-        attack_paths.append(
-            {
-                "id": f"attack:path:{_stable_token(path_id)}",
-                "networkPathId": path_id,
-                "entryId": f"attack:entry:{_stable_token(path_id)}",
-                "entryLabel": path.get("entryLabel") or "Unknown entry",
-                "entrySubtitle": path.get("entrySubtitle") or "",
-                "label": " -> ".join([str(path.get("entryLabel") or "Entry")] + boundary_labels[:2]) or str(path.get("label") or "Attack path"),
-                "summary": path.get("summary") or path.get("evidence") or "",
-                "provider": _provider_for_path(path),
-                "exposure": path.get("exposure") or "unknown",
-                "pathType": path.get("pathType") or "unresolved",
-                "tier": path.get("tier") or "informational",
-                "score": safe_float(path.get("score")),
-                "confidence": path.get("confidence") or "low",
-                "assetIds": asset_ids,
-                "assetNames": path.get("assetNames") or [],
-                "assetCount": len(asset_ids),
-                "findingCount": sum(counts.values()),
-                "findingTypeCounts": counts,
-                "findingKeys": finding_keys,
-                "hopIds": route_hop_ids,
-                "hopLabels": route_labels,
-                "blockers": path.get("blockers") or [],
-                "evidence": path.get("evidence") or "",
-                "steps": path.get("steps") or [],
-            }
-        )
-    return sorted(attack_paths, key=lambda item: (-TIER_RANK.get(str(item.get("tier") or "informational"), 0), -safe_float(item.get("score")), str(item.get("label") or "")))
 
 
 def _path_asset_ids(path: dict[str, Any]) -> list[str]:
@@ -1012,7 +950,7 @@ h1 {
 }
 .toolbar {
   display: grid;
-  grid-template-columns: 320px minmax(250px, 1fr) 140px 150px 130px auto auto auto auto;
+  grid-template-columns: 320px minmax(230px, 1fr) 136px 136px 136px 136px 136px auto auto auto auto;
   gap: 8px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--line);
@@ -1406,6 +1344,215 @@ label.check input {
   border-color: rgba(124, 58, 237, .5);
   background: rgba(245, 243, 255, .74);
 }
+.attack-summary {
+  position: absolute;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid #d7deea;
+  border-radius: 10px;
+  background: rgba(255,255,255,.88);
+  box-shadow: 0 8px 22px rgba(16,24,40,.08);
+  color: #344054;
+  font-size: 12px;
+  font-weight: 700;
+}
+.attack-overview-lane {
+  position: absolute;
+  border: 1px solid rgba(148, 163, 184, .34);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, .42);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.78);
+}
+.attack-overview-lane.selected {
+  border-color: rgba(17, 24, 39, .38);
+  background: rgba(255, 255, 255, .7);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 12px 28px rgba(16,24,40,.08);
+}
+.attack-overview-lane .lane-title {
+  position: absolute;
+  left: 14px;
+  top: 9px;
+  max-width: min(520px, calc(100% - 360px));
+  color: #344054;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.attack-overview-lane .lane-meta {
+  position: absolute;
+  right: 12px;
+  top: 8px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.attack-overview-lane.dimmed {
+  opacity: .62;
+}
+.attack-list-card {
+  border-left-width: 8px;
+}
+.attack-list-card .top {
+  background: #ffffff;
+  border-bottom: 1px solid #e4e9f1;
+}
+.attack-list-card .body {
+  padding-top: 0;
+}
+.attack-list-card:focus {
+  outline: 3px solid #111827;
+  outline-offset: 2px;
+}
+.attack-node-card {
+  border-left-width: 0;
+  border-radius: 12px;
+  text-align: center;
+  overflow: hidden;
+}
+.attack-node-card.compact {
+  border-radius: 11px;
+}
+.attack-node-card.compact .top {
+  padding: 8px 8px 6px;
+}
+.attack-node-card.compact .body {
+  padding: 0 8px 8px;
+}
+.attack-node-card.compact .title-main {
+  font-size: 12px;
+  line-height: 1.16;
+  overflow-wrap: anywhere;
+}
+.attack-node-card.compact .sub {
+  font-size: 10.5px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.attack-node-card.compact .attack-node-icon {
+  width: 26px;
+  height: 26px;
+  margin-bottom: 5px;
+  font-size: 10px;
+}
+.attack-node-card.compact .chips {
+  max-height: 21px;
+  overflow: hidden;
+  justify-content: center;
+}
+.attack-node-card.compact .chip {
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attack-node-card.dimmed {
+  opacity: .5;
+}
+.attack-node-card .top {
+  display: block;
+  padding: 11px 10px 8px;
+}
+.attack-node-card .title-main {
+  -webkit-line-clamp: 2;
+  font-size: 13px;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+}
+.attack-node-card .sub {
+  -webkit-line-clamp: 2;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.attack-node-card .body {
+  padding: 0 10px 10px;
+}
+.attack-node-icon {
+  width: 30px;
+  height: 30px;
+  margin: 0 auto 7px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  border: 2px solid #cbd5e1;
+  background: #f8fafc;
+  color: #111827;
+  font-weight: 800;
+  font-size: 12px;
+}
+.attack-node-card[data-node-type="entry"] .attack-node-icon,
+.attack-node-card[data-node-type="runtime"] .attack-node-icon {
+  border-color: #0ea5e9;
+  background: #e0f2fe;
+  color: #075985;
+}
+.attack-node-card[data-node-type="ingress"] .attack-node-icon,
+.attack-node-card[data-node-type="workload"] .attack-node-icon {
+  border-color: #0f766e;
+  background: #ccfbf1;
+  color: #115e59;
+}
+.attack-node-card[data-node-type="vulnerability"] .attack-node-icon,
+.attack-node-card[data-node-type="weakness"] .attack-node-icon {
+  border-color: #dc2626;
+  background: #fee2e2;
+  color: #991b1b;
+}
+.attack-node-card[data-node-type="identity"] .attack-node-icon,
+.attack-node-card[data-node-type="data"] .attack-node-icon {
+  border-color: #7c3aed;
+  background: #ede9fe;
+  color: #5b21b6;
+}
+.attack-node-card[data-node-state="unknown"] {
+  border-style: dashed;
+  background: rgba(248,250,252,.88);
+}
+.attack-node-card[data-node-state="blocked"] {
+  border-style: dashed;
+  background: rgba(255,247,237,.9);
+}
+.attack-node-card[data-node-state="unknown"] .attack-node-icon {
+  border-style: dashed;
+  border-color: #64748b;
+  color: #475569;
+}
+.attack-node-card[data-node-state="blocked"] .attack-node-icon {
+  border-color: #c2410c;
+  color: #9a3412;
+  background: #ffedd5;
+}
+.edge.attack-path {
+  stroke: #334155;
+  stroke-width: 2.4;
+  opacity: .9;
+}
+.edge.attack-path.unknown {
+  stroke-dasharray: 7 6;
+  stroke: #64748b;
+}
+.edge.attack-path.blocker {
+  stroke-dasharray: 2 6;
+  stroke: #c2410c;
+}
+.edge.attack-path.selected {
+  animation: pulse-edge 1.8s ease-in-out infinite;
+}
+.edge.attack-path.dimmed {
+  opacity: .24;
+  stroke-width: 1.8;
+}
+@keyframes pulse-edge {
+  0%, 100% { opacity: .72; }
+  50% { opacity: 1; }
+}
 .finding-board {
   position: absolute;
   display: grid;
@@ -1417,6 +1564,154 @@ label.check input {
   position: relative;
   width: 360px;
   height: 132px;
+}
+.risk-board {
+  position: absolute;
+  left: 42px;
+  top: 42px;
+  width: 1180px;
+  border: 1px solid #d7deea;
+  border-radius: 10px;
+  background: rgba(255,255,255,.94);
+  box-shadow: 0 12px 28px rgba(16,24,40,.10);
+  overflow: hidden;
+}
+.risk-board-head {
+  display: grid;
+  grid-template-columns: 130px minmax(340px, 1fr) 250px 78px 82px 160px 104px;
+  gap: 0;
+  padding: 10px 12px;
+  border-bottom: 1px solid #d7deea;
+  background: #f8fafc;
+  color: #475467;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.risk-row {
+  display: grid;
+  grid-template-columns: 130px minmax(340px, 1fr) 250px 78px 82px 160px 104px;
+  gap: 0;
+  align-items: center;
+  min-height: 78px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #e4e9f1;
+  cursor: pointer;
+}
+.risk-row:last-child {
+  border-bottom: 0;
+}
+.risk-row:hover,
+.risk-row.selected {
+  background: #f8fafc;
+}
+.risk-row.selected {
+  box-shadow: inset 4px 0 0 #111827;
+}
+.risk-cell {
+  min-width: 0;
+  padding-right: 12px;
+  font-size: 12px;
+}
+.risk-severity {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 800;
+}
+.risk-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--info);
+}
+.risk-dot.urgent { background: var(--urgent); }
+.risk-dot.high { background: var(--high); }
+.risk-dot.medium { background: var(--medium); }
+.risk-dot.low { background: var(--low); }
+.risk-title {
+  font-weight: 800;
+  font-size: 14px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.risk-meta {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.risk-status {
+  display: inline-flex;
+  justify-content: center;
+  min-width: 72px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #eef2f7;
+  color: #344054;
+  font-weight: 800;
+  font-size: 11px;
+}
+.risk-status.open { background: #dbeafe; color: #1e40af; }
+.risk-status.excepted { background: #e2e8f0; color: #334155; }
+.risk-status.mixed { background: #fef3c7; color: #92400e; }
+.risk-path-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  padding: 6px 9px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.risk-path-link:hover,
+.risk-path-link:focus {
+  border-color: #2563eb;
+  background: #dbeafe;
+  outline: none;
+}
+.category-panels {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.category-panel {
+  border: 1px solid #d7deea;
+  border-radius: 8px;
+  background: #f8fafc;
+  overflow: hidden;
+}
+.category-panel summary {
+  cursor: pointer;
+  padding: 9px 10px;
+  font-size: 13px;
+  font-weight: 800;
+}
+.category-panel-body {
+  padding: 0 10px 10px;
+}
+.category-item {
+  padding: 8px 0;
+  border-top: 1px solid #e4e9f1;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.category-item-title {
+  font-weight: 750;
+  overflow-wrap: anywhere;
+}
+.category-item-detail {
+  margin-top: 2px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
 }
 .vuln-card .title {
   font-size: 14px;
@@ -1588,6 +1883,53 @@ li {
   margin: 4px 0;
   font-size: 12px;
 }
+.raw-evidence {
+  margin-top: 12px;
+  border: 1px solid #d7deea;
+  border-radius: 8px;
+  background: #f8fafc;
+  overflow: hidden;
+}
+.raw-evidence summary {
+  cursor: pointer;
+  padding: 9px 10px;
+  font-weight: 700;
+  font-size: 13px;
+}
+.raw-evidence pre {
+  margin: 0;
+  padding: 10px;
+  max-height: 280px;
+  overflow: auto;
+  border-top: 1px solid #e4e9f1;
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+.detail-action-list {
+  list-style: none;
+  padding-left: 0;
+}
+.detail-action-list li {
+  margin: 6px 0;
+}
+.detail-link-button {
+  width: 100%;
+  text-align: left;
+  border: 1px solid #dbe3ee;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 8px 10px;
+  color: #1f2937;
+  font: inherit;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.detail-link-button:hover,
+.detail-link-button:focus {
+  border-color: #2563eb;
+  background: #eff6ff;
+  outline: none;
+}
 @media (max-width: 980px) {
   .toolbar { grid-template-columns: 1fr 1fr; }
   .layout { grid-template-columns: 1fr; }
@@ -1606,21 +1948,38 @@ li {
 </header>
 <section class="toolbar">
   <div class="view-tabs" role="tablist" aria-label="Visual report view">
-    <button id="attackTab" type="button" class="active" data-view="attack">Attack Paths</button>
+    <button id="attackTab" type="button" data-view="attack">Attack Paths</button>
     <button id="architectureTab" type="button" data-view="architecture">Architecture</button>
     <button id="evidenceTab" type="button" data-view="evidence">Evidence Paths</button>
-    <button id="findingsTab" type="button" data-view="findings">Findings</button>
+    <button id="riskTab" type="button" class="active" data-view="risk">Risk</button>
   </div>
   <input id="search" type="search" placeholder="Search asset, component, CVE, IAM, network, owner">
   <select id="tier">
-    <option value="informational">All tiers</option>
-    <option value="low">Low and above</option>
-    <option value="medium">Medium and above</option>
-    <option value="high">High and above</option>
-    <option value="urgent">Urgent only</option>
+    <option value="informational">All priorities</option>
+    <option value="urgent">C Critical only</option>
+    <option value="high">H High and above</option>
+    <option value="medium">M Medium and above</option>
+    <option value="low">L Low and above</option>
   </select>
   <select id="exposure">
     <option value="">All exposures</option>
+  </select>
+  <select id="findingType">
+    <option value="">All finding types</option>
+    <option value="dependency_vulnerability">Dependency</option>
+    <option value="static_code_weakness">SAST</option>
+    <option value="dynamic_runtime_observation">DAST</option>
+    <option value="cloud_posture_finding">CSPM</option>
+    <option value="correlated_security_finding">Correlated</option>
+  </select>
+  <select id="confidence">
+    <option value="">All confidence</option>
+    <option value="high">High</option>
+    <option value="medium">Medium</option>
+    <option value="low">Low</option>
+  </select>
+  <select id="evidenceLayer">
+    <option value="">All evidence</option>
   </select>
   <select id="topLimit">
     <option value="50">Top 50</option>
@@ -1651,7 +2010,7 @@ li {
     </div>
     <section class="details" id="details"></section>
     <section class="finding-list">
-      <h2>Visible Findings</h2>
+      <h2 id="visibleListTitle">Visible Risk</h2>
       <div id="findingList"></div>
     </section>
   </aside>
@@ -1663,6 +2022,15 @@ const tierRank = {informational: 0, low: 1, medium: 2, high: 3, urgent: 4};
 const exposureRank = {unknown: 0, isolated: 1, private: 1, internal: 2, external: 3, public: 4};
 const assetById = new Map((DATA.assets || []).map(asset => [asset.id, asset]));
 const vulnerabilityByFindingKey = new Map((DATA.vulnerabilities || []).map(vuln => [vuln.findingKey, vuln]));
+const attackPathByFindingKey = new Map((DATA.attackPaths || []).map(path => [path.findingKey, path]));
+const scenarioById = new Map((DATA.riskScenarios || []).map(scenario => [scenario.id, scenario]));
+const attackPathGroupById = new Map((DATA.attackPathGroups || []).map(group => [group.id, group]));
+const scenarioByFindingKey = new Map();
+for (const scenario of DATA.riskScenarios || []) {
+  for (const findingKey of scenario.findingKeys || []) {
+    if (!scenarioByFindingKey.has(findingKey)) scenarioByFindingKey.set(findingKey, scenario);
+  }
+}
 const vulnerabilitiesByAssetId = new Map();
 for (const vuln of DATA.vulnerabilities || []) {
   if (!vulnerabilitiesByAssetId.has(vuln.assetId)) vulnerabilitiesByAssetId.set(vuln.assetId, []);
@@ -1710,8 +2078,8 @@ const attackEntryX = 58;
 const attackPathX = 338;
 const attackAssetX = 742;
 const attackRiskX = 1110;
-const attackLaneY = 28;
-const attackFirstRowY = 78;
+const attackLaneY = 70;
+const attackFirstRowY = 120;
 const attackEntryWidth = 226;
 const attackEntryHeight = 94;
 const attackPathWidth = 342;
@@ -1730,11 +2098,14 @@ const details = document.getElementById("details");
 const search = document.getElementById("search");
 const tier = document.getElementById("tier");
 const exposure = document.getElementById("exposure");
+const findingType = document.getElementById("findingType");
+const confidence = document.getElementById("confidence");
+const evidenceLayer = document.getElementById("evidenceLayer");
 const topLimit = document.getElementById("topLimit");
 const highestPerAsset = document.getElementById("highestPerAsset");
 const activeOnly = document.getElementById("activeOnly");
 const viewTabs = [...document.querySelectorAll(".view-tabs button")];
-let viewMode = "attack";
+let viewMode = "risk";
 let selected = null;
 let transform = {x: 30, y: 30, scale: 1};
 let drag = null;
@@ -1749,7 +2120,14 @@ function init() {
     option.textContent = item;
     exposure.appendChild(option);
   }
-  for (const control of [search, tier, exposure, topLimit, highestPerAsset, activeOnly]) {
+  const layers = new Set((DATA.attackPaths || []).flatMap(path => path.evidenceLayers || []));
+  for (const item of [...layers].sort()) {
+    const option = document.createElement("option");
+    option.value = item;
+    option.textContent = item;
+    evidenceLayer.appendChild(option);
+  }
+  for (const control of [search, tier, exposure, findingType, confidence, evidenceLayer, topLimit, highestPerAsset, activeOnly]) {
     control.addEventListener("input", render);
     control.addEventListener("change", render);
   }
@@ -1781,6 +2159,7 @@ function renderStats() {
     `${s.finding_count} findings`,
     `${(s.finding_types || {}).static_code_weakness || 0} static`,
     `${(s.finding_types || {}).dynamic_runtime_observation || 0} runtime`,
+    `${(s.finding_types || {}).cloud_posture_finding || 0} posture`,
     `${s.artifact_count} assets`,
     `${s.component_count} components`,
     `${s.tiers.urgent || 0} urgent`,
@@ -1803,7 +2182,7 @@ function canonicalFindingType(value) {
 }
 
 function isSecurityFinding(value) {
-  return canonicalFindingType(value) === "static_code_weakness" || canonicalFindingType(value) === "dynamic_runtime_observation";
+  return canonicalFindingType(value) === "static_code_weakness" || canonicalFindingType(value) === "dynamic_runtime_observation" || canonicalFindingType(value) === "cloud_posture_finding";
 }
 
 function isRuntimeFinding(value) {
@@ -1814,16 +2193,64 @@ function assetText(asset) {
   return JSON.stringify(asset).toLowerCase();
 }
 
+function attackPathText(path) {
+  return path ? JSON.stringify(path).toLowerCase() : "";
+}
+
+function scenarioText(scenario) {
+  return (scenario.searchText || JSON.stringify(scenario)).toLowerCase();
+}
+
+function scenarioMatchesFindingType(scenario, typeFilter) {
+  if (!typeFilter) return true;
+  return (scenario.findingTypes || []).map(canonicalFindingType).includes(typeFilter);
+}
+
+function scenarioMatchesEvidenceLayer(scenario, layerFilter) {
+  if (!layerFilter) return true;
+  for (const findingKey of scenario.findingKeys || []) {
+    if (((attackPathByFindingKey.get(findingKey) || {}).evidenceLayers || []).includes(layerFilter)) return true;
+  }
+  return false;
+}
+
+function visibleRiskScenarios() {
+  const query = search.value.trim().toLowerCase();
+  const minTier = tierRank[tier.value] ?? 0;
+  const exposureFilter = exposure.value;
+  const typeFilter = findingType.value;
+  const confidenceFilter = confidence.value;
+  const layerFilter = evidenceLayer.value;
+  const limit = topLimit.value ? Number(topLimit.value) : 0;
+  let rows = (DATA.riskScenarios || [])
+    .filter(s => (tierRank[s.tier] ?? 0) >= minTier)
+    .filter(s => !activeOnly.checked || s.status !== "Excepted")
+    .filter(s => !exposureFilter || (s.exposure || "unknown") === exposureFilter)
+    .filter(s => scenarioMatchesFindingType(s, typeFilter))
+    .filter(s => !confidenceFilter || (s.confidence || "low") === confidenceFilter)
+    .filter(s => scenarioMatchesEvidenceLayer(s, layerFilter))
+    .filter(s => !query || scenarioText(s).includes(query))
+    .sort((a, b) => (tierRank[b.tier] - tierRank[a.tier]) || ((b.score || 0) - (a.score || 0)) || String(a.title || "").localeCompare(String(b.title || "")));
+  return limit ? rows.slice(0, limit) : rows;
+}
+
 function visibleFindings() {
   const query = search.value.trim().toLowerCase();
   const minTier = tierRank[tier.value] ?? 0;
   const exposureFilter = exposure.value;
+  const typeFilter = findingType.value;
+  const confidenceFilter = confidence.value;
+  const layerFilter = evidenceLayer.value;
   const limit = topLimit.value ? Number(topLimit.value) : 0;
+  const attackPathByKey = new Map((DATA.attackPaths || []).map(path => [path.findingKey, path]));
   let rows = DATA.findings
     .filter(f => (tierRank[f.tier] ?? 0) >= minTier)
     .filter(f => !activeOnly.checked || f.policy_status !== "excepted")
     .filter(f => !exposureFilter || ((f.context || {}).exposure || "unknown") === exposureFilter)
-    .filter(f => !query || findingText(f).includes(query) || assetText(assetForFinding(f)).includes(query))
+    .filter(f => !typeFilter || canonicalFindingType(f.finding_type) === typeFilter)
+    .filter(f => !confidenceFilter || (f.confidence || "low") === confidenceFilter)
+    .filter(f => !layerFilter || ((attackPathByKey.get(f.key) || {}).evidenceLayers || []).includes(layerFilter))
+    .filter(f => !query || findingText(f).includes(query) || assetText(assetForFinding(f)).includes(query) || attackPathText(attackPathByKey.get(f.key)).includes(query))
     .sort((a, b) => (tierRank[b.tier] - tierRank[a.tier]) || (b.score - a.score));
   if (highestPerAsset.checked) {
     const seenAssets = new Set();
@@ -1846,6 +2273,9 @@ function render() {
   for (const tab of viewTabs) {
     tab.classList.toggle("active", (tab.dataset.view || "architecture") === viewMode);
   }
+  const riskScenarios = visibleRiskScenarios();
+  const visibleScenarioIds = new Set(riskScenarios.map(scenario => scenario.id));
+  const visibleGroupIds = new Set((DATA.attackPathGroups || []).filter(group => (group.scenarioIds || []).some(id => visibleScenarioIds.has(id))).map(group => group.id));
   const findings = visibleFindings();
   const visibleKeys = new Set(findings.map(finding => finding.key));
   const visibleVulns = findings.map(finding => vulnerabilityByFindingKey.get(finding.key)).filter(Boolean);
@@ -1855,14 +2285,15 @@ function render() {
   const visibleEntries = uniqueEntries(visibleNetworkPaths);
   const visibleNetworkIds = new Set(visibleNetworkPaths.flatMap(path => [path.id, entryNodeId(path)]));
   if (viewMode === "attack") {
-    const layout = layoutAttackPaths(visibleAssetIds);
+    const layout = layoutAttackPaths(visibleScenarioIds);
     edgesSvg.replaceChildren(renderEdgeDefs(), ...renderAttackPathEdges(layout));
     cards.replaceChildren(
+      renderAttackSummary(layout.summary),
       ...renderAttackLaneLabels(),
-      ...layout.entries.map(entry => renderAttackEntryCard(entry.datum, entry.position)),
-      ...layout.paths.map(path => renderAttackPathCard(path.datum, path.position)),
-      ...layout.assets.map(asset => renderAttackAssetCard(asset.datum, asset.position)),
-      ...layout.risks.map(risk => renderAttackRiskCard(risk.datum, risk.position))
+      ...layout.lanes.map(lane => renderAttackOverviewLane(lane.datum, lane.position)),
+      ...layout.pathCards.map(path => renderAttackPathCard(path.datum, path.position)),
+      ...layout.routeNodes.map(node => renderAttackNodeCard(node.datum, node.position)),
+      ...layout.assetCards.map(asset => renderAttackScenarioCard(asset.datum, asset.position))
     );
   } else if (viewMode === "evidence") {
     const layout = layoutCards(visibleAssets, visibleVulns, visibleNetworkPaths);
@@ -1874,10 +2305,10 @@ function render() {
       ...visibleAssets.map(asset => renderAssetCard(asset, layout.assets.get(asset.id))),
       ...visibleVulns.map(vuln => renderVulnerabilityCard(vuln, layout.vulnerabilities.get(vuln.id)))
     );
-  } else if (viewMode === "findings") {
-    const layout = layoutFindings(visibleVulns);
+  } else if (viewMode === "risk" || viewMode === "findings") {
+    const layout = layoutRiskScenarios(riskScenarios);
     edgesSvg.replaceChildren(renderEdgeDefs());
-    cards.replaceChildren(...visibleVulns.map(vuln => renderVulnerabilityCard(vuln, layout.get(vuln.id))));
+    cards.replaceChildren(renderRiskBoard(riskScenarios, layout));
   } else {
     const layout = layoutArchitecture(visibleAssetIds, visibleKeys);
     edgesSvg.replaceChildren(renderEdgeDefs(), ...renderArchitectureEdges(layout));
@@ -1892,8 +2323,18 @@ function render() {
   surface.style.width = `${surfaceBounds.width}px`;
   surface.style.height = `${surfaceBounds.height}px`;
 
-  renderFindingList(findings);
+  if (viewMode === "risk" || viewMode === "attack") {
+    renderScenarioList(riskScenarios);
+  } else {
+    renderFindingList(findings);
+  }
   const selectedAssetIds = new Set(pathAssetIds(selected || {}));
+  if (selected && (selected.scenarioKind === "scenario" || selected.attackKind === "scenario") && !visibleScenarioIds.has(selected.id)) {
+    selected = null;
+  }
+  if (selected && selected.attackKind === "group" && !visibleGroupIds.has(selected.id)) {
+    selected = null;
+  }
   if (selected && !selected.attackKind && !selected.architectureKind && !visibleAssetIds.has(selected.id) && !visibleKeys.has(selected.findingKey) && !visibleNetworkIds.has(selected.id) && !visibleAssetIds.has(selected.assetId) && ![...selectedAssetIds].some(assetId => visibleAssetIds.has(assetId))) {
     selected = null;
   }
@@ -1901,318 +2342,151 @@ function render() {
   applyTransform();
 }
 
-function layoutAttackPaths(visibleAssetIds) {
-  const attackPaths = (DATA.attackPaths || [])
-    .filter(path => (path.assetIds || []).some(assetId => visibleAssetIds.has(assetId)))
-    .sort((a, b) => (tierRank[b.tier] - tierRank[a.tier]) || ((b.score || 0) - (a.score || 0)) || String(a.label || "").localeCompare(String(b.label || "")));
-  const entryGroups = new Map();
-  const boundaryGroups = new Map();
-  const assetGroups = new Map();
-  const riskGroups = new Map();
-  const edgeKeys = new Set();
-  const attackEdges = [];
+function layoutAttackPaths(visibleScenarioIds) {
+  const attackPaths = (DATA.attackPathGroups || [])
+    .map(group => ({
+      ...group,
+      assets: (group.assets || []).filter(asset => visibleScenarioIds.has(asset.id)).map(asset => scenarioById.get(asset.id) || asset),
+    }))
+    .filter(group => group.assets.length)
+    .sort((a, b) => (tierRank[b.tier] - tierRank[a.tier]) || ((b.score || 0) - (a.score || 0)) || String(a.title || "").localeCompare(String(b.title || "")));
+  if (selected && selected.attackKind === "group" && !attackPaths.some(path => path.id === selected.id)) {
+    selected = null;
+  }
+  const selectedPathId = selected?.attackKind === "group"
+    ? selected.id
+    : selected?.attackKind === "scenario"
+      ? selected.attackPathGroupId
+      : selected?.attackKind === "node"
+        ? selected.path?.id
+        : null;
+  if (selected && selected.attackKind === "node" && selectedPathId && !attackPaths.some(path => path.id === selectedPathId)) {
+    selected = null;
+  }
+  const selectedPath = selectedPathId
+    ? attackPaths.find(path => path.id === selectedPathId) || attackPaths[0]
+    : attackPaths[0];
+  if (!selected && selectedPath) selected = {...selectedPath, attackKind: "group"};
+
   const positions = new Map();
-  for (const path of attackPaths) {
-    const entryKey = attackEntryGroupKey(path);
-    const entry = entryGroups.get(entryKey) || {
-      ...path,
-      id: entryKey,
-      attackKind: "entry",
-      networkKind: "entry",
-      linkedPathIds: [],
-      networkPathIds: [],
-      assetIds: [],
-      findingTypeCounts: emptyFindingTypeCounts(),
-      findingCount: 0,
-      score: 0,
-      tier: "informational",
-    };
-    mergeAttackNode(entry, path);
-    entryGroups.set(entryKey, entry);
+  const pathCards = attackPaths.map((path, index) => {
+    const position = {x: 42, y: attackFirstRowY + index * 156, width: 330, height: 138};
+    positions.set(path.id, position);
+    return {datum: {...path, attackKind: "group"}, position};
+  });
 
-    const boundaryLabel = attackBoundaryLabel(path);
-    const boundaryKey = attackBoundaryGroupKey(path, entryKey, boundaryLabel);
-    const boundary = boundaryGroups.get(boundaryKey) || {
-      ...path,
-      id: boundaryKey,
-      entryId: entryKey,
-      label: boundaryLabel,
-      attackKind: "path",
-      networkKind: "path",
-      linkedPathIds: [],
-      networkPathIds: [],
-      assetIds: [],
-      findingTypeCounts: emptyFindingTypeCounts(),
-      findingCount: 0,
-      score: 0,
-      tier: "informational",
-      hopLabels: [],
-      steps: [],
-    };
-    mergeAttackNode(boundary, path);
-    for (const label of path.hopLabels || []) {
-      if (!boundary.hopLabels.includes(label)) boundary.hopLabels.push(label);
-    }
-    for (const step of path.steps || []) {
-      if (!boundary.steps.includes(step)) boundary.steps.push(step);
-    }
-    boundaryGroups.set(boundaryKey, boundary);
-    addAttackEdge(attackEdges, edgeKeys, entryKey, boundaryKey, path.tier || "informational");
-
-    const linkedAssets = (path.assetIds || [])
-      .filter(assetId => visibleAssetIds.has(assetId))
-      .map(assetId => {
-        const archAsset = ((DATA.architecture || {}).assets || []).find(asset => asset.id === assetId) || {};
-        return {...(assetById.get(assetId) || archAsset), architecture: archAsset};
-      })
-      .sort((a, b) => (tierRank[b.tier] - tierRank[a.tier]) || ((b.score || 0) - (a.score || 0)) || String(a.name || "").localeCompare(String(b.name || "")));
-    linkedAssets.forEach(asset => {
-      const current = assetGroups.get(asset.id);
-      if (!current || (tierRank[asset.tier] - tierRank[current.tier]) || ((asset.score || 0) > (current.score || 0))) {
-        assetGroups.set(asset.id, {...asset, attackKind: "asset"});
-      }
-      addAttackEdge(attackEdges, edgeKeys, boundaryKey, asset.id, path.tier || "informational");
-      collectAttackRisks(riskGroups, path, asset);
-    });
+  const overviewLimit = 6;
+  let overviewPaths = attackPaths.slice(0, overviewLimit);
+  if (selectedPath && !overviewPaths.some(path => path.id === selectedPath.id)) {
+    overviewPaths = [selectedPath, ...overviewPaths.slice(0, Math.max(overviewLimit - 1, 0))];
   }
-  const assetModels = [...assetGroups.values()]
-    .sort((a, b) => (tierRank[b.tier] - tierRank[a.tier]) || ((b.score || 0) - (a.score || 0)) || String(a.name || "").localeCompare(String(b.name || "")))
-    .map((asset, index) => {
-      const position = {x: attackAssetX, y: attackFirstRowY + index * (attackAssetHeight + attackAssetGap), width: attackAssetWidth, height: attackAssetHeight};
-      positions.set(asset.id, position);
-      return {datum: asset, position};
+  overviewPaths = uniqueById(overviewPaths);
+
+  const lanes = [];
+  const routeNodes = [];
+  const assetCards = [];
+  const graphEdges = [];
+  const nodeWidth = 136;
+  const nodeHeight = 104;
+  const gapX = 22;
+  const laneGap = 34;
+  const routeAssetGap = 58;
+  const startX = 430;
+  let laneY = attackFirstRowY + 112;
+  const assetWidth = 300;
+  const assetHeight = 112;
+  const assetGap = 12;
+  for (const path of overviewPaths) {
+    const pathSelected = selectedPath && path.id === selectedPath.id;
+    const laneNodes = compactRouteNodes(path.routeNodes || []);
+    const scenarioAssets = path.assets || [];
+    const laneHeight = Math.max(176, 78 + scenarioAssets.length * assetHeight + Math.max(0, scenarioAssets.length - 1) * assetGap);
+    const assetX = startX + laneNodes.length * (nodeWidth + gapX) + routeAssetGap;
+    const laneWidth = Math.max(920, assetX - startX + assetWidth + 46);
+    const laneDatum = {
+      ...path,
+      id: `${path.id}:lane`,
+      attackKind: "lane",
+      sourcePath: path,
+      selected: pathSelected,
+      hiddenNodeCount: Math.max(0, (path.routeNodes || []).length - laneNodes.length),
+    };
+    lanes.push({datum: laneDatum, position: {x: startX - 18, y: laneY - 40, width: laneWidth, height: laneHeight}});
+    laneNodes.forEach((node, index) => {
+      const viewNodeId = `${path.id}:node:${node.id}`;
+      const position = {x: startX + index * (nodeWidth + gapX), y: laneY + 28, width: nodeWidth, height: nodeHeight};
+      positions.set(viewNodeId, position);
+      routeNodes.push({
+        datum: {
+          ...node,
+          id: viewNodeId,
+          rawNodeId: node.id,
+          attackKind: "node",
+          path,
+          tier: path.tier,
+          score: path.score,
+          compact: true,
+          dimmed: !pathSelected,
+        },
+        position,
+      });
     });
-
-  const boundaryModels = [...boundaryGroups.values()]
-    .sort((a, b) => attackNodeTargetCenter(a, positions) - attackNodeTargetCenter(b, positions) || (tierRank[b.tier] - tierRank[a.tier]) || String(a.label || "").localeCompare(String(b.label || "")));
-  placeAttackColumn(boundaryModels, positions, attackPathX, attackPathWidth, attackPathHeight, attackFirstRowY);
-
-  const entryModels = [...entryGroups.values()]
-    .sort((a, b) => attackEntryTargetCenter(a, boundaryModels, positions) - attackEntryTargetCenter(b, boundaryModels, positions) || String(a.entryLabel || "").localeCompare(String(b.entryLabel || "")));
-  placeAttackColumn(entryModels, positions, attackEntryX, attackEntryWidth, attackEntryHeight, attackFirstRowY);
-
-  const pathModels = boundaryModels.map(datum => ({datum, position: positions.get(datum.id)}));
-  const entryViewModels = entryModels.map(datum => ({datum, position: positions.get(datum.id)}));
-  const riskModels = [...riskGroups.values()]
-    .sort((a, b) => attackRiskTargetCenter(a, positions) - attackRiskTargetCenter(b, positions) || (tierRank[b.tier] - tierRank[a.tier]) || riskOrder(a.kind) - riskOrder(b.kind));
-  placeAttackColumn(riskModels, positions, attackRiskX, attackRiskWidth, attackRiskHeight, attackFirstRowY);
-  for (const risk of riskModels) {
-    for (const assetId of risk.assetIds || []) {
-      if (positions.has(assetId)) addAttackEdge(attackEdges, edgeKeys, assetId, risk.id, risk.tier || "informational", "risk");
+    scenarioAssets.forEach((scenario, index) => {
+      const position = {x: assetX, y: laneY + 24 + index * (assetHeight + assetGap), width: assetWidth, height: assetHeight};
+      positions.set(scenario.id, position);
+      assetCards.push({datum: {...scenario, attackKind: "scenario", scenarioKind: "scenario"}, position});
+    });
+    for (let index = 0; index < laneNodes.length - 1; index += 1) {
+      const sourceId = `${path.id}:node:${laneNodes[index].id}`;
+      const targetId = `${path.id}:node:${laneNodes[index + 1].id}`;
+      graphEdges.push({
+        from: sourceId,
+        to: targetId,
+        tier: path.tier,
+        selected: pathSelected,
+        dimmed: !pathSelected,
+        unknown: laneNodes[index].state === "unknown" || laneNodes[index + 1].state === "unknown",
+        blocker: laneNodes[index].state === "blocked" || laneNodes[index + 1].state === "blocked",
+      });
     }
+    const lastRouteNode = laneNodes.length ? `${path.id}:node:${laneNodes[laneNodes.length - 1].id}` : path.id;
+    for (const scenario of scenarioAssets) {
+      graphEdges.push({
+        from: lastRouteNode,
+        to: scenario.id,
+        tier: scenario.tier || path.tier,
+        selected: pathSelected,
+        dimmed: !pathSelected,
+      });
+    }
+    laneY += laneHeight + laneGap;
   }
-  const riskViewModels = riskModels.map(datum => ({datum, position: positions.get(datum.id)}));
-  const maxY = Math.max(
-    attackFirstRowY,
-    ...[...positions.values()].map(position => position.y + position.height)
-  );
-  surfaceBounds = {
-    width: Math.max(1540, attackRiskX + attackRiskWidth + 82),
-    height: Math.max(620, maxY + 80),
-    maxVulnCount: 0,
+
+  const summary = attackSummary(attackPaths);
+  summary.shown = overviewPaths.length;
+  const maxY = Math.max(620, ...[...positions.values()].map(position => position.y + position.height + 70));
+  const maxX = Math.max(1540, ...[...positions.values()].map(position => position.x + position.width + 90));
+  surfaceBounds = {width: maxX, height: maxY, maxVulnCount: 0};
+  return {pathCards, lanes, routeNodes, assetCards, edges: graphEdges, positions, selectedPath, summary};
+}
+
+function compactRouteNodes(nodes) {
+  if (nodes.length <= 6) return nodes;
+  const picked = [nodes[0], ...nodes.slice(1, 5), nodes[nodes.length - 1]];
+  return uniqueById(picked);
+}
+
+function attackSummary(paths) {
+  return {
+    id: "attack:summary",
+    attackKind: "summary",
+    pathCount: paths.length,
+    urgent: paths.filter(path => path.tier === "urgent").length,
+    high: paths.filter(path => path.tier === "high").length,
+    public: paths.filter(path => ["public", "external"].includes(path.exposure)).length,
+    runtime: paths.reduce((total, path) => total + Number((path.categoryCounts || {}).events || 0), 0),
+    unknowns: paths.reduce((total, path) => total + Number((path.categoryCounts || {}).visibility_gaps || 0), 0),
   };
-  return {entries: entryViewModels, paths: pathModels, assets: assetModels, risks: riskViewModels, edges: attackEdges, positions};
-}
-
-function attackEntryGroupKey(path) {
-  return `attack:entry:${slug(attackEntryFamily(path))}`;
-}
-
-function attackEntryFamily(path) {
-  const label = String(path.entryLabel || "Unknown entry").toLowerCase();
-  if (label.includes("internet")) return "internet";
-  if (label.includes("external")) return "external";
-  if (label.includes("internal pivot")) return "internal-pivot";
-  if (label.includes("internal")) return "internal-network";
-  if (label.includes("no external")) return "no-external-entry";
-  if (label.includes("unknown")) return "unknown-entry";
-  return slug(label || path.exposure || "unknown-entry");
-}
-
-function attackBoundaryGroupKey(path, entryKey, boundaryLabel) {
-  return `attack:boundary:${slug([entryKey, path.provider || "Context", path.exposure || "unknown", path.pathType || "unresolved", boundaryLabel].join("|"))}`;
-}
-
-function attackBoundaryLabel(path) {
-  const labels = (path.hopLabels || []).filter(label => label && label !== path.entryLabel);
-  if (labels.length) return labels.slice(0, 2).join(" -> ");
-  return path.label || path.pathType || "Boundary / controls";
-}
-
-function emptyFindingTypeCounts() {
-  return {dependency_vulnerability: 0, static_code_weakness: 0, dynamic_runtime_observation: 0};
-}
-
-function mergeAttackNode(target, source) {
-  target.score = Math.max(Number(target.score || 0), Number(source.score || 0));
-  target.tier = strongerTier(target.tier, source.tier);
-  target.findingCount = Number(target.findingCount || 0) + Number(source.findingCount || 0);
-  for (const [key, value] of Object.entries(source.findingTypeCounts || {})) {
-    target.findingTypeCounts[key] = Number(target.findingTypeCounts[key] || 0) + Number(value || 0);
-  }
-  for (const assetId of source.assetIds || []) {
-    if (!target.assetIds.includes(assetId)) target.assetIds.push(assetId);
-  }
-  for (const findingKey of source.findingKeys || []) {
-    if (!target.findingKeys) target.findingKeys = [];
-    if (!target.findingKeys.includes(findingKey)) target.findingKeys.push(findingKey);
-  }
-  if (source.networkPathId && !target.linkedPathIds.includes(source.networkPathId)) target.linkedPathIds.push(source.networkPathId);
-  if (source.networkPathId && !target.networkPathIds.includes(source.networkPathId)) target.networkPathIds.push(source.networkPathId);
-}
-
-function collectAttackRisks(riskGroups, path, asset) {
-  const assetVulns = vulnerabilitiesByAssetId.get(asset.id) || [];
-  const riskSpecs = [
-    {
-      key: "dependency",
-      title: "Reachable vulnerabilities",
-      kind: "vulnerability",
-      findings: assetVulns.filter(vuln => canonicalFindingType(vuln.findingType) === "dependency_vulnerability"),
-    },
-    {
-      key: "runtime",
-      title: "Runtime observations",
-      kind: "runtime",
-      findings: assetVulns.filter(vuln => isRuntimeFinding(vuln.findingType)),
-    },
-    {
-      key: "static",
-      title: "Static findings",
-      kind: "static",
-      findings: assetVulns.filter(vuln => canonicalFindingType(vuln.findingType) === "static_code_weakness"),
-    },
-  ];
-  for (const spec of riskSpecs) {
-    if (!spec.findings.length) continue;
-    const id = `attack:risk:${spec.key}:${asset.id}`;
-    const risk = riskGroups.get(id) || {
-      id,
-      attackKind: "risk",
-      kind: spec.kind,
-      title: spec.title,
-      label: spec.title,
-      assetIds: [],
-      findingKeys: [],
-      findingCount: 0,
-      networkPathIds: [],
-      linkedPathIds: [],
-      tier: "informational",
-      score: 0,
-      summary: "",
-    };
-    mergeAttackRisk(risk, path, asset, spec.findings);
-    riskGroups.set(id, risk);
-  }
-  const identitySignals = [...(asset.privileges || []), ...(asset.iamImpacts || []), ...(asset.criticalities || [])].filter(Boolean);
-  if (identitySignals.length) {
-    const id = `attack:risk:identity:${asset.id}`;
-    const risk = riskGroups.get(id) || {
-      id,
-      attackKind: "risk",
-      kind: "identity",
-      title: "Identity and data impact",
-      label: "Identity and data impact",
-      assetIds: [],
-      findingKeys: [],
-      findingCount: 0,
-      networkPathIds: [],
-      linkedPathIds: [],
-      tier: "informational",
-      score: 0,
-      summary: identitySignals.slice(0, 4).join(" | "),
-    };
-    mergeAttackRisk(risk, path, asset, assetVulns);
-    risk.signals = identitySignals;
-    riskGroups.set(id, risk);
-  }
-  const blockers = path.blockers || [];
-  if (blockers.length || path.confidence === "low" || path.exposure === "unknown") {
-    const id = `attack:risk:visibility:${asset.id}`;
-    const risk = riskGroups.get(id) || {
-      id,
-      attackKind: "risk",
-      kind: "visibility",
-      title: "Visibility gaps and blockers",
-      label: "Visibility gaps and blockers",
-      assetIds: [],
-      findingKeys: [],
-      findingCount: 0,
-      networkPathIds: [],
-      linkedPathIds: [],
-      tier: "low",
-      score: 0,
-      summary: blockers.length ? blockers.map(blocker => blocker.kind || "blocker").join(" | ") : "Path confidence is low or unresolved.",
-      blockers: [],
-    };
-    mergeAttackRisk(risk, path, asset, assetVulns);
-    risk.blockers = [...(risk.blockers || []), ...blockers];
-    riskGroups.set(id, risk);
-  }
-}
-
-function mergeAttackRisk(risk, path, asset, findings) {
-  if (!risk.assetIds.includes(asset.id)) risk.assetIds.push(asset.id);
-  if (path.networkPathId && !risk.networkPathIds.includes(path.networkPathId)) risk.networkPathIds.push(path.networkPathId);
-  if (path.networkPathId && !risk.linkedPathIds.includes(path.networkPathId)) risk.linkedPathIds.push(path.networkPathId);
-  risk.tier = strongerTier(risk.tier, asset.tier);
-  risk.score = Math.max(Number(risk.score || 0), Number(asset.score || 0), Number(path.score || 0));
-  for (const finding of findings || []) {
-    if (finding.findingKey && !risk.findingKeys.includes(finding.findingKey)) risk.findingKeys.push(finding.findingKey);
-    risk.tier = strongerTier(risk.tier, finding.tier);
-    risk.score = Math.max(Number(risk.score || 0), Number(finding.score || 0));
-  }
-  risk.findingCount = risk.findingKeys.length;
-  if (!risk.summary && findings && findings.length) {
-    risk.summary = findings.slice(0, 2).map(finding => finding.label || finding.component || finding.findingKey).join(" | ");
-  }
-}
-
-function riskOrder(kind) {
-  return {vulnerability: 0, runtime: 1, static: 2, identity: 3, visibility: 4}[kind] ?? 9;
-}
-
-function addAttackEdge(edges, seen, source, target, tierValue, role = "path") {
-  const key = `${source}->${target}`;
-  if (seen.has(key)) return;
-  seen.add(key);
-  edges.push({source, target, tier: tierValue || "informational", role});
-}
-
-function attackNodeTargetCenter(node, positions) {
-  const centers = (node.assetIds || [])
-    .map(assetId => positions.get(assetId))
-    .filter(Boolean)
-    .map(position => position.y + position.height / 2);
-  return centers.length ? average(centers) : attackFirstRowY;
-}
-
-function attackEntryTargetCenter(entry, boundaryModels, positions) {
-  const centers = boundaryModels
-    .filter(boundary => boundary.entryId === entry.id)
-    .map(boundary => positions.get(boundary.id))
-    .filter(Boolean)
-    .map(position => position.y + position.height / 2);
-  return centers.length ? average(centers) : attackFirstRowY;
-}
-
-function attackRiskTargetCenter(risk, positions) {
-  const centers = (risk.assetIds || [])
-    .map(assetId => positions.get(assetId))
-    .filter(Boolean)
-    .map(position => position.y + position.height / 2);
-  return centers.length ? average(centers) : attackFirstRowY;
-}
-
-function placeAttackColumn(items, positions, x, width, height, startY) {
-  let cursor = startY;
-  for (const item of items) {
-    const preferredCenter = item.assetIds ? attackNodeTargetCenter(item, positions) : startY + height / 2;
-    const y = Math.max(cursor, preferredCenter - height / 2);
-    const position = {x, y, width, height};
-    positions.set(item.id, position);
-    cursor = y + height + attackRowGap;
-  }
 }
 
 function slug(value) {
@@ -2221,10 +2495,8 @@ function slug(value) {
 
 function renderAttackLaneLabels() {
   return [
-    laneLabel("Entry", attackEntryX, attackLaneY, attackEntryWidth),
-    laneLabel("Boundary / controls", attackPathX, attackLaneY, attackPathWidth),
-    laneLabel("Affected assets", attackAssetX, attackLaneY, attackAssetWidth),
-    laneLabel("Evidence and impact", attackRiskX, attackLaneY, attackRiskWidth),
+    laneLabel("Prioritized paths", 42, attackLaneY, 330),
+    laneLabel("Attack path overview", 470, attackLaneY, 960),
   ];
 }
 
@@ -2346,6 +2618,126 @@ function layoutFindings(vulnerabilities) {
     maxVulnCount: vulnerabilities.length,
   };
   return positions;
+}
+
+function layoutRiskScenarios(scenarios) {
+  if (selected && (selected.scenarioKind === "scenario" || selected.attackKind === "scenario") && !scenarios.some(scenario => scenario.id === selected.id)) {
+    selected = null;
+  }
+  if (!selected && scenarios.length) {
+    selected = {...scenarios[0], scenarioKind: "scenario", attackKind: "scenario"};
+  }
+  const rowHeight = 78;
+  surfaceBounds = {
+    width: 1280,
+    height: Math.max(620, 42 + 44 + Math.max(1, scenarios.length) * rowHeight + 90),
+    maxVulnCount: scenarios.length,
+  };
+  return {rowHeight};
+}
+
+function renderRiskBoard(scenarios, layout) {
+  const board = document.createElement("div");
+  board.className = "risk-board";
+  const header = document.createElement("div");
+  header.className = "risk-board-head";
+  for (const label of ["Severity", "Risk", "Finding Categories", "Total", "In Use", "Context", "Attack Path"]) {
+    const cell = document.createElement("div");
+    cell.textContent = label;
+    header.appendChild(cell);
+  }
+  board.appendChild(header);
+  if (!scenarios.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.style.padding = "18px";
+    empty.textContent = "No risk scenarios match the current filters.";
+    board.appendChild(empty);
+    return board;
+  }
+  for (const scenario of scenarios) {
+    board.appendChild(renderRiskRow(scenario, layout));
+  }
+  return board;
+}
+
+function openScenarioAttackPath(scenario) {
+  viewMode = "attack";
+  selected = {...scenario, scenarioKind: "scenario", attackKind: "scenario"};
+  render();
+  window.setTimeout(fitGraph, 0);
+}
+
+function renderRiskRow(scenario, layout) {
+  const row = document.createElement("div");
+  row.className = `risk-row${selected && selected.id === scenario.id ? " selected" : ""}`;
+  row.style.minHeight = `${layout.rowHeight}px`;
+  row.tabIndex = 0;
+  row.setAttribute("role", "button");
+  row.addEventListener("click", () => {
+    selected = {...scenario, scenarioKind: "scenario", attackKind: "scenario"};
+    render();
+  });
+  row.addEventListener("keydown", event => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    selected = {...scenario, scenarioKind: "scenario", attackKind: "scenario"};
+    render();
+  });
+
+  const severity = document.createElement("div");
+  severity.className = "risk-cell";
+  const severityWrap = document.createElement("span");
+  severityWrap.className = "risk-severity";
+  const dot = document.createElement("span");
+  dot.className = `risk-dot ${scenario.tier || "informational"}`;
+  const severityText = document.createElement("span");
+  severityText.textContent = scenario.priorityLabel || priorityText(scenario.tier);
+  severityWrap.append(dot, severityText);
+  severity.appendChild(severityWrap);
+
+  const risk = document.createElement("div");
+  risk.className = "risk-cell";
+  const title = document.createElement("div");
+  title.className = "risk-title";
+  title.textContent = scenario.title || "Risk scenario";
+  const meta = document.createElement("div");
+  meta.className = "risk-meta";
+  meta.textContent = `${scenario.assetName || "unknown asset"} | ${scenario.entryLabel || "unknown entry"} -> ${scenario.pathLabel || "network path"}`;
+  risk.append(title, meta);
+
+  const categories = document.createElement("div");
+  categories.className = "risk-cell";
+  categories.append(categoryChips(scenario.categorySummary || []));
+
+  const total = document.createElement("div");
+  total.className = "risk-cell";
+  total.textContent = String(scenario.totalFindings || 0);
+
+  const inUse = document.createElement("div");
+  inUse.className = "risk-cell";
+  inUse.textContent = String(scenario.inUseCount || 0);
+
+  const context = document.createElement("div");
+  context.className = "risk-cell";
+  context.append(chips([exposureChip(scenario.exposure), scenario.provider, countChip((scenario.categoryCounts || {}).identity_data_access || 0, "IAM")], 3));
+
+  const pathCell = document.createElement("div");
+  pathCell.className = "risk-cell";
+  const attackPathLink = document.createElement("a");
+  attackPathLink.className = "risk-path-link";
+  attackPathLink.href = `#attack-path-${scenario.attackPathGroupId || scenario.id}`;
+  attackPathLink.textContent = "Open path";
+  attackPathLink.title = `Open attack path for ${scenario.title || "risk scenario"}`;
+  attackPathLink.addEventListener("click", event => {
+    event.preventDefault();
+    event.stopPropagation();
+    openScenarioAttackPath(scenario);
+  });
+  pathCell.appendChild(attackPathLink);
+
+  row.append(severity, risk, categories, total, inUse, context, pathCell);
+  return row;
 }
 
 function layoutCards(assets, vulnerabilities, networkPaths) {
@@ -2485,13 +2877,13 @@ function renderArchitectureEdges(layout) {
 function renderAttackPathEdges(layout) {
   const paths = [];
   for (const edge of layout.edges || []) {
-    const source = layout.positions.get(edge.source);
-    const target = layout.positions.get(edge.target);
+    const sourceId = edge.from || edge.source;
+    const targetId = edge.to || edge.target;
+    const source = layout.positions.get(sourceId);
+    const target = layout.positions.get(targetId);
     if (!source || !target) continue;
-    const className = edge.role === "risk"
-      ? `edge network architecture risk-edge ${edge.tier || "informational"}`
-      : `edge network architecture ${edge.tier || "informational"}`;
-    paths.push(edgePath(source.x + source.width, source.y + source.height / 2, target.x, target.y + target.height / 2, className, edge.source, edge.target));
+    const className = `edge attack-path ${edge.tier || "informational"}${edge.unknown ? " unknown" : ""}${edge.blocker ? " blocker" : ""}${edge.selected ? " selected" : ""}${edge.dimmed ? " dimmed" : ""}`;
+    paths.push(edgePath(source.x + source.width, source.y + source.height / 2, target.x, target.y + target.height / 2, className, sourceId, targetId));
   }
   return paths;
 }
@@ -2538,6 +2930,7 @@ function markActiveEdge(path, sourceId, targetId) {
   for (const pathId of selected.linkedPathIds || []) selectedIds.add(pathId);
   for (const pathId of selected.pathIds || []) selectedIds.add(pathId);
   for (const assetId of selected.assetIds || []) selectedIds.add(assetId);
+  for (const scenarioId of selected.scenarioIds || []) selectedIds.add(scenarioId);
   if (selectedIds.has(sourceId) || selectedIds.has(targetId)) {
     path.classList.add("active");
   }
@@ -2644,6 +3037,7 @@ function renderArchitectureAsset(asset, position) {
       countChip(asset.findingKeys.length, "findings"),
       counts.dynamic_runtime_observation ? tag(`${counts.dynamic_runtime_observation} runtime`, "count") : null,
       counts.static_code_weakness ? tag(`${counts.static_code_weakness} static`, "count") : null,
+      counts.cloud_posture_finding ? tag(`${counts.cloud_posture_finding} posture`, "count") : null,
       counts.dependency_vulnerability ? tag(`${counts.dependency_vulnerability} deps`, "count") : null,
     ], `${arch.provider || "Context"} | ${asset.owner || "unknown owner"}`),
     assetBody(asset)
@@ -2660,40 +3054,156 @@ function renderAttackEntryCard(entry, position) {
 }
 
 function renderAttackPathCard(path, position) {
-  const counts = path.findingTypeCounts || {};
-  const card = createCard("attack-path-card", path.tier || "informational", position, path);
+  const card = createCard("attack-list-card", path.tier || "informational", position, path);
   card.append(
     cardTop(
-      path.label || "Attack path",
+      path.title || "Attack path",
       [
-        tag(path.provider || "Context", "count"),
         priorityChip(path.tier || "informational"),
-        scoreChip(path.score || 0, "max"),
+        scoreChip(path.score || 0),
         countChip(path.assetCount || 0, "assets"),
+        countChip(path.findingCount || 0, "findings"),
       ],
-      path.pathType || path.confidence || ""
+      `${path.provider || "Context"} | ${path.exposure || "unknown"} | confidence ${path.confidence || "low"}`
     ),
-    attackPathBody(path, counts)
+    attackPathBody(path)
   );
   return card;
 }
 
-function attackPathBody(path, counts) {
+function renderAttackOverviewLane(lane, position) {
+  const sourcePath = lane.sourcePath || lane;
+  const laneEl = document.createElement("div");
+  laneEl.className = `attack-overview-lane${lane.selected ? " selected" : " dimmed"}`;
+  laneEl.style.left = `${position.x}px`;
+  laneEl.style.top = `${position.y}px`;
+  laneEl.style.width = `${position.width}px`;
+  laneEl.style.height = `${position.height}px`;
+  laneEl.tabIndex = 0;
+  laneEl.addEventListener("mousedown", event => event.stopPropagation());
+  laneEl.addEventListener("click", event => {
+    event.stopPropagation();
+    selected = {...sourcePath, attackKind: "group"};
+    render();
+  });
+  laneEl.addEventListener("keydown", event => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    event.stopPropagation();
+    selected = {...sourcePath, attackKind: "group"};
+    render();
+  });
+  const title = document.createElement("div");
+  title.className = "lane-title";
+  title.textContent = sourcePath.title || "Attack path";
+  const meta = document.createElement("div");
+  meta.className = "lane-meta";
+  meta.append(
+    chipElement(`priority ${sourcePath.tier || "unknown"}`, sourcePath.tier || "unknown"),
+    chipElement(`${Number(sourcePath.score || 0).toFixed(1)} score`, "score"),
+    chipElement(`${sourcePath.assetCount || 0} assets`, "count"),
+    chipElement(`${sourcePath.findingCount || 0} findings`, "count")
+  );
+  if (lane.hiddenNodeCount) meta.append(chipElement(`+${lane.hiddenNodeCount} evidence`, "count"));
+  laneEl.append(title, meta);
+  return laneEl;
+}
+
+function attackPathBody(path) {
   const body = document.createElement("div");
   body.className = "body";
   const summary = document.createElement("div");
   summary.className = "sub";
-  const hops = (path.hopLabels || []).filter(label => label && label !== path.entryLabel).slice(0, 3);
-  summary.textContent = hops.length ? hops.join(" -> ") : (path.summary || "No boundary evidence linked.");
+  summary.textContent = path.summary || path.pathLabel || "Shared attack path.";
   body.append(
-    chips([
-      counts.dynamic_runtime_observation ? `${counts.dynamic_runtime_observation} runtime` : null,
-      counts.static_code_weakness ? `${counts.static_code_weakness} static` : null,
-      counts.dependency_vulnerability ? `${counts.dependency_vulnerability} deps` : null,
-    ], 4),
+    categoryChips(path.categorySummary || []),
     summary
   );
   return body;
+}
+
+function renderAttackSummary(summary) {
+  const box = document.createElement("div");
+  box.className = "attack-summary";
+  box.style.left = "42px";
+  box.style.top = "16px";
+  box.style.width = "1240px";
+  box.append(
+    chipElement(`${summary.pathCount || 0} visible paths`, "count"),
+    chipElement(`${summary.shown || 0} shown on map`, "count"),
+    chipElement(`${summary.urgent || 0} urgent`, "urgent"),
+    chipElement(`${summary.high || 0} high`, "high"),
+    chipElement(`${summary.public || 0} public/external`, "count"),
+    chipElement(`${summary.runtime || 0} runtime observed`, "count"),
+    chipElement(`${summary.unknowns || 0} unknowns`, "informational")
+  );
+  return box;
+}
+
+function renderAttackNodeCard(node, position) {
+  const card = createCard("attack-node-card", node.tier || "informational", position, node);
+  if (node.compact) card.classList.add("compact");
+  if (node.dimmed) card.classList.add("dimmed");
+  card.dataset.nodeType = node.type || "unknown";
+  card.dataset.nodeState = node.state || "normal";
+  const icon = document.createElement("div");
+  icon.className = "attack-node-icon";
+  icon.textContent = nodeIcon(node.type, node.state);
+  const title = document.createElement("div");
+  title.className = "title";
+  const titleMain = document.createElement("div");
+  titleMain.className = "title-main";
+  titleMain.textContent = node.label || node.type || "node";
+  const sub = document.createElement("div");
+  sub.className = "sub";
+  sub.textContent = node.subtitle || node.type || "";
+  title.append(icon, titleMain, sub);
+  const top = document.createElement("div");
+  top.className = "top";
+  top.append(title);
+  const body = document.createElement("div");
+  body.className = "body";
+  body.append(chips([node.type, node.evidenceLayer, node.confidence ? `confidence ${node.confidence}` : null], 3));
+  card.append(top, body);
+  return card;
+}
+
+function nodeIcon(type, state) {
+  if (state === "blocked") return "!";
+  if (state === "unknown") return "?";
+  return {
+    entry: "IN",
+    ingress: "GW",
+    workload: "WL",
+    artifact: "SB",
+    source: "SRC",
+    runtime: "RUN",
+    posture: "CFG",
+    vulnerability: "CVE",
+    weakness: "CWE",
+    identity: "ID",
+    data: "DB",
+    blocker: "!",
+    unknown: "?",
+  }[type] || ".";
+}
+
+function chipElement(text, className) {
+  const chip = document.createElement("span");
+  chip.className = `chip ${className || "count"}`;
+  chip.textContent = text;
+  return chip;
+}
+
+function categoryChips(categories) {
+  const values = (categories || []).map(category => tag(`${category.shortLabel || category.label} ${category.count || 0}`, "count"));
+  return chips(values.length ? values : [tag("No categories", "informational")], 5);
+}
+
+function priorityText(tierValue) {
+  if (tierValue === "urgent") return "Critical";
+  const value = String(tierValue || "informational");
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function renderAttackAssetCard(asset, position) {
@@ -2707,11 +3217,36 @@ function renderAttackAssetCard(asset, position) {
       countChip(asset.findingKeys.length, "findings"),
       counts.dynamic_runtime_observation ? tag(`${counts.dynamic_runtime_observation} runtime`, "count") : null,
       counts.static_code_weakness ? tag(`${counts.static_code_weakness} static`, "count") : null,
+      counts.cloud_posture_finding ? tag(`${counts.cloud_posture_finding} posture`, "count") : null,
       counts.dependency_vulnerability ? tag(`${counts.dependency_vulnerability} deps`, "count") : null,
     ], `${arch.provider || "Context"} | ${asset.owner || "unknown owner"}`),
     assetBody(asset)
   );
   return card;
+}
+
+function renderAttackScenarioCard(scenario, position) {
+  const card = createCard("attack-asset-card", scenario.tier || "informational", position, scenario);
+  card.append(
+    cardTop(
+      scenario.assetName || "Asset",
+      [
+        priorityChip(scenario.tier || "informational"),
+        scoreChip(scenario.score || 0),
+        countChip(scenario.totalFindings || 0, "findings"),
+      ],
+      scenario.title || "Risk scenario"
+    ),
+    scenarioBody(scenario)
+  );
+  return card;
+}
+
+function scenarioBody(scenario) {
+  const body = document.createElement("div");
+  body.className = "body";
+  body.append(categoryChips(scenario.categorySummary || []));
+  return body;
 }
 
 function renderAttackRiskCard(risk, position) {
@@ -2823,12 +3358,20 @@ function createCard(kind, tierValue, position, datum) {
   card.className = `card ${kind} ${tierValue}${selected && selected.id === datum.id ? " selected" : ""}`;
   card.dataset.role = kind;
   card.dataset.nodeId = datum.id;
+  card.tabIndex = 0;
   card.style.left = `${position.x}px`;
   card.style.top = `${position.y}px`;
   card.style.width = `${position.width}px`;
   card.style.height = `${position.height}px`;
   card.addEventListener("mousedown", event => event.stopPropagation());
   card.addEventListener("click", event => {
+    event.stopPropagation();
+    selected = datum;
+    render();
+  });
+  card.addEventListener("keydown", event => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
     event.stopPropagation();
     selected = datum;
     render();
@@ -2925,7 +3468,47 @@ function chipClass(value) {
   return String(value).toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "unknown";
 }
 
+function renderScenarioList(scenarios) {
+  const title = document.getElementById("visibleListTitle");
+  if (title) title.textContent = "Visible Risk";
+  const list = document.getElementById("findingList");
+  if (!scenarios.length) {
+    list.innerHTML = '<div class="empty">No risk scenarios match the current filters.</div>';
+    return;
+  }
+  list.replaceChildren(...scenarios.map(scenario => {
+    const item = document.createElement("div");
+    item.className = "item";
+    item.tabIndex = 0;
+    item.setAttribute("role", "button");
+    item.addEventListener("click", () => {
+      selected = {...scenario, scenarioKind: "scenario", attackKind: "scenario"};
+      render();
+    });
+    item.addEventListener("keydown", event => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      selected = {...scenario, scenarioKind: "scenario", attackKind: "scenario"};
+      render();
+    });
+    const rowTitle = document.createElement("div");
+    rowTitle.className = "item-title";
+    rowTitle.append(text(scenario.title || "Risk scenario"));
+    const chip = document.createElement("span");
+    chip.className = `chip ${scenario.tier || "informational"}`;
+    chip.textContent = `${scenario.priorityLabel || priorityText(scenario.tier)} ${Number(scenario.score || 0).toFixed(1)}`;
+    rowTitle.append(chip);
+    const meta = document.createElement("div");
+    meta.className = "item-meta";
+    meta.textContent = `${scenario.assetName || "asset"} | ${scenario.provider || "Context"} | ${scenario.exposure || "unknown"} | ${scenario.totalFindings || 0} findings`;
+    item.append(rowTitle, meta);
+    return item;
+  }));
+}
+
 function renderFindingList(findings) {
+  const title = document.getElementById("visibleListTitle");
+  if (title) title.textContent = "Visible Findings";
   const list = document.getElementById("findingList");
   if (!findings.length) {
     list.innerHTML = '<div class="empty">No findings match the current filters.</div>';
@@ -2934,8 +3517,20 @@ function renderFindingList(findings) {
   list.replaceChildren(...findings.map(finding => {
     const item = document.createElement("div");
     item.className = "item";
+    item.tabIndex = 0;
+    item.setAttribute("role", "button");
     item.addEventListener("click", () => {
-      selected = vulnerabilityByFindingKey.get(finding.key);
+      selected = viewMode === "attack" && attackPathByFindingKey.has(finding.key)
+        ? {...attackPathByFindingKey.get(finding.key), attackKind: "path"}
+        : vulnerabilityByFindingKey.get(finding.key);
+      render();
+    });
+    item.addEventListener("keydown", event => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      selected = viewMode === "attack" && attackPathByFindingKey.has(finding.key)
+        ? {...attackPathByFindingKey.get(finding.key), attackKind: "path"}
+        : vulnerabilityByFindingKey.get(finding.key);
       render();
     });
     const title = document.createElement("div");
@@ -2963,7 +3558,86 @@ function renderDetails(datum) {
     return;
   }
   const section = document.createElement("section");
-  if (datum.architectureKind === "zone") {
+  if (datum.attackKind === "group") {
+    section.append(heading(datum.title || "Shared attack path"));
+    section.append(chips([priorityChip(datum.tier), scoreChip(datum.score), exposureChip(datum.exposure), countChip(datum.assetCount || 0, "assets"), countChip(datum.findingCount || 0, "findings")]));
+    section.append(kv({
+      provider: datum.provider,
+      entry: datum.entryLabel,
+      "path type": datum.pathType,
+      confidence: datum.confidence,
+      assets: (datum.assetNames || []).join(", "),
+      summary: datum.summary,
+    }));
+    appendList(section, "Path steps", datum.steps || []);
+    appendList(section, "Affected scenarios", (datum.scenarioIds || []).map(id => scenarioById.get(id)).filter(Boolean).map(scenario => `${scenario.priorityLabel || priorityText(scenario.tier)} ${Number(scenario.score || 0).toFixed(1)} ${scenario.title}`));
+    appendList(section, "Network evidence", [datum.evidence || datum.summary].filter(Boolean));
+  } else if (datum.scenarioKind === "scenario" || datum.attackKind === "scenario") {
+    const scenario = scenarioById.get(datum.id) || datum;
+    section.append(heading(scenario.title || "Risk scenario"));
+    section.append(chips([priorityChip(scenario.tier), scoreChip(scenario.score), exposureChip(scenario.exposure), countChip(scenario.totalFindings || 0, "findings"), tag(scenario.status || "Open", "count")]));
+    section.append(kv({
+      asset: scenario.assetName,
+      owner: scenario.owner,
+      provider: scenario.provider,
+      entry: scenario.entryLabel,
+      path: scenario.pathLabel,
+      "policy status": scenario.status,
+      "in use findings": scenario.inUseCount,
+    }));
+    appendCategoryPanels(section, scenario.categoryList || []);
+    appendActionList(section, "Linked findings", (scenario.findingKeys || []).map(key => {
+      const finding = vulnerabilityByFindingKey.get(key);
+      return {
+        label: finding ? `${finding.tier} ${Number(finding.score || 0).toFixed(1)} ${finding.label} in ${finding.component}` : key,
+        onClick: () => {
+          selected = finding || scenario;
+          render();
+        },
+      };
+    }));
+    appendList(section, "Path steps", scenario.pathSteps || []);
+    appendList(section, "Evidence summary", scenario.evidenceSummary || []);
+    appendList(section, "Blockers / constraints", (scenario.blockers || []).map(formatBlocker));
+  } else if (datum.attackKind === "path") {
+    section.append(heading(datum.title || "Attack path"));
+    section.append(chips([priorityChip(datum.tier), scoreChip(datum.score), tag(datum.findingTypeLabel || datum.findingType, "count"), exposureChip(datum.exposure), tag(`confidence ${datum.confidence || "low"}`, "count")]));
+    section.append(kv({
+      artifact: datum.artifact?.name,
+      owner: datum.owner,
+      provider: datum.provider,
+      component: datum.component ? `${datum.component.name}@${datum.component.version || "unknown"}` : undefined,
+      finding: datum.advisory?.id,
+      "known exploited": datum.advisory?.known_exploited ? "yes" : undefined,
+    }));
+    appendList(section, "Why this is prioritized", datum.why || [datum.shortReason].filter(Boolean));
+    appendList(section, "Evidence used", datum.evidenceSummary || []);
+    appendList(section, "Unknowns / visibility gaps", datum.unknowns || []);
+    appendList(section, "Blockers / constraints", (datum.blockers || []).map(formatBlocker));
+    appendList(section, "Recommended next steps", datum.remediation || []);
+    appendNodeLinks(section, "Path nodes", datum.nodes || [], datum);
+    section.append(rawDisclosure("Raw evidence", datum.rawEvidence || datum));
+  } else if (datum.attackKind === "node") {
+    section.append(heading(datum.label || datum.type || "Attack-path node"));
+    section.append(chips([tag(datum.type || "node", "count"), tag(datum.evidenceLayer || "Context", "count"), tag(`confidence ${datum.confidence || "low"}`, "count")]));
+    section.append(kv({
+      type: datum.type,
+      state: datum.state,
+      subtitle: datum.subtitle,
+      "raw reference": datum.rawRef,
+    }));
+    if (datum.path) {
+      appendActionList(section, "Linked finding", [{
+        label: `${datum.path.tier} ${Number(datum.path.score || 0).toFixed(1)} ${datum.path.title}`,
+        onClick: () => {
+          selected = {...datum.path, attackKind: "path"};
+          render();
+        },
+      }]);
+      appendList(section, "Unknowns / visibility gaps", datum.path.unknowns || []);
+      appendList(section, "Blockers / constraints", (datum.path.blockers || []).map(formatBlocker));
+    }
+  } else if (datum.architectureKind === "zone") {
     const arch = DATA.architecture || {assets: [], hops: []};
     const zoneAssets = (arch.assets || []).filter(asset => asset.zoneId === datum.id).map(asset => assetById.get(asset.id) || asset);
     const zoneHops = (arch.hops || []).filter(hop => hop.zoneId === datum.id);
@@ -3093,6 +3767,25 @@ function effectivePathLabels(path) {
   return path.order.map((step, index) => `${index + 1}. ${step}: ${nodeIds[index] || "unknown"}`);
 }
 
+function formatBlocker(blocker) {
+  if (!blocker) return "";
+  if (typeof blocker === "object") {
+    return `${blocker.kind || blocker.type || "blocker"}: ${blocker.evidence || blocker.reason || blocker.detail || ""}`;
+  }
+  return String(blocker);
+}
+
+function rawDisclosure(title, value) {
+  const detailsEl = document.createElement("details");
+  detailsEl.className = "raw-evidence";
+  const summary = document.createElement("summary");
+  summary.textContent = title;
+  const pre = document.createElement("pre");
+  pre.textContent = JSON.stringify(value || {}, null, 2);
+  detailsEl.append(summary, pre);
+  return detailsEl;
+}
+
 function heading(value) {
   const h = document.createElement("h2");
   h.textContent = value;
@@ -3122,6 +3815,73 @@ function appendList(parent, title, values) {
     const item = document.createElement("li");
     item.textContent = value;
     list.appendChild(item);
+  }
+  parent.append(h, list);
+}
+
+function appendNodeLinks(parent, title, nodes, path) {
+  const items = (nodes || []).map(node => ({
+    label: `${node.type || "node"}: ${node.label || node.id}${node.evidenceLayer ? ` (${node.evidenceLayer})` : ""}`,
+    onClick: () => {
+      selected = {...node, attackKind: "node", path, tier: path.tier, score: path.score};
+      render();
+    },
+  }));
+  appendActionList(parent, title, items);
+}
+
+function appendCategoryPanels(parent, categories) {
+  const visibleCategories = (categories || []).filter(category => (category.items || []).length);
+  if (!visibleCategories.length) return;
+  const h = document.createElement("h2");
+  h.textContent = "Issue categories";
+  const wrap = document.createElement("div");
+  wrap.className = "category-panels";
+  for (const category of visibleCategories) {
+    const panel = document.createElement("details");
+    panel.className = "category-panel";
+    panel.open = true;
+    const summary = document.createElement("summary");
+    summary.textContent = `${category.label} (${category.count || 0})`;
+    const body = document.createElement("div");
+    body.className = "category-panel-body";
+    for (const item of (category.items || []).slice(0, 12)) {
+      const row = document.createElement("div");
+      row.className = "category-item";
+      const title = document.createElement("div");
+      title.className = "category-item-title";
+      title.textContent = item.label || item.findingKey || "Issue";
+      const detail = document.createElement("div");
+      detail.className = "category-item-detail";
+      detail.textContent = [item.detail, item.component, item.severity ? `severity ${item.severity}` : null].filter(Boolean).join(" | ");
+      row.append(title, detail);
+      body.appendChild(row);
+    }
+    panel.append(summary, body);
+    wrap.appendChild(panel);
+  }
+  parent.append(h, wrap);
+}
+
+function appendActionList(parent, title, items) {
+  if (!items || !items.length) return;
+  const h = document.createElement("h2");
+  h.textContent = title;
+  const list = document.createElement("ul");
+  list.className = "detail-action-list";
+  for (const item of items.slice(0, 20)) {
+    const row = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "detail-link-button";
+    button.textContent = item.label || "Open item";
+    button.addEventListener("click", event => {
+      event.preventDefault();
+      event.stopPropagation();
+      item.onClick();
+    });
+    row.appendChild(button);
+    list.appendChild(row);
   }
   parent.append(h, list);
 }

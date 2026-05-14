@@ -30,6 +30,14 @@ Runtime evidence is not source evidence. A DAST URL finding with no source mappi
 
 Deployment evidence comes from Terraform plan/source and rendered Kubernetes manifests. Terraform plan and rendered manifests are the release-gate path. Static Terraform source mode is advisory because modules, dynamic expressions, provider defaults, and rendered Helm/Kustomize output may be missing.
 
+## Posture Evidence
+
+Posture evidence comes from imported CSPM/configuration scanner output or native checks over local Terraform plan and rendered Kubernetes evidence. It records scanner/tool, rule, provider, affected resource, expected state, actual state, IaC location when present, blockers, unknowns, and remediation.
+
+Posture evidence is configuration context. It does not prove source reachability, runtime exploitability, or causality with a dependency/SAST/DAST finding. It can raise confidence in deployment exposure or blast radius when it maps to the same workload, identity, ingress, or data resource.
+
+Example: `CKV_AWS_20` on `aws_s3_bucket.public` with expected `private bucket ACL` and actual `public-read ACL`.
+
 ## Network And IAM Evidence
 
 Network evidence describes typed ingress, internal, lateral, private, and unknown paths. IAM evidence describes effective access signals, deny/allow decisions, identity scope, conditions, blockers, and confidence.
@@ -54,3 +62,4 @@ Examples:
 4. DAST finding with runtime evidence but unknown source: runtime can be high priority, source remains unknown.
 5. SAST+DAST correlated route: confidence rises because static and runtime evidence point at the same route/CWE.
 6. DAST unmapped to artifact: finding stays visible with an artifact-mapping visibility gap.
+7. CSPM public ingress on the same workload as a dependency finding: deployment confidence rises, but the CSPM finding remains independently fixable.

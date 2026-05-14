@@ -224,6 +224,10 @@ def score_security_finding(finding: Finding, record: SecurityEvidenceRecord) -> 
             gates.append(_score_gate("dast_informational", "applied", "DAST informational finding stays low unless corroborated"))
         if not record.url:
             gates.append(_score_gate("dast_missing_url", "applied", "DAST evidence without a URL or route stays below medium"))
+    elif record.scanner_type == "cspm":
+        gates.append(_score_gate("cspm_not_exploit_proof", "applied", "CSPM scanner severity is posture context, not proof of exploitability"))
+        if finding.artifact.name.startswith("unmapped:"):
+            gates.append(_score_gate("cspm_unmapped_resource", "applied", "Unmapped posture findings remain visible but low confidence"))
     else:
         dataflow = bool(record.dataflow)
         location = bool(record.source)

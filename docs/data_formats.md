@@ -6,13 +6,36 @@ Release-gate inputs:
 
 - CycloneDX SBOM JSON;
 - Grype JSON, OSV-style JSON, or normalized vulnerability JSON;
-- normalized SAST/DAST evidence, Semgrep JSON, SARIF, ZAP JSON, or Nuclei JSONL;
+- normalized SAST/DAST/CSPM evidence, Semgrep JSON, SARIF, ZAP JSON, Nuclei JSONL, Checkov JSON, Trivy config JSON, KICS JSON, or tfsec JSON;
 - source-root mappings;
 - external source evidence from Semgrep, CodeQL/SARIF, govulncheck, or native JSON;
 - Terraform plan JSON and/or rendered Kubernetes manifests;
 - CI artifact manifest when SBOM metadata lacks image digest or registry reference.
 
 Context JSON, Terraform source mode, and custom source rules are enrichment or fallback inputs.
+
+## CSPM and posture evidence
+
+CSPM input is local scanner evidence, not live cloud inventory. Use `--cspm-in` for posture scanners or `--security-evidence-in` with `scanner_type: "cspm"` in normalized records.
+
+Each generated `cloud_posture_finding` includes `posture_evidence`:
+
+```json
+{
+  "scanner": "cspm",
+  "tool": "checkov",
+  "rule_id": "CKV_AWS_20",
+  "provider": "aws",
+  "resource_id": "aws_s3_bucket.public",
+  "resource_type": "aws_s3_bucket",
+  "service": "s3",
+  "expected": "private bucket ACL",
+  "actual": "public-read ACL",
+  "evidence_source": "scanner"
+}
+```
+
+Native posture checks over supplied Terraform/Kubernetes evidence are labeled `evidence_source: native_iac`. They are conservative checks for public ingress without auth/WAF hints, broad IAM/RBAC, public sensitive data endpoints, disabled encryption when explicit, privileged Kubernetes workloads, and sensitive manifest values.
 
 ## CycloneDX SBOM JSON
 
@@ -227,7 +250,7 @@ For CodeQL, generic query ids such as `js/request-forgery` are kept as matched s
 
 ## Security evidence for SAST and DAST
 
-Use `--sast-in`, `--dast-in`, or generic `--security-evidence-in` for first-party scanner findings. This is separate from dependency reachability evidence. The scanner imports SAST as `finding_type: static_code_weakness` and DAST as `finding_type: dynamic_runtime_observation`.
+Use `--sast-in`, `--dast-in`, `--cspm-in`, or generic `--security-evidence-in` for first-party scanner findings. This is separate from dependency reachability evidence. The scanner imports SAST as `finding_type: static_code_weakness`, DAST as `finding_type: dynamic_runtime_observation`, and CSPM as `finding_type: cloud_posture_finding`.
 
 Prefer SARIF 2.1.0 when a scanner can emit it. SARIF is the broad static-analysis interchange format, so one adapter can cover Semgrep, CodeQL, and other tools that preserve rule metadata, source locations, and code-flow records. Native scanner JSON remains useful when a tool emits richer fields than SARIF or does not support SARIF.
 
@@ -1113,6 +1136,11 @@ The report is a single HTML file with embedded JSON, CSS, and JavaScript. It doe
 
 It visualizes:
 
+- a default Attack Paths view that renders one prioritized evidence story per finding;
+- path cards with tier, score, finding type, artifact, exposure, confidence, and a short reason;
+- a selected left-to-right path: entry/runtime probe -> ingress -> workload -> artifact -> source/runtime evidence -> vulnerability or weakness -> identity/data impact;
+- visible blocker and unknown nodes for WAF/auth/private endpoint/explicit deny, missing source mapping, missing artifact/workload mapping, and unsupported or unresolved context;
+- a details drawer with why the finding is prioritized, evidence used, unknowns, blockers, next steps, path nodes, and escaped raw evidence;
 - an architecture-first canvas with generic cloud zones: Internet / External, Edge / Ingress, Public, Private / Internal, Data / Identity, and Unknown / Unresolved;
 - network hops and shared ingress paths derived from Terraform, Kubernetes, context, and evidence-graph network path records;
 - deployable asset cards placed inside the strongest proven zone, with provider hints such as AWS, Azure, GCP, Kubernetes, or Context;
@@ -1121,7 +1149,16 @@ It visualizes:
 - a secondary Evidence Paths view that preserves the older entry -> network path -> asset -> finding graph for audit traceability;
 - a searchable, filterable findings list with click-through details.
 
-The graph supports mouse-wheel zoom, drag-to-pan, tier filtering, exposure filtering, active-only filtering, top-per-asset filtering, view tabs, and text search. Use `--out` findings JSON for automation.
+The graph supports mouse-wheel zoom, drag-to-pan, tier filtering, finding-type filtering, exposure filtering, confidence filtering, evidence-layer filtering, active-only filtering, top-per-asset filtering, view tabs, keyboard-selectable path cards, and text search. Use `--out` findings JSON for automation.
+
+The embedded visual payload includes `attackPaths[]` as the normalized per-finding view model used by the default view. Each item includes:
+
+- `id`, `findingKey`, `tier`, `score`, `confidence`, `findingType`, `title`, `artifact`, `owner`, `exposure`, and `remediationGroup`;
+- `nodes[]` with `id`, `type`, `label`, `subtitle`, `confidence`, `evidenceLayer`, `rawRef`, and `state`;
+- `edges[]` with `from`, `to`, `type`, `label`, `confidence`, `evidenceLayer`, `blocker`, and `unknown`;
+- `evidenceSummary`, `unknowns`, `blockers`, `remediation`, `why`, and `rawEvidence`.
+
+Dependency paths use SBOM/SCA and source evidence nodes when present. SAST paths use static source/code-flow/source-location nodes and do not imply runtime proof. DAST paths use runtime observation nodes and keep source mapping as an unknown unless source or SAST evidence maps it.
 
 ## Terraform fixture pack JSON
 

@@ -51,6 +51,14 @@ def _records_from_data(data: Any, path: Path, *, default_scanner_type: str | Non
         return [_record_from_plain(item, path, default_scanner_type=default_scanner_type) for item in data["security_evidence"] if isinstance(item, dict)]
     if isinstance(data, dict) and isinstance(data.get("findings"), list):
         return [_record_from_plain(item, path, default_scanner_type=default_scanner_type) for item in data["findings"] if isinstance(item, dict)]
+    if isinstance(data, dict) and _is_checkov_report(data):
+        return _records_from_checkov(data, path, default_scanner_type=default_scanner_type)
+    if isinstance(data, dict) and _is_trivy_config_report(data):
+        return _records_from_trivy_config(data, path, default_scanner_type=default_scanner_type)
+    if isinstance(data, dict) and _is_kics_report(data):
+        return _records_from_kics(data, path, default_scanner_type=default_scanner_type)
+    if isinstance(data, dict) and _is_tfsec_report(data):
+        return _records_from_tfsec(data, path, default_scanner_type=default_scanner_type)
     if isinstance(data, dict) and isinstance(data.get("site"), list):
         return _records_from_zap(data, path, default_scanner_type=default_scanner_type)
     if isinstance(data, dict) and isinstance(data.get("results"), list):
@@ -96,6 +104,16 @@ def _record_from_plain(item: dict[str, Any], path: Path, *, default_scanner_type
         sink=_first_string(sink, ("function", "symbol", "name")) or _first_string(item, ("sink", "sink_function")),
         dataflow=_first_string(evidence, ("dataflow", "trace")) or _first_string(item, ("dataflow", "trace")),
         exposure=_first_string(item, ("exposure", "network_exposure")),
+        provider=_first_string(item, ("provider", "cloud_provider", "platform")),
+        resource_id=_first_string(item, ("resource_id", "resource", "resourceId", "resource_name", "resourceName")),
+        resource_type=_first_string(item, ("resource_type", "resourceType", "type_name")),
+        service=_first_string(item, ("service", "cloud_service")),
+        control=_first_string(item, ("control", "category", "policy", "policy_name")),
+        expected=_first_string(item, ("expected", "expected_state", "expectedState")),
+        actual=_first_string(item, ("actual", "actual_state", "actualState")),
+        evidence_source=_first_string(item, ("evidence_source", "source_type")) or ("scanner" if scanner_type == "cspm" else None),
+        blockers=_string_list(item.get("blockers")),
+        unknowns=_string_list(item.get("unknowns")),
         remediation=_first_string(item, ("remediation", "fix", "recommendation")),
         references=_string_list(item.get("references")),
         raw=item,
@@ -201,6 +219,156 @@ def _record_from_nuclei(item: dict[str, Any], path: Path, *, default_scanner_typ
     )
 
 
+def _records_from_checkov(data: dict[str, Any], path: Path, *, default_scanner_type: str | None = None) -> list[SecurityEvidenceRecord]:
+    results = _as_object(data.get("results"))
+    failed = results.get("failed_checks")
+    checks = failed if isinstance(failed, list) else []
+    records: list[SecurityEvidenceRecord] = []
+    for item in checks:
+        if not isinstance(item, dict):
+            continue
+        source = {
+            "path": _first_string(item, ("file_path", "repo_file_path", "file_abs_path")) or str(path),
+            "line": _first_line(item.get("file_line_range")),
+        }
+        records.append(
+            SecurityEvidenceRecord(
+                scanner_type=_scanner_type(item, default=default_scanner_type or "cspm"),
+                tool="checkov",
+                rule_id=_first_string(item, ("check_id", "id")) or f"checkov-{_stable_token(json.dumps(item, sort_keys=True, default=str))}",
+                weakness=_first_string(item, ("check_name", "bc_check_name")) or "checkov posture finding",
+                severity=_severity(item),
+                confidence=_confidence(item.get("confidence") or "medium"),
+                artifact=_first_string(item, ("artifact", "service", "application")),
+                component=_first_string(item, ("resource", "resource_name")),
+                message=_first_string(item, ("check_name", "guideline")) or "",
+                source=_source_location(source),
+                provider=_first_string(item, ("provider", "cloud_provider")),
+                resource_id=_first_string(item, ("resource", "resource_name")),
+                resource_type=_first_string(item, ("resource_type", "entity_type")),
+                service=_first_string(item, ("service",)),
+                control=_first_string(item, ("check_class", "category", "check_name")),
+                expected=_first_string(item, ("expected",)),
+                actual=_first_string(item, ("actual",)),
+                evidence_source="checkov",
+                remediation=_first_string(item, ("guideline", "remediation")),
+                references=_string_list(item.get("guideline")),
+                raw=item,
+                input_path=str(path),
+            )
+        )
+    return records
+
+
+def _records_from_trivy_config(data: dict[str, Any], path: Path, *, default_scanner_type: str | None = None) -> list[SecurityEvidenceRecord]:
+    records: list[SecurityEvidenceRecord] = []
+    for result in data.get("Results", []) or []:
+        if not isinstance(result, dict):
+            continue
+        target = _first_string(result, ("Target", "Class", "Type")) or str(path)
+        for item in result.get("Misconfigurations", []) or []:
+            if not isinstance(item, dict):
+                continue
+            records.append(
+                SecurityEvidenceRecord(
+                    scanner_type=_scanner_type(item, default=default_scanner_type or "cspm"),
+                    tool="trivy-config",
+                    rule_id=_first_string(item, ("ID", "AVDID", "id")) or f"trivy-{_stable_token(json.dumps(item, sort_keys=True, default=str))}",
+                    weakness=_first_string(item, ("Title", "Description")) or "trivy config finding",
+                    severity=_severity({"severity": _first_string(item, ("Severity",)) or "unknown"}),
+                    confidence=_confidence(item.get("confidence") or "medium"),
+                    artifact=_first_string(item, ("artifact", "service", "application")),
+                    component=_first_string(item, ("CauseMetadata", "Resource")) or target,
+                    message=_first_string(item, ("Description", "Message", "Title")) or "",
+                    source=_source_location(_trivy_source(item, target)),
+                    provider=_first_string(item, ("Provider", "provider")),
+                    resource_id=_first_string(item, ("Resource", "resource")) or target,
+                    resource_type=_first_string(item, ("Type", "resource_type")),
+                    service=_first_string(item, ("Service", "service")),
+                    control=_first_string(item, ("Type", "Category", "Title")),
+                    expected=_first_string(item, ("Expected",)),
+                    actual=_first_string(item, ("Actual",)),
+                    evidence_source="trivy-config",
+                    remediation=_first_string(item, ("Resolution", "remediation")),
+                    references=_string_list(item.get("References")),
+                    raw=item,
+                    input_path=str(path),
+                )
+            )
+    return records
+
+
+def _records_from_kics(data: dict[str, Any], path: Path, *, default_scanner_type: str | None = None) -> list[SecurityEvidenceRecord]:
+    records: list[SecurityEvidenceRecord] = []
+    for query in data.get("queries", []) or []:
+        if not isinstance(query, dict):
+            continue
+        query_files = query.get("files")
+        files = query_files if isinstance(query_files, list) else [{}]
+        for file_record in files:
+            item = _as_object(file_record)
+            records.append(
+                SecurityEvidenceRecord(
+                    scanner_type=_scanner_type(query, default=default_scanner_type or "cspm"),
+                    tool="kics",
+                    rule_id=_first_string(query, ("query_id", "id")) or f"kics-{_stable_token(json.dumps(query, sort_keys=True, default=str))}",
+                    weakness=_first_string(query, ("query_name", "description")) or "kics posture finding",
+                    severity=_severity({"severity": _first_string(query, ("severity",)) or "unknown"}),
+                    confidence=_confidence(query.get("confidence") or "medium"),
+                    component=_first_string(item, ("resource_name", "resource_id")),
+                    message=_first_string(query, ("description", "query_name")) or "",
+                    source=_source_location({"path": _first_string(item, ("file_name", "file_path")) or str(path), "line": _first_string(item, ("line",)) or 1}),
+                    provider=_first_string(query, ("platform", "provider")),
+                    resource_id=_first_string(item, ("resource_id", "resource_name")),
+                    resource_type=_first_string(item, ("resource_type",)),
+                    service=_first_string(query, ("service",)),
+                    control=_first_string(query, ("category", "query_name")),
+                    expected=_first_string(query, ("expected",)),
+                    actual=_first_string(item, ("actual_value", "search_value")),
+                    evidence_source="kics",
+                    remediation=_first_string(query, ("remediation",)),
+                    references=_string_list(query.get("references")),
+                    raw={"query": query, "file": item},
+                    input_path=str(path),
+                )
+            )
+    return records
+
+
+def _records_from_tfsec(data: dict[str, Any], path: Path, *, default_scanner_type: str | None = None) -> list[SecurityEvidenceRecord]:
+    records: list[SecurityEvidenceRecord] = []
+    for item in data.get("results", []) or []:
+        if not isinstance(item, dict):
+            continue
+        location = _as_object(item.get("location"))
+        records.append(
+            SecurityEvidenceRecord(
+                scanner_type=_scanner_type(item, default=default_scanner_type or "cspm"),
+                tool="tfsec",
+                rule_id=_first_string(item, ("rule_id", "long_id", "id")) or f"tfsec-{_stable_token(json.dumps(item, sort_keys=True, default=str))}",
+                weakness=_first_string(item, ("description", "rule_description")) or "tfsec posture finding",
+                severity=_severity(item),
+                confidence=_confidence(item.get("confidence") or "medium"),
+                component=_first_string(item, ("resource", "resource_name")),
+                message=_first_string(item, ("description", "impact")) or "",
+                source=_source_location({"path": _first_string(location, ("filename", "path")) or str(path), "line": _first_string(location, ("start_line", "line")) or 1}),
+                provider=_first_string(item, ("provider",)),
+                resource_id=_first_string(item, ("resource", "resource_name")),
+                resource_type=_first_string(item, ("resource_type",)),
+                service=_first_string(item, ("service",)),
+                control=_first_string(item, ("rule_description", "impact")),
+                expected=_first_string(item, ("expected",)),
+                actual=_first_string(item, ("impact", "actual")),
+                evidence_source="tfsec",
+                remediation=_first_string(item, ("resolution", "remediation")),
+                references=_string_list(item.get("links")),
+                raw=item,
+                input_path=str(path),
+            )
+        )
+    return records
+
+
 def _records_from_sarif(data: dict[str, Any], path: Path, *, default_scanner_type: str | None = None) -> list[SecurityEvidenceRecord]:
     records: list[SecurityEvidenceRecord] = []
     for run in data.get("runs", []):
@@ -236,6 +404,16 @@ def _records_from_sarif(data: dict[str, Any], path: Path, *, default_scanner_typ
                     sink=_first_string(metadata, ("sink", "sink_function")),
                     dataflow="SARIF codeFlows present" if result.get("codeFlows") else None,
                     exposure=_first_string(metadata, ("exposure", "network_exposure")),
+                    provider=_first_string(metadata, ("provider", "cloud_provider", "platform")),
+                    resource_id=_first_string(metadata, ("resource_id", "resource", "resourceId")),
+                    resource_type=_first_string(metadata, ("resource_type", "resourceType")),
+                    service=_first_string(metadata, ("service", "cloud_service")),
+                    control=_first_string(metadata, ("control", "category", "policy")),
+                    expected=_first_string(metadata, ("expected", "expected_state")),
+                    actual=_first_string(metadata, ("actual", "actual_state")),
+                    evidence_source=_first_string(metadata, ("evidence_source", "source_type")),
+                    blockers=_string_list(metadata.get("blockers")),
+                    unknowns=_string_list(metadata.get("unknowns")),
                     remediation=_first_string(metadata, ("remediation", "fix")),
                     references=_string_list(metadata.get("references")),
                     raw=result,
@@ -245,6 +423,23 @@ def _records_from_sarif(data: dict[str, Any], path: Path, *, default_scanner_typ
     return records
 
 
+def _is_checkov_report(data: dict[str, Any]) -> bool:
+    results = data.get("results")
+    return isinstance(results, dict) and isinstance(results.get("failed_checks"), list)
+
+
+def _is_trivy_config_report(data: dict[str, Any]) -> bool:
+    return isinstance(data.get("Results"), list) and any(isinstance(item, dict) and isinstance(item.get("Misconfigurations"), list) for item in data.get("Results", []))
+
+
+def _is_kics_report(data: dict[str, Any]) -> bool:
+    return isinstance(data.get("queries"), list)
+
+
+def _is_tfsec_report(data: dict[str, Any]) -> bool:
+    return isinstance(data.get("results"), list) and any(isinstance(item, dict) and ("rule_id" in item or "long_id" in item) for item in data.get("results", []))
+
+
 def _is_nuclei_record(item: dict[str, Any]) -> bool:
     return any(key in item for key in ("template-id", "template_id", "matched-at", "matched_at")) and isinstance(item.get("info"), dict)
 
@@ -252,6 +447,8 @@ def _is_nuclei_record(item: dict[str, Any]) -> bool:
 def _scanner_type(item: dict[str, Any], default: str = "sast") -> str:
     value = _first_string(item, ("scanner_type", "type", "kind", "category")) or default
     value = value.lower()
+    if default == "cspm" or any(token in value for token in ("cspm", "posture", "misconfig", "configuration", "iac", "checkov", "trivy", "kics", "tfsec")):
+        return "cspm"
     if "dast" in value or "dynamic" in value or _first_string(item, ("url", "endpoint", "target")):
         return "dast"
     if default == "dast" and "sast" not in value and "static" not in value:
@@ -283,6 +480,25 @@ def _cwe(item: dict[str, Any]) -> str | None:
         return f"CWE-{match.group(1)}"
     value = value.upper().replace("_", "-")
     return value if value.startswith("CWE-") else f"CWE-{value}" if value.isdigit() else value
+
+
+def _first_line(value: Any) -> int:
+    if isinstance(value, list) and value:
+        first = value[0]
+        if isinstance(first, int):
+            return max(1, first)
+        if isinstance(first, str) and first.isdigit():
+            return max(1, int(first))
+    return 1
+
+
+def _trivy_source(item: dict[str, Any], target: str) -> dict[str, Any]:
+    cause = _as_object(item.get("CauseMetadata"))
+    start = _as_object(cause.get("StartLine"))
+    return {
+        "path": _first_string(cause, ("Filename", "Resource")) or target,
+        "line": cause.get("StartLine") or start.get("Line") or 1,
+    }
 
 
 def _severity(item: dict[str, Any]) -> str:
