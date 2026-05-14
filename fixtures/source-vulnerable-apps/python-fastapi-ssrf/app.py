@@ -1,5 +1,5 @@
-from fastapi import FastAPI, Request
 import requests
+from fastapi import FastAPI, Request
 
 app = FastAPI()
 

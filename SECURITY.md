@@ -1,30 +1,39 @@
 # Security Policy
 
-## Supported versions
+## Supported Versions
 
-The current maintained version is `1.x`.
+The maintained release line is `1.x`.
 
-## Reporting a vulnerability
+## Private Reporting
 
-Please report suspected vulnerabilities privately to the maintainers listed in `GOVERNANCE.md`. Do not open a public issue containing exploitable details until maintainers have assessed the report.
+Report suspected vulnerabilities through GitHub Private Vulnerability Reporting for this repository. If the button is not available, open a public issue that asks maintainers to enable private reporting, but do not include exploitable details in that issue.
 
-A report must include enough detail to reproduce and assess the issue:
+Please include:
 
 - affected version or commit;
 - reproduction steps;
 - impact;
 - suggested fix, if known.
 
+Targets:
+
+- acknowledge within 7 days;
+- triage within 14 days.
+
+These are response targets, not a guarantee that every report will be fixed within that window.
+
 ## Scope
 
 In scope:
 
-- command injection in generated outputs;
-- unsafe parsing of untrusted SBOM/vulnerability/context inputs;
-- privacy leaks or unintended network calls;
+- unsafe parsing of untrusted SBOM, vulnerability, source, SAST, DAST, context, Terraform, Kubernetes, or policy inputs;
+- command injection or unsafe file paths in generated outputs;
+- HTML, Markdown, SARIF, or diagnostics escaping bugs;
+- unintended network calls or privacy leaks;
 - incorrect policy exception handling.
 
 Out of scope:
 
-- vulnerability results caused by deliberately wrong user-supplied intelligence files;
-- malicious source repositories that exploit unrelated tools in the user's pipeline.
+- inaccurate results caused by deliberately wrong user-supplied intelligence files;
+- malicious repositories exploiting unrelated tools in a user's pipeline;
+- findings in third-party scanners that Reachability Advisor only imports.

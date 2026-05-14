@@ -2,7 +2,7 @@
 
 ## Current gates
 
-- Unit and workflow tests: 535.
+- Unit and workflow tests: 569.
 - Coverage threshold: 93%.
 - Current measured coverage: passes the 93% line/branch-aware coverage gate.
 - Test runner: `scripts/run_tests.py`.
@@ -14,7 +14,7 @@
 - Release validation: `make release-check` currently covers 56 import/export and release-contract checks.
 - Complex real-world app validation: `make external-complex` (AWS Retail Store, Google Online Boutique, Bank of Anthos, Azure AKS Store, and Instana Robot Shop).
 - Package build: `make package` (`python -m build --no-isolation`).
-- CI matrix: Python 3.10, 3.11, 3.12.
+- CI matrix: Python 3.10, 3.11, 3.12, 3.13.
 - CI runs compile, lint, strict type-checking, tests, coverage, sample output generation, fixture packs, release validation, package build, and a built-wheel CLI smoke test.
 - CI uploads generated JSON/Markdown/SARIF/HTML/text reports and built distribution files as workflow artifacts.
 

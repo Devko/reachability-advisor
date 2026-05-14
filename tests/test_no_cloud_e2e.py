@@ -21,7 +21,7 @@ class NoCloudTerraformPlanE2ETests(unittest.TestCase):
                     "scan",
                     "--sbom",
                     str(FIXTURE / "app.cdx.json"),
-                    "--vulns",
+                    "--vuln-in",
                     str(FIXTURE / "vulnerabilities.json"),
                     "--source-root",
                     f"no-cloud-app={FIXTURE / 'source'}",

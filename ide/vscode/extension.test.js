@@ -37,7 +37,7 @@ const args = [];
 extension.pushRepeated(args, '--source-evidence-in', ['reachability/semgrep.json', ''], root);
 assert.deepStrictEqual(args, ['--source-evidence-in', path.join(root, 'reachability', 'semgrep.json')]);
 
-const blocked = extension.profileValidation(cfg({ profilePreset: 'release-gate', sbom: '', vulns: '', sourceEvidence: [], terraformPlan: '', terraformSource: '', kubernetesManifest: [], artifactManifest: [] }), root);
+const blocked = extension.profileValidation(cfg({ profilePreset: 'release-gate', sbom: '', vulnIn: '', sourceEvidence: [], terraformPlan: '', terraformSource: '', kubernetesManifest: [], artifactManifest: [] }), root);
 assert.strictEqual(blocked.status, 'blocked');
 assert.ok(blocked.blockers.some((item) => item.kind === 'missing_vulnerabilities'));
 assert.ok(blocked.blockers.some((item) => item.kind === 'missing_external_source_evidence'));
@@ -50,7 +50,7 @@ fs.writeFileSync(path.join(root, 'artifact-manifest.json'), '{}');
 const ready = extension.profileValidation(cfg({
   profilePreset: 'release-gate',
   sbom: 'reachability/sbom.cdx.json',
-  vulns: 'vulnerabilities.json',
+  vulnIn: 'vulnerabilities.json',
   sourceEvidence: ['semgrep.json'],
   terraformPlan: 'tfplan.json',
   terraformSource: '',

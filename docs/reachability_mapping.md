@@ -102,7 +102,7 @@ Use it with:
 ```bash
 reachability-advisor scan \
   --sbom app.cdx.json \
-  --vulns vulnerabilities.json \
+  --vuln-in vulnerabilities.json \
   --source-root app=. \
   --reachability-rules reachability-rules.json
 ```
@@ -140,7 +140,7 @@ Use `--mapping-out` to verify the full logic:
 ```bash
 reachability-advisor scan \
   --sbom sboms/payments-api.cdx.json \
-  --vulns vulnerabilities.json \
+  --vuln-in vulnerabilities.json \
   --terraform-plan tfplan.json \
   --source-root payments-api=. \
   --mapping-out mapping.json

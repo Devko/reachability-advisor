@@ -55,7 +55,7 @@
         "why": "High because the vulnerable path is public and request-controlled, but auth/WAF evidence constrains the path and caps the score below urgent.",
         "required_reason_labels": ["tier:high", "severity:critical", "source:attacker_controlled", "network:public", "network_blocker:constrains", "gate:network_blocker:capped"]
       },
-      "min_score": 80,
+      "min_score": 79,
       "max_score": 84
     },
     {

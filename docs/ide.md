@@ -26,7 +26,7 @@ Scan logic stays in the Python CLI so CI and IDE runs use the same code path. Th
 {
   "reachabilityAdvisor.executable": "reachability-advisor",
   "reachabilityAdvisor.sbom": "app.cdx.json",
-  "reachabilityAdvisor.vulns": "vulnerabilities.json",
+  "reachabilityAdvisor.vulnIn": "vulnerabilities.json",
   "reachabilityAdvisor.profilePreset": "advisory",
   "reachabilityAdvisor.analysisProfile": "advisory",
   "reachabilityAdvisor.sourceEvidence": ["reachability/semgrep.json"],

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- v1.1: separated DAST runtime evidence from source reachability.
+- v1.1: added canonical finding types for dependency, static SAST, dynamic DAST, and correlated security findings.
+- v1.1: added `--vuln-in`, `--sast-in`, and `--dast-in` CLI aliases.
+- v1.1: added non-destructive scanner correlation and DAST URL-to-workload mapping behavior.
+- v1.1: added conservative ZAP JSON and Nuclei JSONL DAST adapters.
+- v1.1: added `reachability-advisor demo` and `make demo` with checked-in multi-scanner samples.
+- v1.1: simplified README positioning around dependency, SAST, and DAST correlation.
+- v1.1: added CodeQL, Scorecard, tag-based release workflow, issue templates, and a PR template.
 - Hardened release validation so the documented import/export contract is exercised end to end.
 - Fixed `explain --out` so nested output paths are created consistently with the other writers.
 - Refreshed README support and validation claims.

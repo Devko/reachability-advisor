@@ -39,7 +39,7 @@ The report includes:
 ```bash
 PYTHONPATH=src python -m reachability_advisor scan \
   --sbom sboms/app.cdx.json \
-  --vulns vulnerabilities.json \
+  --vuln-in vulnerabilities.json \
   --terraform-source infra \
   --artifact-alias app=ghcr.io/example/app:1.2.3 \
   --terraform-coverage-out outputs/terraform-source-coverage.json \

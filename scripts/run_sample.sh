@@ -10,7 +10,7 @@ PYTHONPATH=src python -m reachability_advisor scan \
   --sbom samples/sboms/inventory-api.cdx.json \
   --sbom samples/sboms/batch-worker.cdx.json \
   --sbom samples/sboms/reports-api.cdx.json \
-  --vulns samples/vulnerabilities.json \
+  --vuln-in samples/vulnerabilities.json \
   --terraform-plan samples/tfplan-multicloud.json \
   --terraform-coverage-out outputs/terraform-coverage.json \
   --kubernetes-manifest samples/kubernetes-manifest.yaml \

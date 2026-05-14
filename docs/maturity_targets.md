@@ -30,16 +30,24 @@ Implemented controls:
 
 Target state:
 
-- First-party code weakness evidence is imported separately from dependency reachability.
+- First-party scanner evidence is imported separately from dependency reachability.
+- SAST records become static source evidence; DAST records become runtime evidence.
 - High and critical SAST/DAST records carry CWE, scanner type, source location or tested URL, confidence, and artifact mapping.
+- Correlation links SAST/DAST/SCA findings without merging originals or claiming causality from weak evidence.
 - Release gates fail when high or critical SAST/DAST records do not map to a maintained profile.
 - Maintained profiles are tested against local vulnerable examples and public reference applications.
 
 Implemented controls:
 
+- `runtime_evidence` records runtime state, confidence, tool, URL, method, parameter, request/response evidence, authentication context, evidence source, and diagnostics.
+- DAST records no longer set source reachability to request-controlled unless source evidence exists.
+- SAST emits `static_code_weakness`; DAST emits `dynamic_runtime_observation`.
+- `--vuln-in`, `--sast-in`, and `--dast-in` provide explicit scanner input lanes; `--security-evidence-in` remains the generic mixed scanner input.
+- ZAP JSON and Nuclei JSONL adapters extract conservative runtime records.
+- SAST+DAST route/CWE matches create `sast_dast_route_match`; same-artifact-only relations remain weak.
 - `security-evidence-pack` writes maintained SAST/DAST profiles, Semgrep profile files, DAST profile metadata, and a release-gate contract.
 - `fixtures/security-vulnerable-apps/coverage-expectations.json` defines local vulnerable examples for XSS, command injection, SQL injection, unsafe deserialization, missing authorization, and dynamic web probes.
-- `source-coverage.json.security_evidence.summary.critical_profile_coverage` reports profile coverage for imported high and critical code weaknesses.
+- `source-coverage.json.security_evidence.summary.critical_profile_coverage` reports profile coverage for imported high and critical static/runtime findings.
 - `--min-critical-security-profile-coverage` fails CI when imported high or critical SAST/DAST records lack a maintained profile.
 
 ## IAM effective access

@@ -37,7 +37,7 @@ class GoldenOutputRegressionTests(unittest.TestCase):
             for artifact in SAMPLE_ARTIFACTS:
                 args.extend(["--sbom", str(ROOT / "samples" / "sboms" / f"{artifact}.cdx.json")])
             args.extend([
-                "--vulns",
+                "--vuln-in",
                 str(ROOT / "samples" / "vulnerabilities.json"),
                 "--terraform-plan",
                 str(ROOT / "samples" / "tfplan-multicloud.json"),
@@ -79,15 +79,15 @@ class GoldenOutputRegressionTests(unittest.TestCase):
 
         self.assertEqual(len(findings["findings"]), 10)
         self.assertEqual(len(findings["remediations"]), 10)
-        self.assertEqual(_count_by(findings["findings"], "tier"), {"high": 4, "low": 3, "medium": 2, "urgent": 1})
+        self.assertEqual(_count_by(findings["findings"], "tier"), {"high": 3, "low": 2, "medium": 4, "urgent": 1})
         self.assertEqual(
             [(item["artifact"]["name"], item["component"]["name"], item["tier"], item["max_score"]) for item in findings["remediations"][:5]],
             [
-                ("payments-api", "log4j-core", "urgent", 100.0),
-                ("orders-api", "requests", "high", 84.0),
-                ("audit-api", "jackson-databind", "high", 84.0),
-                ("notifier", "lodash", "high", 80.0),
-                ("inventory-api", "requests", "high", 68.0),
+                ("payments-api", "log4j-core", "urgent", 99.5),
+                ("orders-api", "requests", "high", 76.5),
+                ("audit-api", "jackson-databind", "high", 76.5),
+                ("notifier", "lodash", "high", 73.0),
+                ("reports-api", "requests", "medium", 56.5),
             ],
         )
         self.assertEqual(terraform["summary"]["total_resources"], 26)

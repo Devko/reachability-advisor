@@ -90,7 +90,7 @@ def _run_case(case: ValidationCase) -> dict[str, Any]:
             "scan",
             "--sbom",
             str(case.sbom),
-            "--vulns",
+            "--vuln-in",
             str(case.vulns),
             "--source-root",
             f"{case.artifact}={case.source_root}",

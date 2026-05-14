@@ -283,7 +283,7 @@ class SourceAndScoringEdgeTests(unittest.TestCase):
             ScorePolicy(),
         )
         rationale = " ".join(finding.rationale)
-        self.assertIn("IAM capability data_access:secretsmanager:GetSecretValue", rationale)
+        self.assertIn("sensitive identity or data context", rationale)
 
     def test_fix_commands_by_ecosystem(self) -> None:
         vuln = VulnerabilityRecord(id="CVE-X", package_name="lib", fixed_versions=["2"])
@@ -304,7 +304,7 @@ class SourceAndScoringEdgeTests(unittest.TestCase):
         self.assertEqual(finding.score_details["final_score"], round(finding.score, 2))
         self.assertTrue(finding.score_details["dimensions"])
         self.assertTrue(any(dimension["name"] == "source_reachability" for dimension in finding.score_details["dimensions"]))
-        self.assertIn("dependency scope", " ".join(finding.rationale))
+        self.assertIn("graph decision", " ".join(finding.rationale))
 
     def test_network_iam_criticality_contributes_to_score(self) -> None:
         sbom_like = type("SbomLike", (), {"artifact": Artifact(name="app")})()
@@ -321,7 +321,7 @@ class SourceAndScoringEdgeTests(unittest.TestCase):
             ScorePolicy(),
         )
         self.assertGreater(critical.score, base.score)
-        self.assertIn("highest context impact (criticality high) contributes", " ".join(critical.rationale))
+        self.assertIn("sensitive identity or data context", " ".join(critical.rationale))
 
     def test_effective_exposure_graph_carries_provenance_on_each_edge(self) -> None:
         sbom_like = type("SbomLike", (), {"artifact": Artifact(name="api", reference="ghcr.io/acme/api:1")})()
@@ -420,7 +420,7 @@ class SourceAndScoringEdgeTests(unittest.TestCase):
         )
         self.assertEqual(finding.tier, Tier.MEDIUM)
         self.assertLess(finding.score, 65)
-        self.assertIn("import-only source evidence", " ".join(finding.rationale))
+        self.assertIn("import_only_evidence", " ".join(finding.rationale))
 
     def test_unknown_context_scores_above_confirmed_internal_no_role(self) -> None:
         sbom_like = type("SbomLike", (), {"artifact": Artifact(name="app")})()
@@ -447,8 +447,8 @@ class SourceAndScoringEdgeTests(unittest.TestCase):
 
         self.assertGreater(unknown.score, internal.score)
         self.assertLess(unknown.score, 85)
-        self.assertIn("exposure unknown contributes", " ".join(unknown.rationale))
-        self.assertIn("privilege unknown", " ".join(unknown.rationale))
+        self.assertIn("deployment exposure not proven", " ".join(unknown.rationale))
+        self.assertIn("effective identity blast radius not proven", " ".join(unknown.rationale))
 
     def test_high_source_confidence_is_not_downgraded_to_low(self) -> None:
         sbom_like = type("SbomLike", (), {"artifact": Artifact(name="app")})()
@@ -545,14 +545,14 @@ class ValidatorEdgeTests(unittest.TestCase):
 
 class CliEdgeTests(unittest.TestCase):
     def test_main_bad_command_error(self) -> None:
-        code = main(["scan", "--sbom", "missing", "--vulns", "missing", "--no-table"])
+        code = main(["scan", "--sbom", "missing", "--vuln-in", "missing", "--no-table"])
         self.assertEqual(code, 2)
 
     def test_scan_skip_validation_parse_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             bad = Path(tmp) / "bad.json"
             bad.write_text("{", encoding="utf-8")
-            code = main(["scan", "--sbom", str(bad), "--vulns", str(ROOT / "samples/vulnerabilities.json"), "--skip-validation", "--no-table"])
+            code = main(["scan", "--sbom", str(bad), "--vuln-in", str(ROOT / "samples/vulnerabilities.json"), "--skip-validation", "--no-table"])
             self.assertEqual(code, 2)
 
     def test_compare_markdown_output_success(self) -> None:

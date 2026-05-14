@@ -116,7 +116,7 @@ When a generated SBOM lacks image metadata, add an alias at scan time instead of
 reachability-advisor scan \
   --sbom sboms/payments-api.cdx.json \
   --artifact-alias payments-api=ghcr.io/example/payments-api:1.8.2 \
-  --vulns vulnerabilities.json
+  --vuln-in vulnerabilities.json
 ```
 
 Aliases are visible in the mapping report and are treated as evidence, not hidden assumptions.

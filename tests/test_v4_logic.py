@@ -696,7 +696,7 @@ class MappingAndSbomPlanTests(unittest.TestCase):
                     "scan",
                     "--sbom",
                     str(sbom),
-                    "--vulns",
+                    "--vuln-in",
                     str(vulns),
                     "--terraform-plan",
                     str(plan_path),
@@ -790,7 +790,7 @@ class MappingAndSbomPlanTests(unittest.TestCase):
                     "scan",
                     "--sbom",
                     str(sbom),
-                    "--vulns",
+                    "--vuln-in",
                     str(vulns),
                     "--source-root",
                     f"app={source}",
@@ -1384,7 +1384,7 @@ class MappingAndSbomPlanTests(unittest.TestCase):
             code = main([
                 "scan",
                 "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"),
-                "--vulns", str(ROOT / "samples/vulnerabilities.json"),
+                "--vuln-in", str(ROOT / "samples/vulnerabilities.json"),
                 "--source-root", f"payments-api={ROOT / 'samples/source/payments-api'}",
                 "--terraform-plan", str(ROOT / "samples/tfplan-multicloud.json"),
                 "--mapping-out", str(mapping),
@@ -1406,7 +1406,7 @@ class MappingAndSbomPlanTests(unittest.TestCase):
             tfplan.write_text(json.dumps(_plan([_resource("aws_lambda_function.fn", "aws_lambda_function", {"function_name": "fn", "image_uri": "ghcr.io/acme/alias-app:1"})])), encoding="utf-8")
             mapping = tmp_path / "mapping.json"
             code = main([
-                "scan", "--sbom", str(sbom), "--vulns", str(vulns), "--terraform-plan", str(tfplan),
+                "scan", "--sbom", str(sbom), "--vuln-in", str(vulns), "--terraform-plan", str(tfplan),
                 "--artifact-alias", "service=ghcr.io/acme/alias-app:1", "--mapping-out", str(mapping), "--no-table",
             ])
             self.assertEqual(code, 0)
@@ -1417,7 +1417,7 @@ class MappingAndSbomPlanTests(unittest.TestCase):
         code = main([
             "scan",
             "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"),
-            "--vulns", str(ROOT / "samples/vulnerabilities.json"),
+            "--vuln-in", str(ROOT / "samples/vulnerabilities.json"),
             "--artifact-alias", "missing=repo/missing:1",
             "--no-table",
         ])
@@ -1535,12 +1535,12 @@ class AdditionalCoverageV4Tests(unittest.TestCase):
 
     def test_cli_artifact_alias_rejects_bad_syntax(self) -> None:
         code = main([
-            "scan", "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"), "--vulns", str(ROOT / "samples/vulnerabilities.json"), "--artifact-alias", "bad", "--no-table"
+            "scan", "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"), "--vuln-in", str(ROOT / "samples/vulnerabilities.json"), "--artifact-alias", "bad", "--no-table"
         ])
         self.assertEqual(code, 2)
 
     def test_cli_artifact_alias_rejects_empty_reference(self) -> None:
         code = main([
-            "scan", "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"), "--vulns", str(ROOT / "samples/vulnerabilities.json"), "--artifact-alias", "payments-api=", "--no-table"
+            "scan", "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"), "--vuln-in", str(ROOT / "samples/vulnerabilities.json"), "--artifact-alias", "payments-api=", "--no-table"
         ])
         self.assertEqual(code, 2)

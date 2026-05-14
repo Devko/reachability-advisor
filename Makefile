@@ -3,7 +3,7 @@ PYTHONPATH ?= src
 COVERAGE_FAIL_UNDER ?= 93
 MYPY_TARGETS ?= src
 
-.PHONY: test coverage compile lint type-check quality sample hcl-sample fixtures external-complex release-check package clean
+.PHONY: test coverage compile lint type-check quality sample demo hcl-sample fixtures external-complex release-check package clean
 
 test:
 	PYTHONPATH=$(PYTHONPATH) $(PYTHON) scripts/run_tests.py
@@ -26,7 +26,7 @@ quality: compile test coverage lint type-check release-check package
 hcl-sample:
 	mkdir -p outputs
 	PYTHONPATH=$(PYTHONPATH) $(PYTHON) -m reachability_advisor hcl-audit --path samples/terraform-source --out outputs/hcl-audit-sample.json --markdown-out outputs/hcl-audit-sample.md
-	PYTHONPATH=$(PYTHONPATH) $(PYTHON) -m reachability_advisor scan --sbom samples/sboms/audit-api.cdx.json --vulns samples/vulnerabilities.json --terraform-source samples/terraform-source --artifact-alias audit-api=gcr.io/acme/audit-api:1.0.0 --terraform-coverage-out outputs/terraform-source-coverage.json --mapping-out outputs/hcl-mapping.json --out outputs/hcl-findings.json --no-table
+	PYTHONPATH=$(PYTHONPATH) $(PYTHON) -m reachability_advisor scan --sbom samples/sboms/audit-api.cdx.json --vuln-in samples/vulnerabilities.json --terraform-source samples/terraform-source --artifact-alias audit-api=gcr.io/acme/audit-api:1.0.0 --terraform-coverage-out outputs/terraform-source-coverage.json --mapping-out outputs/hcl-mapping.json --out outputs/hcl-findings.json --no-table
 
 fixtures:
 	mkdir -p outputs/fixtures
@@ -52,7 +52,7 @@ sample:
 		--sbom samples/sboms/inventory-api.cdx.json \
 		--sbom samples/sboms/batch-worker.cdx.json \
 		--sbom samples/sboms/reports-api.cdx.json \
-		--vulns samples/vulnerabilities.json \
+		--vuln-in samples/vulnerabilities.json \
 		--terraform-plan samples/tfplan-multicloud.json \
 		--terraform-coverage-out outputs/terraform-coverage.json \
 		--source-root payments-api=samples/source/payments-api \
@@ -69,6 +69,9 @@ sample:
 		--markdown-out outputs/pr-summary.md \
 		--html-out outputs/reachability-graph.html \
 		--annotations-out outputs/annotations.txt
+
+demo:
+	PYTHONPATH=$(PYTHONPATH) $(PYTHON) -m reachability_advisor demo
 
 clean:
 	rm -rf .coverage htmlcov build dist *.egg-info outputs/*.json outputs/*.sarif outputs/*.md outputs/*.html outputs/*.txt

@@ -67,7 +67,7 @@ async function scanWorkspace() {
     return;
   }
   const sbom = discoverPath(root, cfg.get('sbom'), ['app.cdx.json', 'bom.json', 'sbom.json', 'reachability/app.cdx.json', 'reachability/sbom.cdx.json', '.reachability/app.cdx.json']);
-  const vulns = discoverPath(root, cfg.get('vulns'), ['vulnerabilities.json', 'grype.json', 'reachability/vulnerabilities.json', 'reachability/grype.json', '.reachability/grype.json']);
+  const vulns = discoverPath(root, cfg.get('vulnIn'), ['vulnerabilities.json', 'grype.json', 'reachability/vulnerabilities.json', 'reachability/grype.json', '.reachability/grype.json']);
 
   const diagnosticsPath = path.join(os.tmpdir(), `reachability-advisor-diagnostics-${Date.now()}.json`);
   const findingsPath = path.join(os.tmpdir(), `reachability-advisor-findings-${Date.now()}.json`);
@@ -75,7 +75,7 @@ async function scanWorkspace() {
   const args = [
     'scan',
     '--sbom', sbom,
-    '--vulns', vulns,
+    '--vuln-in', vulns,
     '--source-root', `${cfg.get('sourceRootArtifact') || 'app'}=${root}`,
     '--analysis-profile', profile.analysisProfile,
     '--diagnostics-out', diagnosticsPath,
@@ -383,7 +383,7 @@ function profileValidation(cfg, root) {
   const blockers = [];
   const warnings = [];
   const sbom = discoverPath(root, cfg.get('sbom'), ['app.cdx.json', 'bom.json', 'sbom.json', 'reachability/app.cdx.json', 'reachability/sbom.cdx.json', '.reachability/app.cdx.json']);
-  const vulns = discoverPath(root, cfg.get('vulns'), ['vulnerabilities.json', 'grype.json', 'reachability/vulnerabilities.json', 'reachability/grype.json', '.reachability/grype.json']);
+  const vulns = discoverPath(root, cfg.get('vulnIn'), ['vulnerabilities.json', 'grype.json', 'reachability/vulnerabilities.json', 'reachability/grype.json', '.reachability/grype.json']);
   const sourceEvidence = configuredPaths(cfg.get('sourceEvidence'), root).filter((item) => fs.existsSync(item));
   const terraformPlan = resolvePath(root, cfg.get('terraformPlan'));
   const terraformSource = resolvePath(root, cfg.get('terraformSource'));
@@ -394,7 +394,7 @@ function profileValidation(cfg, root) {
     blockers.push({ kind: 'missing_sbom', message: 'missing SBOM; run Reachability Advisor: Generate SBOM Plan or configure reachabilityAdvisor.sbom' });
   }
   if (!vulns || !fs.existsSync(vulns)) {
-    blockers.push({ kind: 'missing_vulnerabilities', message: 'missing vulnerability JSON; configure reachabilityAdvisor.vulns' });
+    blockers.push({ kind: 'missing_vulnerabilities', message: 'missing vulnerability JSON; configure reachabilityAdvisor.vulnIn' });
   }
   if (profile.analysisProfile === 'production') {
     if (!sourceEvidence.length) {

@@ -15,7 +15,7 @@ class ValidationIssue:
 
 def validate_paths(
     sboms: list[str],
-    vulns: str | None,
+    vulns: str | list[str] | None,
     context: str | None = None,
     terraform_plan: str | None = None,
     source_roots: list[str] | None = None,
@@ -30,8 +30,8 @@ def validate_paths(
     issues: list[ValidationIssue] = []
     for path in sboms:
         _validate_file(path, "sbom", issues)
-    if vulns:
-        _validate_file(vulns, "vulns", issues)
+    for path in _as_paths(vulns):
+        _validate_file(path, "vuln-in", issues)
     if context:
         _validate_file(context, "context", issues)
     if terraform_plan:
@@ -75,6 +75,14 @@ def validate_paths(
         elif not root_path.is_dir():
             issues.append(ValidationIssue("error", source_root, "source root is not a directory"))
     return issues
+
+
+def _as_paths(value: str | list[str] | None) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return value
 
 
 def _validate_file(path: str, label: str, issues: list[ValidationIssue]) -> None:

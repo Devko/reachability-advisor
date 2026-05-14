@@ -1,6 +1,6 @@
 # Algorithms
 
-Reachability Advisor scores dependency vulnerabilities and first-party code weaknesses from SBOM, scanner, source-reachability, and deployment-context evidence.
+Reachability Advisor scores dependency vulnerabilities, static scanner findings, and runtime scanner observations from SBOM, source, scanner, and deployment-context evidence.
 
 ## Pipeline
 
@@ -46,7 +46,7 @@ Each effective edge records:
 - `blockers`: concrete constraints such as IAM conditions, private endpoints, network policy denies, or auth gates;
 - `unknowns`: missing evidence that prevents stronger conclusions.
 
-The graph is evidence-first. A high score must be traceable from the score node back through the vulnerable package or code weakness, source/scanner evidence, identity, and network path to the asset. Missing network, identity, or source evidence is recorded as `unknowns`; it is not proof of safety.
+The graph is evidence-first. A high score must be traceable from the score node back through the dependency vulnerability, static finding, or runtime observation, then through source/scanner evidence, identity, and network path to the asset. Missing network, identity, or source evidence is recorded as `unknowns`; it is not proof of safety.
 
 ## SBOM acquisition model
 
@@ -84,7 +84,7 @@ All candidates appear in `--mapping-out` with their source and strength. Strong 
 
 ## Dependency matching
 
-When `--vulns` points to Grype JSON, Reachability Advisor treats Grype's
+When `--vuln-in` points to Grype JSON, Reachability Advisor treats Grype's
 `matches[]` as the scanner/database handoff. Each match is normalized to the
 same vulnerability record shape used by local fixtures, with the Grype artifact
 version recorded as the affected version. The advisor then verifies that record
@@ -124,16 +124,16 @@ When multiple source evidence providers match the same finding, the scanner pick
 
 `--security-evidence-in` imports scanner findings that are not dependency CVEs. Typical examples are XSS, SSRF, SQL injection, command injection, insecure deserialization, and access-control weaknesses in first-party code. SARIF 2.1.0 is the preferred interchange format because it carries rule metadata, source locations, and optional code-flow paths across different static analysis tools.
 
-These findings are emitted with `finding_type: code_weakness`. The dependency fields remain present for compatibility: `vulnerability.id` is the scanner rule id, `vulnerability.aliases` can carry the CWE, and `weakness` carries scanner type, tool, CWE, route, URL, sink, dataflow, and remediation text.
+These findings are emitted as `static_code_weakness` for SAST and `dynamic_runtime_observation` for DAST. The dependency-shaped fields remain present for scanner correlation: `vulnerability.id` is the scanner rule id, `vulnerability.aliases` can carry the CWE, and `weakness` carries scanner type, tool, CWE, route, URL, sink, dataflow, and remediation text.
 
 Scoring uses the same exposure model as dependency findings:
 
-1. SAST evidence supplies code reachability. Data-flow or taint evidence is treated as `attacker_controlled`; location-only evidence is treated as `function_reachable`.
-2. DAST evidence supplies runtime reachability. HTTP(S) targets are treated as public unless the record sets an explicit `exposure`.
+1. SAST evidence supplies static source evidence. Data-flow or taint evidence is stronger than location-only evidence.
+2. DAST evidence supplies runtime evidence. It does not prove source reachability unless a source location or source data-flow record is also present.
 3. Network and IAM context still come from Terraform, rendered Kubernetes manifests, context JSON, or effective exposure evaluators.
 4. A DAST finding without matching artifact identity is reported as unmapped evidence rather than guessed across every SBOM.
 
-Use `--source-evidence-in` when the external tool is proving reachability of a dependency vulnerability. Use `--security-evidence-in` when the tool is reporting a first-party code weakness.
+Use `--source-evidence-in` when the external tool is proving reachability of a dependency vulnerability. Use `--security-evidence-in` when the tool is reporting a first-party static or runtime security finding.
 
 External source evidence must include a component/package, package URL, or vulnerability selector. Artifact-only records are retained for diagnostics but do not upgrade findings, because artifact names can only narrow a dependency match. `source-coverage.json` reports unmatchable external records under `external_evidence_selector_diagnostics`.
 
@@ -280,24 +280,19 @@ Missing context is `unknown`; it is not isolation evidence. Unknown network or I
 
 ## Scoring
 
-The score is derived from the effective exposure path and capped at 100. It starts from vulnerability severity, then adds exploit likelihood, source evidence, dependency scope, network exposure, environment, and the strongest context impact:
+The score is graph-first. The scorer evaluates the strongest credible path:
 
 ```text
-score = severity
-      + known exploited bonus
-      + EPSS likelihood bonus
-      + source reachability points
-      + scope adjustment
-      + exposure points
-      + environment points
-      + max(privilege impact, IAM impact, asset criticality)
+asset -> network path -> identity/effective access -> source/runtime/package evidence -> finding
 ```
 
-Context impact is not fully additive. `admin`, `sensitive`, `data_access`, `network_control`, `iam_escalation`, and high asset criticality can describe the same blast radius, so the scorer takes the strongest one instead of stacking all of them. IAM capability records are normalized before scoring, and the strongest capability contributes through the same impact table as aggregate `iam_impacts` after applying its `risk_multiplier`. The provider-specific `effective_exposure` decision drives blocker and low-confidence gates. Low-confidence IAM and network paths remain evidence, but caps prevent them from behaving like confirmed exposure. The JSON finding includes `scoring.dimensions[]` for each point contribution and `scoring.gates[]` for caps such as weak source evidence, private/no-ingress context, low-confidence IAM/network evidence, network blockers, and the urgent gate.
+The graph decision selects the confirmed tier and a `potential_tier` for unresolved high-impact paths. The numeric `score` is only a projection inside the selected tier band so existing CI thresholds and sorting remain stable.
 
-Default exposure weights are deliberately ordered as public, external, unknown, internal, private/no ingress. Default privilege weights are admin, sensitive, unknown, limited, none. This means missing evidence is treated as a risk to close, not as a safe state. The model does not use absolute worst case for unknowns because that would make missing Terraform/Kubernetes/IAM evidence indistinguishable from confirmed internet exposure with admin rights.
+Context impact is path evidence, not a stack of points. `admin`, `sensitive`, `data_access`, `network_control`, `iam_escalation`, and high asset criticality can describe the same blast radius, so they drive the graph rule and small within-band ordering adjustments. Provider-specific `effective_exposure` decisions provide blockers, constraints, confidence, and unknowns. Low-confidence IAM and network paths remain visible evidence, but they do not behave like confirmed exposure.
 
-Priority gates prevent weakly actionable findings from crossing high-severity thresholds only because several small signals add up:
+Missing context is a visibility gap. Unknown network or IAM context can raise `potential_tier`, but it does not become confirmed public exposure or confirmed admin access. This keeps missing Terraform/Kubernetes/IAM evidence distinct from proven internet exposure with sensitive privileges.
+
+Priority rules prevent weakly actionable findings from crossing high-severity thresholds only because several small signals exist:
 
 - dev/test dependencies without source usage are capped below `medium`;
 - weak source evidence (`SBOM only`, `no source rule`, or `absent`) is capped below `high` unless the vulnerability is known exploited or has high EPSS; even then it stays below `urgent` until source usage is proven;
@@ -309,7 +304,7 @@ Priority gates prevent weakly actionable findings from crossing high-severity th
 - low-confidence IAM or network evidence keeps non-exploited findings below `urgent`;
 - `urgent` requires known exploitation, high EPSS, a request-controlled public/external path, or critical reachable context.
 
-Each JSON finding includes `scoring.effective_exposure_path`, a compact reference to the path used for the score. The full node and edge details are in `evidence_graph.effective_exposure_graph`.
+Each JSON finding includes `scoring.graph_decision` and `scoring.effective_exposure_path`, a compact reference to the path used for the score. The full node and edge details are in `evidence_graph.effective_exposure_graph`.
 
 The default model is meant to separate these common cases:
 

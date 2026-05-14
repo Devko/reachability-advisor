@@ -64,6 +64,14 @@ class Confidence(str, Enum):
     LOW = "low"
 
 
+class RuntimeEvidenceState(str, Enum):
+    NOT_OBSERVED = "not_observed"
+    ENDPOINT_OBSERVED = "endpoint_observed"
+    VULNERABILITY_OBSERVED = "vulnerability_observed"
+    AUTHENTICATED_OBSERVED = "authenticated_observed"
+    UNAUTHENTICATED_OBSERVED = "unauthenticated_observed"
+
+
 @dataclass(frozen=True)
 class PackageUrl:
     """Small package-url representation.
@@ -164,6 +172,54 @@ class SourceEvidence:
 
 
 @dataclass
+class RuntimeEvidence:
+    state: RuntimeEvidenceState = RuntimeEvidenceState.NOT_OBSERVED
+    confidence: Confidence = Confidence.LOW
+    tool: str = "none"
+    url: str | None = None
+    method: str | None = None
+    parameter: str | None = None
+    request_evidence: str | None = None
+    response_evidence: str | None = None
+    authentication_context: str | None = None
+    evidence_source: str = "none"
+    diagnostics: list[dict[str, Any]] = field(default_factory=list)
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "state": self.state.value,
+            "confidence": self.confidence.value,
+            "tool": self.tool,
+            "url": self.url,
+            "method": self.method,
+            "parameter": self.parameter,
+            "request_evidence": self.request_evidence,
+            "response_evidence": self.response_evidence,
+            "authentication_context": self.authentication_context,
+            "evidence_source": self.evidence_source,
+            "diagnostics": self.diagnostics,
+        }
+
+
+@dataclass
+class CorrelationEvidence:
+    correlation_type: str
+    related_finding_key: str
+    confidence: Confidence = Confidence.LOW
+    reason: str = ""
+    evidence: dict[str, Any] = field(default_factory=dict)
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "correlation_type": self.correlation_type,
+            "related_finding_key": self.related_finding_key,
+            "confidence": self.confidence.value,
+            "reason": self.reason,
+            "evidence": self.evidence,
+        }
+
+
+@dataclass
 class ContextEvidence:
     environment: str = "unknown"
     exposure: str = "unknown"
@@ -197,6 +253,11 @@ class Finding:
     fix_commands: list[str] = field(default_factory=list)
     policy_status: str = "active"
     score_details: dict[str, Any] = field(default_factory=dict)
+    runtime_evidence: RuntimeEvidence = field(default_factory=RuntimeEvidence)
+    correlated_evidence: list[CorrelationEvidence] = field(default_factory=list)
+    input_sources: list[dict[str, Any]] = field(default_factory=list)
+    unknowns: list[str] = field(default_factory=list)
+    evidence_summary: list[str] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -244,6 +305,11 @@ class Finding:
                 "diagnostics": self.source.diagnostics,
                 "locations": [location.to_json() for location in self.source.locations],
             },
+            "runtime_evidence": self.runtime_evidence.to_json(),
+            "correlated_evidence": [item.to_json() for item in self.correlated_evidence],
+            "input_sources": self.input_sources,
+            "unknowns": self.unknowns,
+            "evidence_summary": self.evidence_summary,
             "context": {
                 "environment": self.context.environment,
                 "exposure": self.context.exposure,

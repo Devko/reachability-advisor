@@ -47,7 +47,7 @@ The exact support manifest is generated from `reachability_advisor.terraform.TER
 ```bash
 reachability-advisor scan \
   --sbom app.cdx.json \
-  --vulns vulnerabilities.json \
+  --vuln-in vulnerabilities.json \
   --terraform-plan tfplan.json \
   --terraform-coverage-out terraform-coverage.json \
   --source-root app=. \

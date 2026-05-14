@@ -408,7 +408,7 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
             str(ROOT / "samples" / "sboms" / "batch-worker.cdx.json"),
             "--sbom",
             str(ROOT / "samples" / "sboms" / "reports-api.cdx.json"),
-            "--vulns",
+            "--vuln-in",
             str(ROOT / "samples" / "vulnerabilities.json"),
             "--terraform-plan",
             str(ROOT / "samples" / "tfplan-multicloud.json"),
@@ -590,7 +590,7 @@ def _check_no_cloud_terraform_plan_e2e(out_dir: Path, checks: list[dict[str, str
             "scan",
             "--sbom",
             str(fixture / "app.cdx.json"),
-            "--vulns",
+            "--vuln-in",
             str(fixture / "vulnerabilities.json"),
             "--source-root",
             f"no-cloud-app={fixture / 'source'}",
@@ -666,7 +666,7 @@ def _check_vulnerability_imports(out_dir: Path, checks: list[dict[str, str]]) ->
         "scan",
         "--sbom",
         str(ROOT / "samples" / "sboms" / "notifier.cdx.json"),
-        "--vulns",
+        "--vuln-in",
         str(grype),
         "--out",
         str(grype_findings),
@@ -708,7 +708,7 @@ def _check_vulnerability_imports(out_dir: Path, checks: list[dict[str, str]]) ->
         "scan",
         "--sbom",
         str(ROOT / "samples" / "sboms" / "notifier.cdx.json"),
-        "--vulns",
+        "--vuln-in",
         str(osv),
         "--out",
         str(osv_findings),
@@ -891,7 +891,7 @@ def _check_external_source_evidence_imports(out_dir: Path, checks: list[dict[str
         "scan",
         "--sbom",
         str(sbom),
-        "--vulns",
+        "--vuln-in",
         str(vulns),
         "--source-root",
         f"evidence-app={source}",
@@ -983,7 +983,7 @@ def _check_security_evidence_imports(out_dir: Path, checks: list[dict[str, str]]
         "scan",
         "--sbom",
         str(sbom),
-        "--vulns",
+        "--vuln-in",
         str(vulns),
         "--context",
         str(context),
@@ -996,9 +996,13 @@ def _check_security_evidence_imports(out_dir: Path, checks: list[dict[str, str]]
         "--no-table",
     ])
     data = require_json(findings)
-    code_findings = [finding for finding in data.get("findings", []) if finding.get("finding_type") == "code_weakness"]
+    code_findings = [
+        finding
+        for finding in data.get("findings", [])
+        if finding.get("finding_type") in {"static_code_weakness", "dynamic_runtime_observation"}
+    ]
     if len(code_findings) != 2:
-        raise ReleaseCheckError("security evidence import did not produce two code weakness findings")
+        raise ReleaseCheckError("security evidence import did not produce two security findings")
     if not any(finding.get("context", {}).get("exposure") == "public" for finding in code_findings if finding.get("weakness", {}).get("scanner_type") == "dast"):
         raise ReleaseCheckError("DAST security evidence did not produce public exposure")
     coverage_data = require_json(coverage)
@@ -1121,7 +1125,7 @@ def _check_context_alias_and_custom_rule_imports(out_dir: Path, checks: list[dic
         "validate",
         "--sbom",
         str(sbom),
-        "--vulns",
+        "--vuln-in",
         str(vulns),
         "--source-root",
         f"alias-app={source}",
@@ -1145,7 +1149,7 @@ def _check_context_alias_and_custom_rule_imports(out_dir: Path, checks: list[dic
         "scan",
         "--sbom",
         str(sbom),
-        "--vulns",
+        "--vuln-in",
         str(vulns),
         "--source-root",
         f"alias-app={source}",

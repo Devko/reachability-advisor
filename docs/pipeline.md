@@ -6,8 +6,9 @@ Reachability Advisor runs after SBOM, vulnerability, source-evidence, and deploy
 2. Grype JSON generated from that SBOM.
 3. Source root for local mapping and advisory fallback checks.
 4. External source reachability evidence from Semgrep, CodeQL/SARIF, govulncheck, or native Reachability Advisor evidence.
-5. Terraform plan JSON and/or rendered Kubernetes manifests for workload, network, and IAM context.
-6. CI artifact manifest when the SBOM does not carry the built image digest or registry reference.
+5. Optional SAST and DAST scanner outputs. SAST strengthens static source evidence. DAST creates runtime evidence.
+6. Terraform plan JSON and/or rendered Kubernetes manifests for workload, network, and IAM context.
+7. CI artifact manifest when the SBOM does not carry the built image digest or registry reference.
 
 The scanner itself does not call external services. Keep Syft, Grype, Terraform, and artifact upload steps in the pipeline so teams can pin versions, cache databases, and control credentials.
 
@@ -106,9 +107,11 @@ jobs:
           fi
           reachability-advisor scan \
             --sbom sboms/app.cdx.json \
-            --vulns vulns/app.grype.json \
+            --vuln-in vulns/app.grype.json \
             --source-root app=. \
             --source-evidence-in reachability/semgrep.json \
+            --sast-in reachability/semgrep.json \
+            # Add --dast-in reachability/zap.json or --dast-in reachability/nuclei.jsonl when runtime scanner output is available.
             --terraform-plan reachability/tfplan.json \
             --terraform-coverage-out reachability/terraform-coverage.json \
             "${k8s_args[@]}" \
@@ -171,7 +174,7 @@ The composite action installs the scanner from this repository. It accepts newli
         with:
           sbom: |
             sboms/app.cdx.json
-          vulns: vulns/app.grype.json
+          vuln-in: vulns/app.grype.json
           source-root: |
             app=.
           source-evidence-in: |
@@ -281,7 +284,7 @@ For release branches and deployment gates, scan the built artifact instead of th
         run: |
           reachability-advisor scan \
             --sbom sboms/app.cdx.json \
-            --vulns vulns/app.grype.json \
+            --vuln-in vulns/app.grype.json \
             --source-root app=. \
             --source-evidence-in reachability/semgrep.json \
             --artifact-manifest reachability/artifacts.json \
@@ -335,7 +338,7 @@ The repository includes `samples/e2e-no-cloud/` for this path:
 ```bash
 reachability-advisor scan \
   --sbom samples/e2e-no-cloud/app.cdx.json \
-  --vulns samples/e2e-no-cloud/vulnerabilities.json \
+  --vuln-in samples/e2e-no-cloud/vulnerabilities.json \
   --source-root no-cloud-app=samples/e2e-no-cloud/source \
   --terraform-plan samples/e2e-no-cloud/tfplan.json \
   --terraform-coverage-out outputs/no-cloud/terraform-coverage.json \
@@ -355,7 +358,7 @@ Use this only for early feedback when the repository cannot generate a plan in C
 ```bash
 reachability-advisor scan \
   --sbom sboms/app.cdx.json \
-  --vulns vulns/app.grype.json \
+  --vuln-in vulns/app.grype.json \
   --source-root app=. \
   --terraform-source infra \
   --terraform-coverage-out reachability/terraform-coverage.json \
@@ -391,7 +394,7 @@ semgrep scan \
 
 reachability-advisor scan \
   --sbom sboms/app.cdx.json \
-  --vulns vulns/app.grype.json \
+  --vuln-in vulns/app.grype.json \
   --source-root app=. \
   --source-evidence-in reachability/semgrep.json \
   --security-evidence-in reachability/security-semgrep.sarif \
@@ -426,7 +429,7 @@ Use these gates once the pipeline emits image/runtime SBOMs and Terraform or ren
 ```bash
 reachability-advisor scan \
   --sbom sboms/app.cdx.json \
-  --vulns vulns/app.grype.json \
+  --vuln-in vulns/app.grype.json \
   --source-root app=. \
   --source-evidence-in reachability/semgrep.json \
   --terraform-plan tfplan.json \
@@ -479,7 +482,7 @@ To avoid blocking on old backlog, publish `reachability-baseline.json` from the 
 ```bash
 reachability-advisor scan \
   --sbom sboms/app.cdx.json \
-  --vulns vulns/app.grype.json \
+  --vuln-in vulns/app.grype.json \
   --source-root app=. \
   --out reachability/findings.json \
   --baseline-out reachability/reachability-baseline.json

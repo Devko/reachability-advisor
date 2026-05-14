@@ -22,8 +22,12 @@
           "source": {"type": "object"},
           "sink": {"type": "object"},
           "method": {"type": "string"},
+          "parameter": {"type": "string"},
           "url": {"type": "string"},
           "route": {"type": "string"},
+          "authentication_context": {"type": "string"},
+          "request_evidence": {"type": "string"},
+          "response_evidence": {"type": "string"},
           "evidence": {"type": ["object", "array", "string"]},
           "remediation": {"type": "string"},
           "references": {"type": "array", "items": {"type": "string"}}

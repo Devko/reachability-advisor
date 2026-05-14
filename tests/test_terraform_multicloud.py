@@ -438,7 +438,7 @@ class TerraformAnalysisTests(unittest.TestCase):
                 "scan",
                 "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"),
                 "--sbom", str(ROOT / "samples/sboms/orders-api.cdx.json"),
-                "--vulns", str(ROOT / "samples/vulnerabilities.json"),
+                "--vuln-in", str(ROOT / "samples/vulnerabilities.json"),
                 "--terraform-plan", str(ROOT / "samples/tfplan-multicloud.json"),
                 "--terraform-coverage-out", str(out / "coverage.json"),
                 "--source-root", f"payments-api={ROOT / 'samples/source/payments-api'}",

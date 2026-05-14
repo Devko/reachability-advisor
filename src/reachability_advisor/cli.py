@@ -26,8 +26,10 @@ from .baseline import (
 from .benchmark_snapshots import BenchmarkSnapshotError, validate_benchmark_snapshots
 from .compare import compare_findings, delta_fails, pr_delta, write_delta, write_delta_markdown
 from .context import ContextError, load_context_file
+from .correlation import apply_correlations
 from .effective_exposure import enrich_context_map_with_effective_exposure
 from .evidence_graph import build_evidence_graph
+from .finding_types import DYNAMIC_RUNTIME_OBSERVATION, STATIC_CODE_WEAKNESS, count_canonical_types
 from .fixtures import (
     FixtureError,
     discover_fixture_packs,
@@ -106,7 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     scan = sub.add_parser("scan", help="Scan SBOMs and produce CI/IDE-friendly outputs.")
     scan.add_argument("--sbom", action="append", required=True, help="CycloneDX JSON SBOM path. Repeat for multiple artifacts.")
-    scan.add_argument("--vulns", required=True, help="Local vulnerability intelligence JSON, Grype JSON, or OSV-Scanner-style JSON.")
+    scan.add_argument("--vuln-in", dest="vulns", action="append", required=True, help="Local vulnerability intelligence JSON, Grype JSON, or OSV-Scanner-style JSON. Repeatable.")
     scan.add_argument("--source-root", action="append", default=[], help="Source mapping: artifact=path. Repeat for multiple artifacts.")
     scan.add_argument("--context", help="Context JSON keyed by artifact name for overrides or enrichment.")
     scan.add_argument("--terraform-plan", help="Terraform plan JSON for AWS/Azure/GCP/Kubernetes deployment context.")
@@ -123,7 +125,9 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--require-artifact-provenance", action="store_true", help="Exit 10 unless artifact manifests provide digest, SBOM path, Git SHA, and signature/attestation markers.")
     scan.add_argument("--reachability-rules", help="Custom source reachability rules JSON.")
     scan.add_argument("--source-evidence-in", action="append", default=[], help="External source evidence JSON, Semgrep JSON, SARIF, or govulncheck JSONL. Repeatable.")
-    scan.add_argument("--security-evidence-in", action="append", default=[], help="First-party SAST/DAST evidence JSON, Semgrep JSON, or SARIF. Repeatable.")
+    scan.add_argument("--security-evidence-in", action="append", default=[], help="Generic first-party SAST/DAST evidence JSON, Semgrep JSON, SARIF, ZAP JSON, or Nuclei JSONL. Repeatable.")
+    scan.add_argument("--sast-in", action="append", default=[], help="SAST scanner evidence JSON, Semgrep JSON, or SARIF. Repeatable; defaults imported records to scanner_type=sast.")
+    scan.add_argument("--dast-in", action="append", default=[], help="DAST scanner evidence JSON, ZAP JSON, or Nuclei JSONL. Repeatable; defaults imported records to scanner_type=dast.")
     scan.add_argument(
         "--analysis-profile",
         choices=["advisory", "production"],
@@ -159,7 +163,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     validate = sub.add_parser("validate", help="Validate paths and source-root syntax.")
     validate.add_argument("--sbom", action="append", required=True)
-    validate.add_argument("--vulns")
+    validate.add_argument("--vuln-in", dest="vulns", action="append")
     validate.add_argument("--source-root", action="append", default=[])
     validate.add_argument("--context")
     validate.add_argument("--terraform-plan")
@@ -169,6 +173,8 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--reachability-rules")
     validate.add_argument("--source-evidence-in", action="append", default=[])
     validate.add_argument("--security-evidence-in", action="append", default=[])
+    validate.add_argument("--sast-in", action="append", default=[])
+    validate.add_argument("--dast-in", action="append", default=[])
     validate.add_argument("--artifact-manifest", action="append", default=[])
     validate.add_argument("--json-out")
 
@@ -270,6 +276,9 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark_snapshots.add_argument("--expectations", default="fixtures/benchmarks/real-app-tier-snapshots.json", help="Benchmark snapshot expectation JSON.")
     benchmark_snapshots.add_argument("--out", help="Write validation report JSON.")
     benchmark_snapshots.add_argument("--warn-only", action="store_true", help="Return 0 even when a benchmark regression is detected.")
+
+    demo = sub.add_parser("demo", help="Run the checked-in multi-scanner demo with no network or cloud credentials.")
+    demo.add_argument("--output-dir", default="outputs/demo", help="Directory for demo outputs.")
 
     semgrep = sub.add_parser("export-semgrep-rules", help="Write Semgrep starter rules from reachability rules.")
     semgrep.add_argument("--reachability-rules", help="Custom source reachability rules JSON to include.")
@@ -374,11 +383,24 @@ def _apply_artifact_aliases(sboms: list[Any], aliases: list[str]) -> None:
             raise UserFacingError(f"artifact alias refers to unknown SBOM artifact: {artifact_name}", 2)
 
 
+def _load_vulnerability_inputs(paths: list[str]) -> list[Any]:
+    vulnerabilities: list[Any] = []
+    for path in paths:
+        vulnerabilities.extend(load_vulnerabilities(path))
+    return vulnerabilities
+
+
 def run_scan(args: argparse.Namespace) -> int:
+    vulnerability_inputs = list(args.vulns or [])
+    security_evidence_inputs = [
+        *list(args.security_evidence_in or []),
+        *list(args.sast_in or []),
+        *list(args.dast_in or []),
+    ]
     if not args.skip_validation:
         issues = validate_paths(
             args.sbom,
-            args.vulns,
+            vulnerability_inputs,
             args.context,
             args.terraform_plan,
             args.source_root,
@@ -387,7 +409,7 @@ def run_scan(args: argparse.Namespace) -> int:
             args.policy,
             args.reachability_rules,
             args.source_evidence_in,
-            args.security_evidence_in,
+            security_evidence_inputs,
             args.artifact_manifest,
         )
         for issue in issues:
@@ -406,7 +428,7 @@ def run_scan(args: argparse.Namespace) -> int:
         for path in args.artifact_manifest
     ]
     _apply_artifact_aliases(sboms, args.artifact_alias)
-    vulnerabilities = load_vulnerabilities(args.vulns)
+    vulnerabilities = _load_vulnerability_inputs(vulnerability_inputs)
     source_roots = parse_source_roots(args.source_root)
     reachability_rules = load_reachability_rules(args.reachability_rules)
     contexts: dict[str, ContextEvidence] = {}
@@ -439,7 +461,11 @@ def run_scan(args: argparse.Namespace) -> int:
         kubernetes_coverage = kubernetes_analysis.coverage
     contexts = enrich_context_map_with_effective_exposure(contexts)
     external_source_evidence = load_external_source_evidence(args.source_evidence_in)
-    security_evidence = load_security_evidence(args.security_evidence_in)
+    security_evidence = [
+        *load_security_evidence(args.security_evidence_in),
+        *load_security_evidence(args.sast_in, default_scanner_type="sast"),
+        *load_security_evidence(args.dast_in, default_scanner_type="dast"),
+    ]
     findings, source_coverage = generate_findings_with_source_report(
         sboms,
         vulnerabilities,
@@ -455,7 +481,8 @@ def run_scan(args: argparse.Namespace) -> int:
         contexts,
         policy=runtime_policy.score_policy,
     )
-    findings = sorted([*findings, *security_findings], key=lambda finding: finding.score, reverse=True)
+    findings = apply_correlations(sorted([*findings, *security_findings], key=lambda finding: finding.score, reverse=True))
+    findings = sorted(findings, key=lambda finding: finding.score, reverse=True)
     findings = apply_exceptions(findings, runtime_policy)
     mapping_report = build_mapping_report(sboms, source_roots, terraform_coverage, kubernetes_coverage)
     if args.artifact_manifest:
@@ -464,6 +491,7 @@ def run_scan(args: argparse.Namespace) -> int:
             "required": bool(args.require_artifact_provenance),
             "reports": artifact_provenance_reports,
         }
+    security_finding_type_counts = count_canonical_types(finding.finding_type for finding in security_findings)
     metadata = {
         "sbom_count": len(sboms),
         "vulnerability_records": len(vulnerabilities),
@@ -475,7 +503,8 @@ def run_scan(args: argparse.Namespace) -> int:
         "security_evidence_records": security_evidence_report.get("records", 0),
         "security_evidence_mapped": security_evidence_report.get("mapped", 0),
         "security_evidence_unmapped": security_evidence_report.get("unmapped", 0),
-        "code_weakness_findings": len(security_findings),
+        "static_code_weakness_findings": security_finding_type_counts.get(STATIC_CODE_WEAKNESS, 0),
+        "dynamic_runtime_observation_findings": security_finding_type_counts.get(DYNAMIC_RUNTIME_OBSERVATION, 0),
         "analysis_profile": args.analysis_profile,
         "artifact_manifest_entries": artifact_manifest_report.get("entries", 0),
     }
@@ -675,7 +704,7 @@ def run_validate(args: argparse.Namespace) -> int:
         args.policy,
         args.reachability_rules,
         args.source_evidence_in,
-        args.security_evidence_in,
+        [*args.security_evidence_in, *args.sast_in, *args.dast_in],
         args.artifact_manifest,
     )
     report = issues_report(issues)
@@ -686,6 +715,51 @@ def run_validate(args: argparse.Namespace) -> int:
     else:
         print(json.dumps(report, indent=2))
     return 2 if has_errors(issues) else 0
+
+
+def run_demo(args: argparse.Namespace) -> int:
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    argv = [
+        "scan",
+        "--sbom", "samples/demo/sbom.cdx.json",
+        "--vuln-in", "samples/demo/vulnerabilities.json",
+        "--sast-in", "samples/demo/sast-semgrep.json",
+        "--dast-in", "samples/demo/dast-zap.json",
+        "--dast-in", "samples/demo/dast-nuclei.jsonl",
+        "--kubernetes-manifest", "samples/demo/kubernetes.yaml",
+        "--source-root", "demo-api=samples/demo/source",
+        "--artifact-alias", "demo-api=registry.example.test/demo-api:1.0.0",
+        "--out", str(output_dir / "findings.json"),
+        "--sarif-out", str(output_dir / "reachability.sarif"),
+        "--diagnostics-out", str(output_dir / "diagnostics.json"),
+        "--markdown-out", str(output_dir / "summary.md"),
+        "--html-out", str(output_dir / "reachability-graph.html"),
+        "--evidence-graph-out", str(output_dir / "evidence-graph.json"),
+        "--mapping-out", str(output_dir / "mapping.json"),
+        "--source-coverage-out", str(output_dir / "source-coverage.json"),
+        "--kubernetes-coverage-out", str(output_dir / "kubernetes-coverage.json"),
+        "--no-table",
+    ]
+    code = main(argv)
+    if code != 0:
+        return code
+    data = load_findings_json(output_dir / "findings.json")
+    findings = data.get("findings", []) if isinstance(data, dict) else []
+    by_type: dict[str, int] = {}
+    for finding in findings:
+        if isinstance(finding, dict):
+            finding_type = str(finding.get("finding_type") or "dependency_vulnerability")
+            by_type[finding_type] = by_type.get(finding_type, 0) + 1
+    highest = str(findings[0].get("tier", "none")) if findings and isinstance(findings[0], dict) else "none"
+    print(f"Demo findings: {len(findings)}")
+    print(f"Findings by type: {json.dumps(by_type, sort_keys=True)}")
+    print(f"Highest tier: {highest}")
+    for finding in findings[:3]:
+        if isinstance(finding, dict):
+            print(f"- {finding.get('tier')} {finding.get('vulnerability', {}).get('id')}: {finding.get('artifact', {}).get('name')}")
+    print(f"Outputs written to {output_dir}")
+    return 0
 
 
 def run_evidence_profile(args: argparse.Namespace) -> int:
@@ -949,6 +1023,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_hcl_audit(args)
         if args.command == "benchmark-snapshots":
             return run_benchmark_snapshots(args)
+        if args.command == "demo":
+            return run_demo(args)
         if args.command == "export-semgrep-rules":
             return run_export_semgrep_rules(args)
         if args.command == "version":

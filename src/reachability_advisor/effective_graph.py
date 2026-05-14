@@ -18,6 +18,7 @@ import re
 from typing import Any
 
 from .effective_exposure import evaluate_effective_exposure
+from .finding_types import canonical_finding_type, is_dependency_finding
 from .iam_capabilities import capability_risk_multiplier, dedupe_iam_capabilities
 from .models import Finding, Reachability, reachability_label
 from .numeric import safe_float
@@ -25,6 +26,10 @@ from .numeric import safe_float
 PATH_ORDER = ("asset", "network_path", "identity", "reachable_code_package", "vulnerability", "score")
 NETWORK_PATH_RE = re.compile(r"^(?:terraform|context|kubernetes) network path: (?P<exposure>[a-z_]+) via (?P<path>.+)$")
 EXPOSURE_INFERENCE_RE = re.compile(r"^(?:terraform|context|kubernetes) exposure inference: (?P<exposure>[a-z_]+) via (?P<target>.+)$")
+
+
+def _is_dependency(finding: Finding) -> bool:
+    return is_dependency_finding(finding.finding_type)
 
 
 def build_effective_exposure_graph(findings: list[Finding]) -> dict[str, Any]:
@@ -107,7 +112,7 @@ def effective_exposure_path(finding: Finding) -> dict[str, Any]:
             sequence=2,
             source=identity["id"],
             target=code["id"],
-            kind="identity_runs_reachable_code_package" if finding.finding_type == "dependency_vulnerability" else "identity_reaches_code_weakness",
+            kind="identity_runs_reachable_code_package" if _is_dependency(finding) else "identity_reaches_security_finding",
             evidence_layer=str(code["evidence_layer"]),
             evidence_source=str(code["evidence_source"]),
             confidence=str(code["confidence"]),
@@ -120,24 +125,24 @@ def effective_exposure_path(finding: Finding) -> dict[str, Any]:
             sequence=3,
             source=code["id"],
             target=vulnerability["id"],
-            kind="package_has_vulnerability" if finding.finding_type == "dependency_vulnerability" else "code_has_weakness",
-            evidence_layer="sbom" if finding.finding_type == "dependency_vulnerability" else str(finding.weakness.get("scanner_type") or "scanner"),
-            evidence_source="SBOM component match plus vulnerability intelligence" if finding.finding_type == "dependency_vulnerability" else str(finding.weakness.get("tool") or finding.source.evidence_source or "scanner evidence"),
-            confidence=_package_vulnerability_confidence(finding) if finding.finding_type == "dependency_vulnerability" else finding.source.confidence.value,
-            provider=_ecosystem(finding.component.purl) if finding.finding_type == "dependency_vulnerability" else "first-party",
+            kind="package_has_vulnerability" if _is_dependency(finding) else "scanner_reports_security_finding",
+            evidence_layer="sbom" if _is_dependency(finding) else str(finding.weakness.get("scanner_type") or "scanner"),
+            evidence_source="SBOM component match plus vulnerability intelligence" if _is_dependency(finding) else str(finding.weakness.get("tool") or finding.source.evidence_source or "scanner evidence"),
+            confidence=_package_vulnerability_confidence(finding) if _is_dependency(finding) else finding.source.confidence.value,
+            provider=_ecosystem(finding.component.purl) if _is_dependency(finding) else "first-party",
             language=str(code["language"]),
-            unknowns=_package_vulnerability_unknowns(finding) if finding.finding_type == "dependency_vulnerability" else _code_weakness_unknowns(finding),
+            unknowns=_package_vulnerability_unknowns(finding) if _is_dependency(finding) else _security_finding_unknowns(finding),
         ),
         _edge(
             path_id=path_id,
             sequence=4,
             source=vulnerability["id"],
             target=score["id"],
-            kind="vulnerability_prioritized_as_score" if finding.finding_type == "dependency_vulnerability" else "weakness_prioritized_as_score",
+            kind="vulnerability_prioritized_as_score" if _is_dependency(finding) else "security_finding_prioritized_as_score",
             evidence_layer="scoring",
             evidence_source=f"scoring model {finding.score_details.get('model_version') or 'unknown'}",
             confidence=finding.confidence.value,
-            provider=_ecosystem(finding.component.purl) if finding.finding_type == "dependency_vulnerability" else "first-party",
+            provider=_ecosystem(finding.component.purl) if _is_dependency(finding) else "first-party",
             language=str(code["language"]),
             unknowns=_score_unknowns(finding),
         ),
@@ -317,15 +322,15 @@ def _code_node(finding: Finding) -> dict[str, Any]:
         unknowns.append("built-in source analyzer fallback")
     if finding.source.reachability in {Reachability.PACKAGE_PRESENT, Reachability.UNKNOWN_DUE_TO_NO_RULE, Reachability.ABSENT}:
         unknowns.append(f"weak source state: {finding.source.reachability.value}")
-    is_code_weakness = finding.finding_type == "code_weakness"
+    is_security_finding = not _is_dependency(finding)
     return _node(
         id=(
             f"code-package:{finding.artifact.name}:{finding.component.name}:{finding.component.version or 'unknown'}"
-            if not is_code_weakness
-            else f"code-weakness:{finding.artifact.name}:{_stable_token(finding.key)}"
+            if not is_security_finding
+            else f"security-finding:{finding.artifact.name}:{_stable_token(finding.key)}"
         ),
-        kind="reachable_code_package" if not is_code_weakness else "reachable_code_weakness",
-        label=f"{finding.component.display_name}@{finding.component.version or 'unknown'}" if not is_code_weakness else str(finding.weakness.get("weakness") or finding.component.display_name),
+        kind="reachable_code_package" if not is_security_finding else canonical_finding_type(finding.finding_type),
+        label=f"{finding.component.display_name}@{finding.component.version or 'unknown'}" if not is_security_finding else str(finding.weakness.get("weakness") or finding.component.display_name),
         package=finding.component.display_name,
         version=finding.component.version,
         purl=finding.component.purl,
@@ -334,7 +339,7 @@ def _code_node(finding: Finding) -> dict[str, Any]:
         reachability_label=reachability_label(finding.source.reachability),
         evidence_source=evidence_source,
         evidence_layer=evidence_layer,
-        provider=_ecosystem(finding.component.purl) if not is_code_weakness else str(finding.weakness.get("scanner_type") or "first-party"),
+        provider=_ecosystem(finding.component.purl) if not is_security_finding else str(finding.weakness.get("scanner_type") or "first-party"),
         language=finding.source.language,
         confidence=finding.source.confidence.value,
         matched_symbols=finding.source.matched_symbols,
@@ -346,9 +351,9 @@ def _code_node(finding: Finding) -> dict[str, Any]:
 
 def _vulnerability_node(finding: Finding) -> dict[str, Any]:
     return _node(
-        id=f"vulnerability:{finding.vulnerability.id}" if finding.finding_type == "dependency_vulnerability" else f"weakness:{finding.key}",
-        kind="vulnerability" if finding.finding_type == "dependency_vulnerability" else "code_weakness",
-        label=finding.vulnerability.id if finding.finding_type == "dependency_vulnerability" else str(finding.weakness.get("weakness") or finding.vulnerability.id),
+        id=f"vulnerability:{finding.vulnerability.id}" if _is_dependency(finding) else f"weakness:{finding.key}",
+        kind="vulnerability" if _is_dependency(finding) else canonical_finding_type(finding.finding_type),
+        label=finding.vulnerability.id if _is_dependency(finding) else str(finding.weakness.get("weakness") or finding.vulnerability.id),
         finding_type=finding.finding_type,
         weakness=finding.weakness,
         severity=finding.vulnerability.severity,
@@ -596,7 +601,7 @@ def _package_vulnerability_unknowns(finding: Finding) -> list[str]:
     return unknowns
 
 
-def _code_weakness_unknowns(finding: Finding) -> list[str]:
+def _security_finding_unknowns(finding: Finding) -> list[str]:
     unknowns: list[str] = []
     if not finding.weakness.get("cwe"):
         unknowns.append("scanner finding has no CWE")

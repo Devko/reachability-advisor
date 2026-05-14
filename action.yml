@@ -5,8 +5,8 @@ inputs:
   sbom:
     description: One or more CycloneDX SBOM paths. Use newline-separated paths for multiple artifacts.
     required: true
-  vulns:
-    description: Vulnerability intelligence JSON path, usually Grype JSON generated from the same SBOM set.
+  vuln-in:
+    description: Newline-separated vulnerability intelligence paths, usually Grype JSON generated from the same SBOM set.
     required: true
   source-root:
     description: Newline-separated artifact=path source-root mappings. Required for code reachability.
@@ -53,7 +53,15 @@ inputs:
     required: false
     default: ""
   security-evidence-in:
-    description: Newline-separated first-party SAST/DAST finding files. Supports normalized JSON, Semgrep JSON, and SARIF.
+    description: Newline-separated generic first-party SAST/DAST finding files. Supports normalized JSON, Semgrep JSON, SARIF, ZAP JSON, and Nuclei JSONL.
+    required: false
+    default: ""
+  sast-in:
+    description: Newline-separated SAST evidence files. Defaults imported records to scanner_type=sast.
+    required: false
+    default: ""
+  dast-in:
+    description: Newline-separated DAST evidence files. Defaults imported records to scanner_type=dast.
     required: false
     default: ""
   analysis-profile:
@@ -232,14 +240,17 @@ runs:
         delta="$output_dir/reachability-delta.json"
         delta_markdown="$output_dir/reachability-delta.md"
 
-        args=(scan --vulns "${{ inputs.vulns }}" --out "$findings" --baseline-out "$baseline_out" --sarif-out "$sarif" --diagnostics-out "$diagnostics" --markdown-out "$markdown" --html-out "$html" --evidence-graph-out "$evidence_graph" --annotations-out "$annotations" --mapping-out "$mapping" --source-coverage-out "$source_coverage" --readiness-out "$readiness" --no-table)
+        args=(scan --out "$findings" --baseline-out "$baseline_out" --sarif-out "$sarif" --diagnostics-out "$diagnostics" --markdown-out "$markdown" --html-out "$html" --evidence-graph-out "$evidence_graph" --annotations-out "$annotations" --mapping-out "$mapping" --source-coverage-out "$source_coverage" --readiness-out "$readiness" --no-table)
 
         add_repeated_args "--sbom" "${{ inputs.sbom }}"
+        add_repeated_args "--vuln-in" "${{ inputs.vuln-in }}"
         add_repeated_args "--source-root" "${{ inputs.source-root }}"
         add_repeated_args "--artifact-alias" "${{ inputs.artifact-alias }}"
         add_repeated_args "--artifact-manifest" "${{ inputs.artifact-manifest }}"
         add_repeated_args "--source-evidence-in" "${{ inputs.source-evidence-in }}"
         add_repeated_args "--security-evidence-in" "${{ inputs.security-evidence-in }}"
+        add_repeated_args "--sast-in" "${{ inputs.sast-in }}"
+        add_repeated_args "--dast-in" "${{ inputs.dast-in }}"
         add_repeated_args "--kubernetes-manifest" "${{ inputs.kubernetes-manifest }}"
 
         args+=(--analysis-profile "${{ inputs.analysis-profile }}")

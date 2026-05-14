@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "reachability-advisor"
 version = "1.0.0"
-description = "Dependency vulnerability prioritization with source, Terraform, network, and IAM context."
+description = "Security finding prioritization for dependency, SAST, and DAST results using source and deployment context."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "GPL-3.0-or-later"
@@ -16,6 +16,11 @@ keywords = [
   "sbom",
   "supply-chain-security",
   "sca",
+  "sast",
+  "dast",
+  "vulnerability-management",
+  "security-prioritization",
+  "scanner-correlation",
   "reachability",
   "sarif",
   "ide",

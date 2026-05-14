@@ -9,6 +9,13 @@ from typing import Any
 
 from . import __version__
 from .evidence_graph import build_evidence_graph
+from .finding_types import (
+    canonical_finding_type,
+    is_dependency_finding,
+    is_dynamic_finding,
+    is_security_finding,
+    is_static_finding,
+)
 from .models import Finding, SourceLocation, Tier, reachability_label
 from .remediation import build_remediation_groups
 
@@ -55,6 +62,22 @@ def _primary_location(finding: Finding) -> SourceLocation | None:
     return finding.source.locations[0] if finding.source.locations else None
 
 
+def _is_dependency(finding: Finding) -> bool:
+    return is_dependency_finding(finding.finding_type)
+
+
+def _is_static(finding: Finding) -> bool:
+    return is_static_finding(finding.finding_type)
+
+
+def _is_dynamic(finding: Finding) -> bool:
+    return is_dynamic_finding(finding.finding_type)
+
+
+def _is_security_finding(finding: Finding) -> bool:
+    return is_security_finding(finding.finding_type)
+
+
 def _level(tier: Tier) -> str:
     if tier in {Tier.URGENT, Tier.HIGH}:
         return "error"
@@ -74,7 +97,7 @@ def write_sarif(findings: list[Finding], path: str | Path) -> None:
                 "id": rule_id,
                 "name": finding.vulnerability.id,
                 "shortDescription": {"text": finding.vulnerability.summary or f"Vulnerability {rule_id}"},
-                "help": {"text": "Reachability-aware dependency vulnerability finding." if finding.finding_type == "dependency_vulnerability" else "Exposure-aware first-party code weakness finding."},
+                "help": {"text": _sarif_rule_help(finding)},
                 "properties": {"security-severity": str(finding.vulnerability.cvss or finding.score / 10)},
             },
         )
@@ -85,6 +108,9 @@ def write_sarif(findings: list[Finding], path: str | Path) -> None:
                 "artifactLocation": {"uri": str(location.path)},
                 "region": {"startLine": location.line, "startColumn": max(1, location.column)},
             }
+        elif _is_dynamic(finding):
+            uri = finding.runtime_evidence.url or f"security-evidence://{finding.artifact.name}/{finding.vulnerability.id}"
+            physical_location = {"artifactLocation": {"uri": uri}}
         else:
             physical_location = {"artifactLocation": {"uri": f"sbom://{finding.artifact.name}/{finding.component.name}"}}
         results.append(
@@ -102,6 +128,9 @@ def write_sarif(findings: list[Finding], path: str | Path) -> None:
                     "finding_type": finding.finding_type,
                     "weakness": finding.weakness,
                     "reachability": finding.source.reachability.value,
+                    "runtime_evidence": finding.runtime_evidence.to_json(),
+                    "correlated_evidence": [item.to_json() for item in finding.correlated_evidence],
+                    "unknowns": finding.unknowns,
                 },
             }
         )
@@ -127,13 +156,23 @@ def write_sarif(findings: list[Finding], path: str | Path) -> None:
     out.write_text(json.dumps(sarif, indent=2), encoding="utf-8")
 
 
+def _sarif_rule_help(finding: Finding) -> str:
+    if _is_dependency(finding):
+        return "Reachability-aware dependency vulnerability finding."
+    if _is_dynamic(finding):
+        return "Runtime scanner observation. Source reachability is reported only when source evidence exists."
+    return "Static scanner finding with source evidence when a real source location or data flow is available."
+
+
 def write_diagnostics(findings: list[Finding], path: str | Path) -> None:
     diagnostics = []
     for finding in findings:
         location = _primary_location(finding)
-        uri = str(location.path) if location else f"sbom://{finding.artifact.name}/{finding.component.name}"
-        line = (location.line - 1) if location else 0
-        column = (location.column - 1) if location else 0
+        if location is None:
+            continue
+        uri = str(location.path)
+        line = location.line - 1
+        column = location.column - 1
         diagnostics.append(
             {
                 "uri": uri,
@@ -164,6 +203,9 @@ def write_diagnostics(findings: list[Finding], path: str | Path) -> None:
                     "effective_access": finding.context.effective_access,
                     "effective_exposure": finding.context.effective_exposure,
                     "context_evidence": finding.context.evidence[:12],
+                    "runtime_evidence": finding.runtime_evidence.to_json(),
+                    "correlated_evidence": [item.to_json() for item in finding.correlated_evidence],
+                    "unknowns": finding.unknowns,
                 },
             }
         )
@@ -178,14 +220,15 @@ def _diagnostic_severity(tier: Tier) -> int:
 
 
 def _finding_message(finding: Finding) -> str:
-    if finding.finding_type == "code_weakness":
+    if _is_security_finding(finding):
         weakness = finding.weakness.get("weakness") or finding.vulnerability.summary or finding.vulnerability.id
         tool = finding.weakness.get("tool") or finding.source.evidence_source
         location = f" at {finding.component.name}" if finding.component.name else ""
+        evidence = f"runtime={finding.runtime_evidence.state.value}; " if _is_dynamic(finding) else ""
         return (
             f"{finding.vulnerability.id} ({weakness}) reported by {tool}{location} "
             f"is {finding.tier.value} (score {finding.score:.1f}); "
-            f"source={reachability_label(finding.source.reachability)}; exposure={finding.context.exposure}; "
+            f"{evidence}source={reachability_label(finding.source.reachability)}; exposure={finding.context.exposure}; "
             f"owner={finding.context.owner or 'unknown'}"
         )
     return (
@@ -205,13 +248,13 @@ def write_markdown_report(findings: list[Finding], path: str | Path, max_finding
         "",
         f"Generated at: {datetime.now(timezone.utc).isoformat()}",
         "",
-        "This report prioritizes dependency vulnerabilities and first-party code weaknesses using SBOM, scanner, source, Terraform, Kubernetes, network, IAM, and policy evidence. It does not prove exploitability and must not be used for automatic suppression without review.",
+        "This report prioritizes dependency vulnerabilities, static findings, and runtime observations using SBOM, scanner, source, Terraform, Kubernetes, network, IAM, and policy evidence. It does not prove exploitability and must not be used for automatic suppression without review.",
         "",
         "## Remediation queue",
         "",
     ]
     if not findings:
-        lines.append("No matching vulnerable components or code weaknesses were found.")
+        lines.append("No matching vulnerable components or scanner findings were found.")
     for index, remediation in enumerate(remediations[:max_findings], start=1):
         lines.extend(_remediation_markdown(index, remediation))
     if len(remediations) > max_findings:
@@ -222,7 +265,41 @@ def write_markdown_report(findings: list[Finding], path: str | Path, max_finding
         lines.extend(_finding_markdown(index, finding))
     if len(findings) > max_findings:
         lines.append(f"\n{len(findings) - max_findings} additional findings omitted from this summary. See JSON/SARIF output for details.")
+    lines.extend(_typed_markdown_sections(findings, max_findings=max_findings))
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _typed_markdown_sections(findings: list[Finding], max_findings: int = 15) -> list[str]:
+    sections: list[tuple[str, list[Finding]]] = [
+        ("Fix now", [finding for finding in findings if finding.tier in {Tier.URGENT, Tier.HIGH}]),
+        ("Investigate", [finding for finding in findings if finding.tier == Tier.MEDIUM]),
+        ("Runtime-observed findings", [finding for finding in findings if _is_dynamic(finding)]),
+        ("Static findings", [finding for finding in findings if _is_static(finding)]),
+        ("Dependency findings", [finding for finding in findings if _is_dependency(finding)]),
+        ("Correlated findings", [finding for finding in findings if finding.correlated_evidence]),
+        ("Visibility gaps", [finding for finding in findings if finding.unknowns]),
+    ]
+    lines: list[str] = []
+    for heading, items in sections:
+        lines.extend(["", f"## {heading}", ""])
+        if not items:
+            lines.append("None.")
+            continue
+        for finding in items[:max_findings]:
+            lines.append(f"- `{finding.tier.value}` `{finding.vulnerability.id}` on `{finding.artifact.name}`: {_markdown_summary(finding)}")
+        if len(items) > max_findings:
+            lines.append(f"- {len(items) - max_findings} more in JSON output")
+    return lines
+
+
+def _markdown_summary(finding: Finding) -> str:
+    if _is_dynamic(finding):
+        state = finding.runtime_evidence.state.value
+        unknowns = f"; unknown: {', '.join(finding.unknowns[:2])}" if finding.unknowns else ""
+        return f"runtime evidence `{state}`, source `{finding.source.reachability.value}`{unknowns}"
+    if _is_static(finding):
+        return f"static evidence `{finding.source.evidence_source}`, source `{finding.source.reachability.value}`"
+    return f"dependency `{finding.component.display_name}`, source `{finding.source.reachability.value}`"
 
 
 def _remediation_markdown(index: int, remediation: dict[str, Any]) -> list[str]:
@@ -264,12 +341,12 @@ def _finding_markdown(index: int, finding: Finding) -> list[str]:
     owner = finding.context.owner or "unknown owner"
     title = (
         f"{finding.vulnerability.id} in `{finding.component.name}`"
-        if finding.finding_type == "dependency_vulnerability"
-        else f"{finding.vulnerability.id} `{finding.weakness.get('weakness') or finding.vulnerability.summary or 'code weakness'}`"
+        if _is_dependency(finding)
+        else f"{finding.vulnerability.id} `{finding.weakness.get('weakness') or finding.vulnerability.summary or 'security finding'}`"
     )
     component_label = (
         f"{finding.component.name}@{finding.component.version or 'unknown'}"
-        if finding.finding_type == "dependency_vulnerability"
+        if _is_dependency(finding)
         else finding.component.name
     )
     lines = [
@@ -277,13 +354,25 @@ def _finding_markdown(index: int, finding: Finding) -> list[str]:
         "",
         f"- Artifact: `{finding.artifact.name}`",
         f"- Component: `{component_label}`",
+        f"- Finding type: `{finding.finding_type}`",
         f"- Score: `{finding.score:.1f}`; confidence: `{finding.confidence.value}`",
         f"- Owner: `{owner}`",
         f"- Source signal: `{reachability_label(finding.source.reachability)}` (`{finding.source.reachability.value}`) - {finding.source.reason}",
         f"- Context: exposure=`{finding.context.exposure}`, environment=`{finding.context.environment}`, privilege=`{finding.context.privilege}`, criticality=`{finding.context.criticality}`",
     ]
-    if finding.finding_type == "code_weakness":
+    if _is_security_finding(finding):
         lines.append(f"- Scanner: `{finding.weakness.get('tool', 'unknown')}`; type=`{finding.weakness.get('scanner_type', 'unknown')}`; CWE=`{finding.weakness.get('cwe') or 'unknown'}`")
+    if _is_dynamic(finding):
+        runtime = finding.runtime_evidence
+        lines.append(f"- Runtime evidence: state=`{runtime.state.value}`, confidence=`{runtime.confidence.value}`, url=`{runtime.url or 'unknown'}`, method=`{runtime.method or 'unknown'}`")
+    if finding.correlated_evidence:
+        lines.append("- Correlated evidence:")
+        for item in finding.correlated_evidence[:3]:
+            lines.append(f"  - `{item.correlation_type}` confidence=`{item.confidence.value}`: {item.reason}")
+    if finding.unknowns:
+        lines.append("- Unknowns:")
+        for unknown in finding.unknowns[:5]:
+            lines.append(f"  - {unknown}")
     if finding.context.iam_impacts:
         lines.append(f"- IAM impacts: `{', '.join(finding.context.iam_impacts)}`")
     if finding.fix_commands:
@@ -332,7 +421,7 @@ def render_table(findings: list[Finding], limit: int = 20) -> str:
                 f"{finding.score:.1f}",
                 finding.artifact.name,
                 finding.component.name,
-                finding.vulnerability.id if finding.finding_type == "dependency_vulnerability" else f"{finding.vulnerability.id} ({finding.weakness.get('weakness', 'code weakness')})",
+                finding.vulnerability.id if _is_dependency(finding) else f"{finding.vulnerability.id} ({finding.weakness.get('weakness', 'security finding')})",
                 reachability_label(finding.source.reachability),
                 finding.context.owner or "unknown",
             )
@@ -358,12 +447,13 @@ def explain_finding(data: dict[str, Any], key: str | None = None, artifact: str 
             break
     if selected is None:
         raise ValueError("finding not found")
-    is_code_weakness = selected.get("finding_type") == "code_weakness"
+    finding_type = canonical_finding_type(str(selected.get("finding_type") or "dependency_vulnerability"))
+    selected_is_security_finding = is_security_finding(finding_type)
     weakness = selected.get("weakness", {}) if isinstance(selected.get("weakness"), dict) else {}
     title = (
         f"{selected['vulnerability']['id']} in {selected['component']['name']}"
-        if not is_code_weakness
-        else f"{selected['vulnerability']['id']} {weakness.get('weakness') or 'code weakness'}"
+        if not selected_is_security_finding
+        else f"{selected['vulnerability']['id']} {weakness.get('weakness') or 'security finding'}"
     )
     lines = [
         f"# Explanation: {title}",
@@ -377,8 +467,16 @@ def explain_finding(data: dict[str, Any], key: str | None = None, artifact: str 
     ]
     if selected["context"].get("iam_impacts"):
         lines.append(f"- IAM impacts: `{', '.join(selected['context']['iam_impacts'])}`")
-    if is_code_weakness:
+    if selected_is_security_finding:
         lines.append(f"- Scanner: `{weakness.get('tool', 'unknown')}`; type=`{weakness.get('scanner_type', 'unknown')}`; CWE=`{weakness.get('cwe') or 'unknown'}`")
+    runtime = selected.get("runtime_evidence", {}) if isinstance(selected.get("runtime_evidence"), dict) else {}
+    if finding_type == "dynamic_runtime_observation":
+        lines.append(f"- Runtime evidence: state=`{runtime.get('state', 'unknown')}`, url=`{runtime.get('url') or 'unknown'}`, method=`{runtime.get('method') or 'unknown'}`")
+    unknowns = selected.get("unknowns", [])
+    if isinstance(unknowns, list) and unknowns:
+        lines.extend(["", "## Unknowns"])
+        for unknown in unknowns:
+            lines.append(f"- {unknown}")
     lines.extend(["", "## Rationale"])
     for reason in selected.get("rationale", []):
         lines.append(f"- {reason}")

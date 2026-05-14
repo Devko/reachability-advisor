@@ -130,7 +130,7 @@ class VisualPayloadTests(unittest.TestCase):
         path = payload["networkPaths"][0]
         self.assertEqual(path["entryLabel"], "Internet / attacker")
         self.assertEqual(path["label"], "kubernetes_service.frontend-external LoadBalancer")
-        self.assertEqual(path["steps"][1], "kubernetes_deployment.frontend")
+        self.assertEqual(path["steps"], ["kubernetes_service.frontend-external LoadBalancer"])
 
     def test_internal_path_through_public_kubernetes_entry_shows_attacker_entry(self) -> None:
         payload = _visual_payload([
@@ -211,6 +211,137 @@ class VisualPayloadTests(unittest.TestCase):
         self.assertEqual(path["summary"], "External exposure is reported, but the exact ingress path is not linked.")
         self.assertEqual(path["steps"], [])
 
+    def test_architecture_view_places_public_ingress_through_edge_and_asset_zone(self) -> None:
+        payload = _visual_payload([
+            finding_for_visual(
+                "api",
+                "public",
+                ["terraform network path: public via aws_lb.edge public load balancer -> aws_lb_target_group.api -> aws_ecs_service.api"],
+                tier=Tier.URGENT,
+                score=99.0,
+            )
+        ])
+
+        architecture = payload["architecture"]
+        zones = {zone["id"]: zone for zone in architecture["zones"]}
+        assets = {asset["id"]: asset for asset in architecture["assets"]}
+        hops = {hop["label"]: hop for hop in architecture["hops"]}
+        self.assertEqual(assets["asset:api"]["zoneId"], "zone:public")
+        self.assertIn("asset:api", zones["zone:public"]["assetIds"])
+        self.assertEqual(hops["Ingress edge"]["zoneId"], "zone:edge-ingress")
+        self.assertEqual(hops["Ingress edge"]["provider"], "AWS")
+        self.assertTrue(any(edge["target"] == "asset:api" and edge["role"] == "hop-asset" for edge in architecture["edges"]))
+
+    def test_attack_path_view_groups_route_to_affected_assets(self) -> None:
+        payload = _visual_payload([
+            finding_for_visual(
+                "api",
+                "public",
+                ["terraform network path: public via aws_lb.edge public load balancer -> aws_lb_target_group.api -> aws_ecs_service.api"],
+                tier=Tier.URGENT,
+                score=99.0,
+            )
+        ])
+
+        attack_paths = payload["attackPaths"]
+        self.assertEqual(len(attack_paths), 1)
+        path = attack_paths[0]
+        self.assertEqual(path["entryLabel"], "Internet / attacker")
+        self.assertEqual(path["provider"], "AWS")
+        self.assertEqual(path["assetIds"], ["asset:api"])
+        self.assertEqual(path["findingCount"], 1)
+        self.assertIn("Ingress edge", path["hopLabels"])
+        self.assertTrue(path["id"].startswith("attack:path:"))
+
+    def test_attack_path_view_reuses_shared_path_for_multiple_assets(self) -> None:
+        payload = _visual_payload([
+            finding_for_visual(
+                "api",
+                "public",
+                ["terraform network path: public via aws_lb.edge public load balancer -> aws_lb_target_group.shared -> aws_ecs_service.api"],
+                component="express",
+                vulnerability="CVE-API",
+            ),
+            finding_for_visual(
+                "worker",
+                "public",
+                ["terraform network path: public via aws_lb.edge public load balancer -> aws_lb_target_group.shared -> aws_ecs_service.worker"],
+                component="requests",
+                vulnerability="CVE-WORKER",
+            ),
+        ])
+
+        self.assertEqual(len(payload["attackPaths"]), 1)
+        path = payload["attackPaths"][0]
+        self.assertEqual(set(path["assetIds"]), {"asset:api", "asset:worker"})
+        self.assertEqual(path["assetCount"], 2)
+        self.assertEqual(path["findingCount"], 2)
+
+    def test_architecture_view_shows_internal_lateral_path_and_private_asset(self) -> None:
+        payload = _visual_payload([
+            finding_for_visual(
+                "worker",
+                "internal",
+                ["terraform network path: internal via aws_security_group.app allows traffic from sg-web -> sg-app reaches aws_instance.worker"],
+            )
+        ])
+
+        architecture = payload["architecture"]
+        assets = {asset["id"]: asset for asset in architecture["assets"]}
+        entry_hops = [hop for hop in architecture["hops"] if hop["kind"] == "entry"]
+        self.assertEqual(assets["asset:worker"]["zoneId"], "zone:private-internal")
+        self.assertTrue(any(hop["label"] == "Internal pivot" for hop in entry_hops))
+        self.assertTrue(any(hop["kind"] == "policy" for hop in architecture["hops"]))
+
+    def test_architecture_view_keeps_unknown_and_private_boundaries_distinct(self) -> None:
+        payload = _visual_payload([
+            finding_for_visual("batch", "private", []),
+            finding_for_visual("unknown", "unknown", []),
+        ])
+
+        assets = {asset["id"]: asset for asset in payload["architecture"]["assets"]}
+        self.assertEqual(assets["asset:batch"]["zoneId"], "zone:private-internal")
+        self.assertEqual(assets["asset:unknown"]["zoneId"], "zone:unknown")
+
+    def test_architecture_view_reuses_shared_ingress_for_multiple_assets(self) -> None:
+        payload = _visual_payload([
+            finding_for_visual(
+                "api",
+                "public",
+                ["terraform network path: public via aws_lb.edge public load balancer -> aws_lb_target_group.shared -> aws_ecs_service.api"],
+                component="express",
+                vulnerability="CVE-API",
+            ),
+            finding_for_visual(
+                "worker",
+                "public",
+                ["terraform network path: public via aws_lb.edge public load balancer -> aws_lb_target_group.shared -> aws_ecs_service.worker"],
+                component="requests",
+                vulnerability="CVE-WORKER",
+            ),
+        ])
+
+        hops = payload["architecture"]["hops"]
+        shared_hops = [hop for hop in hops if hop["label"] == "Ingress edge"]
+        self.assertEqual(len(shared_hops), 1)
+        self.assertEqual(set(shared_hops[0]["assetIds"]), {"asset:api", "asset:worker"})
+
+    def test_architecture_view_infers_provider_labels_for_major_platforms(self) -> None:
+        payload = _visual_payload([
+            finding_for_visual("aws-api", "public", ["context network path: public via aws_lb.edge -> aws_ecs_service.api"]),
+            finding_for_visual("azure-api", "external", ["context network path: external via azurerm_application_gateway.edge -> azurerm_linux_web_app.api"]),
+            finding_for_visual("gcp-api", "public", ["context network path: public via google_compute_forwarding_rule.edge -> google_cloud_run_service.api"]),
+            finding_for_visual("k8s-api", "public", ["context network path: public via kubernetes_ingress.edge -> kubernetes_deployment.api"]),
+            finding_for_visual("manual-api", "unknown", ["context network path: unknown via manual gateway -> manual service"]),
+        ])
+
+        providers = {asset["name"]: asset["provider"] for asset in payload["architecture"]["assets"]}
+        self.assertEqual(providers["aws-api"], "AWS")
+        self.assertEqual(providers["azure-api"], "Azure")
+        self.assertEqual(providers["gcp-api"], "GCP")
+        self.assertEqual(providers["k8s-api"], "Kubernetes")
+        self.assertEqual(providers["manual-api"], "Context")
+
     def test_code_exposure_labels_are_visible_on_assets_and_vulnerabilities(self) -> None:
         payload = _visual_payload([
             finding_for_visual("api", "public", [], reachability=Reachability.ATTACKER_CONTROLLED, tier=Tier.URGENT, score=95.0),
@@ -250,6 +381,21 @@ class VisualPayloadTests(unittest.TestCase):
         ])
 
         self.assertIn("function fanEdgePath", html)
+        self.assertIn("Attack Paths</button>", html)
+        self.assertIn("Architecture</button>", html)
+        self.assertIn("Evidence Paths</button>", html)
+        self.assertIn("Findings</button>", html)
+        self.assertIn('let viewMode = "attack"', html)
+        self.assertIn("function layoutAttackPaths", html)
+        self.assertIn("function attackEntryGroupKey", html)
+        self.assertIn("function attackBoundaryGroupKey", html)
+        self.assertIn("function collectAttackRisks", html)
+        self.assertIn("function renderAttackPathCard", html)
+        self.assertIn("function renderAttackRiskCard", html)
+        self.assertIn("Evidence and impact", html)
+        self.assertIn("function layoutArchitecture", html)
+        self.assertIn("function renderArchitectureAsset", html)
+        self.assertIn("zone-panel", html)
         self.assertIn("function renderLaneLabels", html)
         self.assertIn("function renderEdgeDefs", html)
         self.assertIn("function compactComponent", html)
@@ -310,10 +456,50 @@ class VisualPayloadTests(unittest.TestCase):
 
         edge_pairs = {(edge["source"], edge["target"], edge["role"]) for edge in graph["edges"]}
         for path in payload["networkPaths"]:
-            self.assertIn((f"{path['id']}:entry", path["id"], "entry-path"), edge_pairs)
-            self.assertIn((path["id"], path["assetId"], "path-asset"), edge_pairs)
+            self.assertIn((path["entryNodeId"], path["id"], "entry-path"), edge_pairs)
+            for asset_id in path.get("assetIds") or [path["assetId"]]:
+                self.assertIn((path["id"], asset_id, "path-asset"), edge_pairs)
         for vulnerability_node in payload["vulnerabilities"]:
             self.assertIn((vulnerability_node["assetId"], vulnerability_node["id"], "asset-vulnerability"), edge_pairs)
+
+    def test_shared_network_path_collapses_to_one_graph_node_for_multiple_assets(self) -> None:
+        payload = _visual_payload([
+            finding_for_visual(
+                "api",
+                "public",
+                ["terraform network path: public via aws_lb.edge public load balancer -> aws_lb_target_group.shared -> aws_ecs_service.api"],
+                tier=Tier.HIGH,
+                score=80.0,
+                component="express",
+                vulnerability="CVE-API",
+            ),
+            finding_for_visual(
+                "worker",
+                "public",
+                ["terraform network path: public via aws_lb.edge public load balancer -> aws_lb_target_group.shared -> aws_ecs_service.worker"],
+                tier=Tier.MEDIUM,
+                score=60.0,
+                component="requests",
+                vulnerability="CVE-WORKER",
+            ),
+        ])
+
+        self.assertEqual(len(payload["networkPaths"]), 1)
+        path = payload["networkPaths"][0]
+        self.assertEqual(path["steps"], ["aws_lb.edge public load balancer", "aws_lb_target_group.shared"])
+        self.assertEqual(set(path["assetIds"]), {"asset:api", "asset:worker"})
+        self.assertEqual(path["assetCount"], 2)
+
+        graph = _visual_graph_model(payload)
+        node_ids = {node["id"] for node in graph["nodes"]}
+        edge_pairs = {(edge["source"], edge["target"], edge["role"]) for edge in graph["edges"]}
+        self.assertFalse(graph["duplicateNodeIds"])
+        self.assertIn(path["id"], node_ids)
+        self.assertIn(path["entryNodeId"], node_ids)
+        self.assertIn((path["entryNodeId"], path["id"], "entry-path"), edge_pairs)
+        self.assertIn((path["id"], "asset:api", "path-asset"), edge_pairs)
+        self.assertIn((path["id"], "asset:worker", "path-asset"), edge_pairs)
+        self.assertEqual(len([edge for edge in graph["edges"] if edge["role"] == "entry-path"]), 1)
 
     def test_large_graph_layout_keeps_cards_bounded_and_ordered(self) -> None:
         findings: list[Finding] = []
@@ -361,8 +547,8 @@ class VisualPayloadTests(unittest.TestCase):
             self.assertLessEqual(position["y"] + position["height"], graph["bounds"]["height"])
         for asset in payload["assets"]:
             asset_position = positions[asset["id"]]
-            path = next(path for path in payload["networkPaths"] if path["assetId"] == asset["id"])
-            self.assertLess(positions[f"{path['id']}:entry"]["x"], positions[path["id"]]["x"])
+            path = next(path for path in payload["networkPaths"] if asset["id"] in (path.get("assetIds") or [path.get("assetId")]))
+            self.assertLess(positions[path["entryNodeId"]]["x"], positions[path["id"]]["x"])
             self.assertLess(positions[path["id"]]["x"], asset_position["x"])
             for vulnerability_node in [item for item in payload["vulnerabilities"] if item["assetId"] == asset["id"]]:
                 self.assertGreater(positions[vulnerability_node["id"]]["x"], asset_position["x"])

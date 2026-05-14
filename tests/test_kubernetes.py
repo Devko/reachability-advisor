@@ -631,7 +631,7 @@ subjects:
                     "scan",
                     "--sbom",
                     str(ROOT / "samples/sboms/payments-api.cdx.json"),
-                    "--vulns",
+                    "--vuln-in",
                     str(ROOT / "samples/vulnerabilities.json"),
                     "--source-root",
                     f"payments-api={ROOT / 'samples/source/payments-api'}",

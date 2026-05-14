@@ -1,0 +1,33 @@
+{
+  "security_evidence": [
+    {
+      "scanner_type": "sast",
+      "tool": "semgrep",
+      "rule_id": "js.express.reflected-xss",
+      "weakness": "Reflected XSS",
+      "severity": "high",
+      "confidence": "high",
+      "artifact": "demo-api",
+      "component": "GET /search",
+      "cwe": "CWE-79",
+      "message": "Request parameter q reaches HTML response.",
+      "route": "/search",
+      "source": {"path": "samples/demo/source/app.js", "line": 7, "column": 15, "snippet": "res.send(`<h1>${q}</h1>`);"},
+      "evidence": {"dataflow": "req.query.q -> res.send"},
+      "remediation": "Encode untrusted output before writing HTML."
+    },
+    {
+      "scanner_type": "sast",
+      "tool": "semgrep",
+      "rule_id": "js.demo.location-only",
+      "weakness": "Location-only static finding",
+      "severity": "medium",
+      "confidence": "medium",
+      "artifact": "demo-api",
+      "component": "background job",
+      "cwe": "CWE-20",
+      "message": "Input validation warning without data-flow trace.",
+      "source": {"path": "samples/demo/source/app.js", "line": 13, "column": 3, "snippet": "console.log(req.body);"}
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+{"template-id":"demo-missing-security-header","info":{"name":"Missing security header","severity":"low","classification":{"cwe-id":"CWE-693"},"description":"A low-severity runtime observation."},"matched-at":"https://demo.example.test/","matcher-name":"missing-header","type":"http"}

@@ -25,7 +25,7 @@ class CliTests(unittest.TestCase):
         code = main([
             "validate",
             "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"),
-            "--vulns", str(ROOT / "samples/vulnerabilities.json"),
+            "--vuln-in", str(ROOT / "samples/vulnerabilities.json"),
             "--policy", str(ROOT / "configs/policy.example.json"),
         ])
         self.assertEqual(code, 0)
@@ -50,7 +50,7 @@ class CliTests(unittest.TestCase):
                 "scan",
                 "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"),
                 "--sbom", str(ROOT / "samples/sboms/notifier.cdx.json"),
-                "--vulns", str(ROOT / "samples/vulnerabilities.json"),
+                "--vuln-in", str(ROOT / "samples/vulnerabilities.json"),
                 "--context", str(ROOT / "samples/context.json"),
                 "--source-root", f"payments-api={ROOT / 'samples/source/payments-api'}",
                 "--source-root", f"notifier={ROOT / 'samples/source/notifier'}",
@@ -86,7 +86,7 @@ class CliTests(unittest.TestCase):
             self.assertIn("vuln-card", html)
             self.assertIn("entry-card", html)
             self.assertIn("path-card", html)
-            self.assertIn("Ingress path", html)
+            self.assertIn("Network path", html)
             self.assertIn("Network", html)
             self.assertIn("IAM:", html)
             embedded = re.search(r'<script id="report-data" type="application/json">(.*?)</script>', html, flags=re.DOTALL)
@@ -94,12 +94,13 @@ class CliTests(unittest.TestCase):
             report_data = json.loads(embedded.group(1)) if embedded else {}
             self.assertIn("evidenceGraph", report_data)
             self.assertGreaterEqual(len(report_data["assets"]), 2)
-            self.assertGreaterEqual(len(report_data["networkPaths"]), 2)
+            self.assertGreaterEqual(len(report_data["networkPaths"]), 1)
+            self.assertTrue(any(path.get("assetIds") for path in report_data["networkPaths"]))
             self.assertGreaterEqual(len(report_data["vulnerabilities"]), 2)
             self.assertEqual(len(report_data["links"]), len(report_data["vulnerabilities"]))
             self.assertIn("::error", (out / "annotations.txt").read_text(encoding="utf-8"))
 
-    def test_scan_imports_sast_and_dast_security_evidence_as_code_weaknesses(self) -> None:
+    def test_scan_imports_sast_and_dast_security_evidence_with_separate_semantics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
             sbom = out / "web-api.cdx.json"
@@ -163,7 +164,7 @@ class CliTests(unittest.TestCase):
             code = main([
                 "scan",
                 "--sbom", str(sbom),
-                "--vulns", str(vulns),
+                "--vuln-in", str(vulns),
                 "--context", str(context),
                 "--security-evidence-in", str(security),
                 "--out", str(findings_path),
@@ -176,23 +177,30 @@ class CliTests(unittest.TestCase):
 
             self.assertEqual(code, 0)
             data = json.loads(findings_path.read_text(encoding="utf-8"))
-            code_findings = [finding for finding in data["findings"] if finding["finding_type"] == "code_weakness"]
-            self.assertEqual(len(code_findings), 2)
+            static_findings = [finding for finding in data["findings"] if finding["finding_type"] == "static_code_weakness"]
+            runtime_findings = [finding for finding in data["findings"] if finding["finding_type"] == "dynamic_runtime_observation"]
+            code_findings = [*static_findings, *runtime_findings]
+            self.assertEqual(len(static_findings), 1)
+            self.assertEqual(len(runtime_findings), 1)
             self.assertEqual(data["metadata"]["security_evidence_records"], 2)
             self.assertEqual(data["metadata"]["security_evidence_mapped"], 2)
             self.assertEqual({finding["weakness"]["scanner_type"] for finding in code_findings}, {"sast", "dast"})
             self.assertTrue(any(finding["context"]["exposure"] == "public" for finding in code_findings if finding["weakness"]["scanner_type"] == "dast"))
-            self.assertTrue(any(edge["kind"] == "code_has_weakness" for edge in data["evidence_graph"]["effective_exposure_graph"]["edges"]))
+            self.assertEqual(runtime_findings[0]["runtime_evidence"]["state"], "vulnerability_observed")
+            self.assertEqual(runtime_findings[0]["source_reachability"]["state"], "package_present")
+            self.assertIn("source mapping unavailable", runtime_findings[0]["unknowns"])
+            self.assertTrue(any(edge["kind"] == "scanner_reports_security_finding" for edge in data["evidence_graph"]["effective_exposure_graph"]["edges"]))
             sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
-            self.assertTrue(any(result["properties"]["finding_type"] == "code_weakness" for result in sarif["runs"][0]["results"]))
+            self.assertTrue(any(result["properties"]["finding_type"] == "static_code_weakness" for result in sarif["runs"][0]["results"]))
+            self.assertTrue(any(result["properties"]["finding_type"] == "dynamic_runtime_observation" for result in sarif["runs"][0]["results"]))
             diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
-            self.assertTrue(any(diagnostic["finding_type"] == "code_weakness" for diagnostic in diagnostics["diagnostics"]))
+            self.assertEqual({diagnostic["finding_type"] for diagnostic in diagnostics["diagnostics"]}, {"static_code_weakness"})
             source_coverage = json.loads(source_coverage_path.read_text(encoding="utf-8"))
             self.assertEqual(source_coverage["security_evidence"]["mapped"], 2)
             self.assertEqual(source_coverage["security_evidence"]["summary"]["critical_profile_coverage"], 1.0)
             self.assertIn("sast-web-injection", source_coverage["security_evidence"]["profile_records"][0]["profiles"])
             html = html_path.read_text(encoding="utf-8")
-            self.assertIn("code weaknesses", html)
+            self.assertIn("runtime", html)
 
     def test_scan_security_profile_gate_rejects_uncovered_critical_weakness(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -235,7 +243,7 @@ class CliTests(unittest.TestCase):
             code = main([
                 "scan",
                 "--sbom", str(sbom),
-                "--vulns", str(vulns),
+                "--vuln-in", str(vulns),
                 "--security-evidence-in", str(security),
                 "--source-coverage-out", str(coverage),
                 "--min-critical-security-profile-coverage", "1.0",
@@ -278,7 +286,123 @@ class CliTests(unittest.TestCase):
             self.assertEqual(records[0].artifact, "web-api")
             self.assertEqual(records[0].cwe, "CWE-79")
 
-    def test_semgrep_oss_sarif_sample_imports_as_code_weakness(self) -> None:
+    def test_zap_and_nuclei_are_loaded_as_runtime_evidence(self) -> None:
+        zap = ROOT / "samples/demo/dast-zap.json"
+        nuclei = ROOT / "samples/demo/dast-nuclei.jsonl"
+
+        records = load_security_evidence([zap, nuclei], default_scanner_type="dast")
+
+        self.assertGreaterEqual(len(records), 3)
+        self.assertEqual({record.scanner_type for record in records}, {"dast"})
+        self.assertTrue(any(record.tool == "zap" and record.cwe == "CWE-79" for record in records))
+        self.assertTrue(any(record.tool == "nuclei" and record.cwe == "CWE-693" for record in records))
+
+    def test_jsonl_without_nuclei_shape_loads_as_normalized_security_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "security-evidence.jsonl"
+            path.write_text(
+                json.dumps(
+                    {
+                        "scanner_type": "dast",
+                        "tool": "custom-dast",
+                        "rule_id": "xss-reflected",
+                        "weakness": "reflected xss",
+                        "url": "https://shop.example.test/search?q=x",
+                        "cwe": "CWE-79",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            records = load_security_evidence([path], default_scanner_type="dast")
+
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0].tool, "custom-dast")
+            self.assertEqual(records[0].scanner_type, "dast")
+            self.assertEqual(records[0].rule_id, "xss-reflected")
+            self.assertEqual(records[0].cwe, "CWE-79")
+
+    def test_scan_aliases_correlation_and_runtime_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            findings_path = out / "findings.json"
+            markdown_path = out / "summary.md"
+            diagnostics_path = out / "diagnostics.json"
+            sarif_path = out / "findings.sarif"
+            html_path = out / "graph.html"
+
+            code = main([
+                "scan",
+                "--sbom", str(ROOT / "samples/demo/sbom.cdx.json"),
+                "--vuln-in", str(ROOT / "samples/demo/vulnerabilities.json"),
+                "--sast-in", str(ROOT / "samples/demo/sast-semgrep.json"),
+                "--dast-in", str(ROOT / "samples/demo/dast-zap.json"),
+                "--kubernetes-manifest", str(ROOT / "samples/demo/kubernetes.yaml"),
+                "--source-root", f"demo-api={ROOT / 'samples/demo/source'}",
+                "--out", str(findings_path),
+                "--markdown-out", str(markdown_path),
+                "--diagnostics-out", str(diagnostics_path),
+                "--sarif-out", str(sarif_path),
+                "--html-out", str(html_path),
+                "--no-table",
+            ])
+
+            self.assertEqual(code, 0)
+            data = json.loads(findings_path.read_text(encoding="utf-8"))
+            runtime = [finding for finding in data["findings"] if finding["finding_type"] == "dynamic_runtime_observation"]
+            static = [finding for finding in data["findings"] if finding["finding_type"] == "static_code_weakness"]
+            self.assertTrue(runtime)
+            self.assertTrue(static)
+            self.assertTrue(any(finding["artifact"]["name"] == "demo-api" for finding in runtime))
+            self.assertTrue(any(item["correlation_type"] == "sast_dast_route_match" for finding in runtime + static for item in finding["correlated_evidence"]))
+            self.assertTrue(any("source mapping unavailable" in finding["unknowns"] for finding in runtime))
+            diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+            self.assertTrue(diagnostics["diagnostics"])
+            self.assertTrue(all(not diagnostic["uri"].startswith("security-evidence://") for diagnostic in diagnostics["diagnostics"]))
+            markdown = markdown_path.read_text(encoding="utf-8")
+            self.assertIn("## Runtime-observed findings", markdown)
+            self.assertIn("## Correlated findings", markdown)
+            html = html_path.read_text(encoding="utf-8")
+            self.assertIn("dynamic_runtime_observation", html)
+
+    def test_dast_unmapped_remains_visible_and_does_not_invent_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            findings_path = out / "findings.json"
+            diagnostics_path = out / "diagnostics.json"
+            code = main([
+                "scan",
+                "--sbom", str(ROOT / "samples/demo/sbom.cdx.json"),
+                "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"),
+                "--vuln-in", str(ROOT / "samples/demo/vulnerabilities.json"),
+                "--dast-in", str(ROOT / "samples/demo/dast-zap.json"),
+                "--out", str(findings_path),
+                "--diagnostics-out", str(diagnostics_path),
+                "--no-table",
+            ])
+
+            self.assertEqual(code, 0)
+            data = json.loads(findings_path.read_text(encoding="utf-8"))
+            unmapped = [finding for finding in data["findings"] if finding["artifact"]["name"].startswith("unmapped:")]
+            self.assertTrue(unmapped)
+            self.assertTrue(all(finding["source_reachability"]["state"] == "package_present" for finding in unmapped))
+            diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+            self.assertEqual(diagnostics["diagnostics"], [])
+
+    def test_demo_command_writes_multi_scanner_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "demo"
+            code = main(["demo", "--output-dir", str(out)])
+
+            self.assertEqual(code, 0)
+            for name in ("findings.json", "summary.md", "reachability.sarif", "diagnostics.json", "reachability-graph.html", "mapping.json", "source-coverage.json", "kubernetes-coverage.json"):
+                self.assertTrue((out / name).exists(), name)
+            data = json.loads((out / "findings.json").read_text(encoding="utf-8"))
+            self.assertTrue(any(finding["finding_type"] == "dynamic_runtime_observation" for finding in data["findings"]))
+            self.assertTrue(any(finding["correlated_evidence"] for finding in data["findings"]))
+
+    def test_semgrep_oss_sarif_sample_imports_as_static_finding(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
             sbom = out / "web-api.cdx.json"
@@ -306,7 +430,7 @@ class CliTests(unittest.TestCase):
             code = main([
                 "scan",
                 "--sbom", str(sbom),
-                "--vulns", str(vulns),
+                "--vuln-in", str(vulns),
                 "--security-evidence-in", str(semgrep_sarif),
                 "--out", str(findings_path),
                 "--no-table",
@@ -316,12 +440,12 @@ class CliTests(unittest.TestCase):
             data = json.loads(findings_path.read_text(encoding="utf-8"))
             self.assertEqual(len(data["findings"]), 1)
             finding = data["findings"][0]
-            self.assertEqual(finding["finding_type"], "code_weakness")
+            self.assertEqual(finding["finding_type"], "static_code_weakness")
             self.assertEqual(finding["weakness"]["tool"], "Semgrep OSS")
             self.assertEqual(finding["weakness"]["cwe"], "CWE-79")
             self.assertEqual(finding["source_reachability"]["state"], "attacker_controlled")
 
-    def test_real_world_nodejs_goof_sarif_imports_as_code_weakness(self) -> None:
+    def test_real_world_nodejs_goof_sarif_imports_as_static_finding(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
             sbom = out / "nodejs-goof.cdx.json"
@@ -343,7 +467,7 @@ class CliTests(unittest.TestCase):
             code = main([
                 "scan",
                 "--sbom", str(sbom),
-                "--vulns", str(vulns),
+                "--vuln-in", str(vulns),
                 "--security-evidence-in", str(sarif),
                 "--out", str(findings_path),
                 "--no-table",
@@ -354,7 +478,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(len(data["findings"]), 1)
             finding = data["findings"][0]
             self.assertEqual(finding["artifact"]["name"], "nodejs-goof")
-            self.assertEqual(finding["finding_type"], "code_weakness")
+            self.assertEqual(finding["finding_type"], "static_code_weakness")
             self.assertEqual(finding["weakness"]["weakness"], "command_injection")
             self.assertEqual(finding["weakness"]["cwe"], "CWE-78")
             self.assertEqual(finding["source_reachability"]["state"], "attacker_controlled")
@@ -367,7 +491,7 @@ class CliTests(unittest.TestCase):
             code = main([
                 "scan",
                 "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"),
-                "--vulns", str(ROOT / "samples/vulnerabilities.json"),
+                "--vuln-in", str(ROOT / "samples/vulnerabilities.json"),
                 "--mapping-out", str(mapping),
                 "--min-artifact-match-coverage", "1.0",
                 "--no-table",
@@ -382,7 +506,7 @@ class CliTests(unittest.TestCase):
         code = main([
             "scan",
             "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"),
-            "--vulns", str(ROOT / "samples/vulnerabilities.json"),
+            "--vuln-in", str(ROOT / "samples/vulnerabilities.json"),
             "--min-artifact-match-coverage", "nan",
             "--no-table",
         ])
@@ -411,7 +535,7 @@ class CliTests(unittest.TestCase):
             code = main([
                 "scan",
                 "--sbom", str(sbom),
-                "--vulns", str(vulns),
+                "--vuln-in", str(vulns),
                 "--source-evidence-in", str(evidence),
                 "--min-external-evidence-usable-ratio", "1.0",
                 "--no-table",
@@ -423,7 +547,7 @@ class CliTests(unittest.TestCase):
         code = main([
             "scan",
             "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"),
-            "--vulns", str(ROOT / "samples/vulnerabilities.json"),
+            "--vuln-in", str(ROOT / "samples/vulnerabilities.json"),
             "--analysis-profile", "production",
             "--no-table",
         ])
@@ -497,7 +621,7 @@ class CliTests(unittest.TestCase):
             code = main([
                 "scan",
                 "--sbom", str(sbom),
-                "--vulns", str(vulns),
+                "--vuln-in", str(vulns),
                 "--source-root", f"app={source}",
                 "--source-evidence-in", str(evidence),
                 "--terraform-plan", str(plan),
@@ -574,7 +698,7 @@ class CliTests(unittest.TestCase):
             code = main([
                 "scan",
                 "--sbom", str(sbom),
-                "--vulns", str(vulns),
+                "--vuln-in", str(vulns),
                 "--source-root", f"app={source}",
                 "--source-evidence-in", str(evidence),
                 "--terraform-plan", str(plan),
@@ -652,7 +776,7 @@ class CliTests(unittest.TestCase):
             code = main([
                 "scan",
                 "--sbom", str(sbom),
-                "--vulns", str(vulns),
+                "--vuln-in", str(vulns),
                 "--source-root", f"app={source}",
                 "--source-evidence-in", str(evidence),
                 "--terraform-plan", str(plan),
@@ -693,7 +817,7 @@ class CliTests(unittest.TestCase):
             code = main([
                 "scan",
                 "--sbom", str(sbom),
-                "--vulns", str(vulns),
+                "--vuln-in", str(vulns),
                 "--source-root", f"app={source}",
                 "--source-evidence-in", str(evidence),
                 "--terraform-plan", str(plan),
@@ -783,7 +907,7 @@ class CliTests(unittest.TestCase):
             code = main([
                 "scan",
                 "--sbom", str(sbom),
-                "--vulns", str(vulns),
+                "--vuln-in", str(vulns),
                 "--source-root", f"app={source}",
                 "--source-evidence-in", str(evidence),
                 "--terraform-plan", str(plan),
@@ -842,7 +966,7 @@ class CliTests(unittest.TestCase):
             code = main([
                 "scan",
                 "--sbom", str(ROOT / "samples/sboms/notifier.cdx.json"),
-                "--vulns", str(vulns),
+                "--vuln-in", str(vulns),
                 "--source-root", f"notifier={ROOT / 'samples/source/notifier'}",
                 "--out", str(findings_path),
                 "--no-table",
@@ -862,7 +986,7 @@ class CliTests(unittest.TestCase):
             code = main([
                 "scan",
                 "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"),
-                "--vulns", str(ROOT / "samples/vulnerabilities.json"),
+                "--vuln-in", str(ROOT / "samples/vulnerabilities.json"),
                 "--context", str(ROOT / "samples/context.json"),
                 "--source-root", f"payments-api={ROOT / 'samples/source/payments-api'}",
                 "--out", str(Path(tmp) / "findings.json"),
@@ -939,7 +1063,7 @@ class CliTests(unittest.TestCase):
             code = main([
                 "scan",
                 "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"),
-                "--vulns", str(ROOT / "samples/vulnerabilities.json"),
+                "--vuln-in", str(ROOT / "samples/vulnerabilities.json"),
                 "--source-root", f"payments-api={ROOT / 'samples/source/payments-api'}",
                 "--mapping-out", str(out / "mapping.json"),
                 "--source-coverage-out", str(out / "source-coverage.json"),
@@ -959,7 +1083,7 @@ class CliTests(unittest.TestCase):
             main([
                 "scan",
                 "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"),
-                "--vulns", str(ROOT / "samples/vulnerabilities.json"),
+                "--vuln-in", str(ROOT / "samples/vulnerabilities.json"),
                 "--context", str(ROOT / "samples/context.json"),
                 "--source-root", f"payments-api={ROOT / 'samples/source/payments-api'}",
                 "--out", str(findings_path),
@@ -978,7 +1102,7 @@ class CliTests(unittest.TestCase):
             main([
                 "scan",
                 "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"),
-                "--vulns", str(ROOT / "samples/vulnerabilities.json"),
+                "--vuln-in", str(ROOT / "samples/vulnerabilities.json"),
                 "--context", str(ROOT / "samples/context.json"),
                 "--source-root", f"payments-api={ROOT / 'samples/source/payments-api'}",
                 "--out", str(head),
@@ -998,7 +1122,7 @@ class CliTests(unittest.TestCase):
             scan_code = main([
                 "scan",
                 "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"),
-                "--vulns", str(ROOT / "samples/vulnerabilities.json"),
+                "--vuln-in", str(ROOT / "samples/vulnerabilities.json"),
                 "--context", str(ROOT / "samples/context.json"),
                 "--source-root", f"payments-api={ROOT / 'samples/source/payments-api'}",
                 "--out", str(head),
@@ -1053,7 +1177,7 @@ class PolicyTests(unittest.TestCase):
             main([
                 "scan",
                 "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"),
-                "--vulns", str(ROOT / "samples/vulnerabilities.json"),
+                "--vuln-in", str(ROOT / "samples/vulnerabilities.json"),
                 "--context", str(ROOT / "samples/context.json"),
                 "--source-root", f"payments-api={ROOT / 'samples/source/payments-api'}",
                 "--out", str(out),

@@ -6,7 +6,7 @@ Release-gate inputs:
 
 - CycloneDX SBOM JSON;
 - Grype JSON, OSV-style JSON, or normalized vulnerability JSON;
-- normalized SAST/DAST evidence, Semgrep JSON, or SARIF for first-party code weaknesses;
+- normalized SAST/DAST evidence, Semgrep JSON, SARIF, ZAP JSON, or Nuclei JSONL;
 - source-root mappings;
 - external source evidence from Semgrep, CodeQL/SARIF, govulncheck, or native JSON;
 - Terraform plan JSON and/or rendered Kubernetes manifests;
@@ -62,7 +62,7 @@ grype sbom:sboms/payments-api.cdx.json -o json > vulns/payments-api.grype.json
 
 reachability-advisor scan \
   --sbom sboms/payments-api.cdx.json \
-  --vulns vulns/payments-api.grype.json \
+  --vuln-in vulns/payments-api.grype.json \
   --source-root payments-api=. \
   --terraform-plan tfplan.json
 ```
@@ -227,7 +227,7 @@ For CodeQL, generic query ids such as `js/request-forgery` are kept as matched s
 
 ## Security evidence for SAST and DAST
 
-Use `--security-evidence-in` for first-party code weaknesses. This is separate from dependency reachability evidence. The scanner imports these records as `finding_type: code_weakness` and scores them with the same network, IAM, criticality, baseline, policy, SARIF, Markdown, JSON, and HTML paths used by dependency findings.
+Use `--sast-in`, `--dast-in`, or generic `--security-evidence-in` for first-party scanner findings. This is separate from dependency reachability evidence. The scanner imports SAST as `finding_type: static_code_weakness` and DAST as `finding_type: dynamic_runtime_observation`.
 
 Prefer SARIF 2.1.0 when a scanner can emit it. SARIF is the broad static-analysis interchange format, so one adapter can cover Semgrep, CodeQL, and other tools that preserve rule metadata, source locations, and code-flow records. Native scanner JSON remains useful when a tool emits richer fields than SARIF or does not support SARIF.
 
@@ -275,7 +275,7 @@ Supported imported formats:
 
 Artifact matching is explicit. Prefer `artifact`, image reference, registry reference, or digest metadata that matches a supplied SBOM artifact. Unmatched SAST/DAST records are reported under `source-coverage.json.security_evidence.unmapped_records`.
 
-High and critical SAST/DAST records should carry a CWE that maps to a maintained security profile. The scanner reports this as `source-coverage.json.security_evidence.summary.critical_profile_coverage`. Use `--min-critical-security-profile-coverage 1.0` to fail when imported critical code weaknesses are outside the maintained profile catalog.
+High and critical SAST/DAST records should carry a CWE that maps to a maintained security profile. The scanner reports this as `source-coverage.json.security_evidence.summary.critical_profile_coverage`. Use `--min-critical-security-profile-coverage 1.0` to fail when imported critical static or runtime findings are outside the maintained profile catalog.
 
 Checked-in examples:
 
@@ -960,7 +960,9 @@ The main scan output is:
 }
 ```
 
-`remediations[]` groups findings by artifact and dependency. Each finding still includes artifact, component, vulnerability, source reachability, context, score, tier, confidence, rationale, fix commands, and policy status. `scoring` contains the scoring model version, per-dimension point contributions, gates/caps that applied, final score, final tier, and a compact `effective_exposure_path` reference.
+`remediations[]` groups findings by artifact and dependency. Each finding still includes artifact, component, vulnerability, source reachability, context, score, tier, confidence, rationale, fix commands, and policy status. `scoring` contains the graph scoring model version, graph decision, explanatory dimensions, gates/caps that applied, final score, final tier, and a compact `effective_exposure_path` reference.
+
+`scoring.graph_decision` is the authoritative priority decision. It includes the confirmed `tier`, `potential_tier` for unresolved high-impact paths, `confidence`, `matched_rule`, `drivers`, `blockers`, `unknowns`, `visibility_gaps`, and small `band_adjustments` used only to order findings inside the chosen tier band. `scoring.dimensions[].points` remains present for compatibility but is `0.0` in the graph-first model because dimensions explain path evidence instead of adding risk points.
 
 `source_reachability.state` is one of `absent`, `unknown_due_to_no_rule`, `package_present`, `dependency_reachable`, `imported`, `function_reachable`, or `attacker_controlled`. `source_reachability.label` is the human-facing version used by reports: `absent from scanned source`, `no source rule`, `SBOM only`, `dependency evidence`, `import observed`, `reachable vulnerable API`, or `request-controlled path`. The `unknown_due_to_no_rule` state is a coverage warning: the vulnerable package is present, but no package-specific source rule exists and generic import evidence was not observed.
 
@@ -1111,13 +1113,15 @@ The report is a single HTML file with embedded JSON, CSS, and JavaScript. It doe
 
 It visualizes:
 
-- attacker entry and ingress/path cards derived from Terraform network-path evidence, such as Internet -> public security group/load balancer/application gateway -> workload;
-- deployable asset cards with network, IAM, code exposure, source, environment, owner, and criticality context;
-- finding cards linked to the affected asset, including dependency vulnerabilities and imported code weaknesses with a plain code-exposure label such as `request-controlled path`, `reachable vulnerable API`, `dependency evidence`, `SBOM only`, or `no source rule`;
-- colors that emphasize the highest tier/criticality on each asset and finding;
+- an architecture-first canvas with generic cloud zones: Internet / External, Edge / Ingress, Public, Private / Internal, Data / Identity, and Unknown / Unresolved;
+- network hops and shared ingress paths derived from Terraform, Kubernetes, context, and evidence-graph network path records;
+- deployable asset cards placed inside the strongest proven zone, with provider hints such as AWS, Azure, GCP, Kubernetes, or Context;
+- asset severity color, score, finding counts, static/runtime/dependency badges, network, IAM, code exposure, source, environment, owner, and criticality context;
+- side-panel finding details for the selected asset or hop, rather than drawing every finding as a primary architecture node;
+- a secondary Evidence Paths view that preserves the older entry -> network path -> asset -> finding graph for audit traceability;
 - a searchable, filterable findings list with click-through details.
 
-The graph supports mouse-wheel zoom, drag-to-pan, tier filtering, exposure filtering, active-only filtering, and text search. Use `--out` findings JSON for automation.
+The graph supports mouse-wheel zoom, drag-to-pan, tier filtering, exposure filtering, active-only filtering, top-per-asset filtering, view tabs, and text search. Use `--out` findings JSON for automation.
 
 ## Terraform fixture pack JSON
 

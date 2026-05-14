@@ -1,8 +1,8 @@
 # Quickstart
 
-This guide runs the checked-in sample and shows the files to inspect. The sample includes SBOMs, vulnerability data, source roots, a multi-cloud Terraform plan, and rendered Kubernetes manifests.
+This guide runs the checked-in demo and sample data, then shows the files to inspect. The sample includes SBOMs, vulnerability data, source roots, a multi-cloud Terraform plan, rendered Kubernetes manifests, and scanner evidence.
 
-## 1. Install locally
+## Install Locally
 
 ```bash
 python -m venv .venv
@@ -10,7 +10,69 @@ python -m venv .venv
 python -m pip install -e .
 ```
 
-## 2. Run the sample scan
+## Run The Demo
+
+The demo uses checked-in files only. It does not require cloud credentials or network access.
+
+```bash
+python -m reachability_advisor demo
+```
+
+The command writes the report set to `outputs/demo/`, including:
+
+- `outputs/demo/findings.json`
+- `outputs/demo/summary.md`
+- `outputs/demo/reachability.sarif`
+- `outputs/demo/diagnostics.json`
+- `outputs/demo/reachability-graph.html`
+- `outputs/demo/mapping.json`
+- `outputs/demo/source-coverage.json`
+- `outputs/demo/kubernetes-coverage.json`
+
+## Common Workflows
+
+Dependency-only prioritization:
+
+```bash
+reachability-advisor scan \
+  --sbom sboms/app.cdx.json \
+  --vuln-in grype.json \
+  --out outputs/findings.json \
+  --markdown-out outputs/summary.md
+```
+
+AppSec triage with SAST and DAST:
+
+```bash
+reachability-advisor scan \
+  --sbom sboms/app.cdx.json \
+  --vuln-in grype.json \
+  --sast-in semgrep.json \
+  --dast-in zap.json \
+  --source-root app=. \
+  --out outputs/findings.json \
+  --html-out outputs/reachability-graph.html
+```
+
+Deployment-aware release gate:
+
+```bash
+reachability-advisor scan \
+  --sbom sboms/app.cdx.json \
+  --vuln-in grype.json \
+  --sast-in semgrep.json \
+  --dast-in zap.json \
+  --source-root app=. \
+  --terraform-plan tfplan.json \
+  --kubernetes-manifest rendered.yaml \
+  --analysis-profile production \
+  --fail-on-tier high \
+  --out outputs/findings.json
+```
+
+Use Terraform plans and rendered Kubernetes manifests for release gates. Static source files are useful for early PR feedback, but plans and rendered manifests carry the deployment evidence needed for stronger decisions.
+
+## Run The Sample Scan
 
 ```bash
 ./scripts/run_sample.sh
@@ -23,7 +85,7 @@ The command writes:
 - `outputs/findings.sarif` - CI/code-scanning output;
 - `outputs/diagnostics.json` - editor diagnostics output;
 - `outputs/pr-summary.md` - pull request summary;
-- `outputs/reachability-graph.html` - searchable graph of assets, vulnerabilities, network/IAM context, code exposure, and findings;
+- `outputs/reachability-graph.html` - interactive attack-path report with asset context, findings, network/IAM evidence, source/runtime evidence, and traceable evidence paths;
 - `outputs/evidence-graph.json` - structured asset/component/vulnerability/network/IAM/code graph used by the HTML report;
 - `outputs/annotations.txt` - GitHub Actions workflow-command annotations;
 - `outputs/terraform-coverage.json` - Terraform resource accounting, semantic coverage, artifact matches, and visibility gaps;
@@ -32,7 +94,7 @@ The command writes:
 - `outputs/mapping.json` - SBOM, source-root, and Terraform workload mapping.
 
 
-## 3. Inspect mapping logic
+## Inspect Mapping Logic
 
 ```bash
 python - <<'PY'
@@ -48,7 +110,7 @@ PY
 
 Use this report first when a finding looks wrong. It shows the artifact candidates, source root status, Terraform match methods, match scores, and warnings.
 
-## 4. Inspect deployment coverage
+## Inspect Deployment Coverage
 
 ```bash
 python - <<'PY'
@@ -63,7 +125,7 @@ PY
 
 The sample plan reports `1.0` resource accounting, semantic classification, and artifact matching across AWS, Azure, GCP, and Kubernetes resources. The rendered manifest sample shows direct public service exposure and Kubernetes RBAC impact for matched workloads.
 
-## 5. Explain one finding
+## Explain One Finding
 
 ```bash
 reachability-advisor explain \
@@ -73,12 +135,12 @@ reachability-advisor explain \
   --vulnerability CVE-2021-44228
 ```
 
-## 6. Run a release-style gate
+## Run A Release-Style Gate
 
 ```bash
 reachability-advisor scan \
   --sbom samples/sboms/payments-api.cdx.json \
-  --vulns samples/vulnerabilities.json \
+  --vuln-in samples/vulnerabilities.json \
   --terraform-plan samples/tfplan-multicloud.json \
   --terraform-coverage-out outputs/terraform-coverage.json \
   --kubernetes-manifest samples/kubernetes-manifest.yaml \
@@ -96,7 +158,7 @@ reachability-advisor scan \
   --no-table
 ```
 
-## 7. Compare a pull request with the default-branch baseline
+## Compare A Pull Request With The Default-Branch Baseline
 
 ```bash
 reachability-advisor compare \
@@ -108,7 +170,7 @@ reachability-advisor compare \
 
 The baseline file is written by `scan --baseline-out` on the default branch. With `--baseline`, the delta report contains only new and worsened findings.
 
-## 8. Run Terraform fixture packs
+## Run Terraform Fixture Packs
 
 ```bash
 ./scripts/run_fixture_packs.sh
@@ -132,4 +194,21 @@ Run one pack:
 
 ```bash
 reachability-advisor fixtures run --fixture gcp-cloud-run
+```
+
+## Run The Full Local Gate
+
+Before publishing a release or large behavior change, run the same gate used by maintainers:
+
+```bash
+make compile
+make lint
+make type-check
+make test
+make coverage
+make sample
+make fixtures
+make release-check
+make package
+make demo
 ```

@@ -35,13 +35,33 @@
         "required": ["key", "artifact", "component", "vulnerability", "score", "tier", "source_reachability"],
         "properties": {
           "key": {"type": "string"},
-          "finding_type": {"enum": ["dependency_vulnerability", "code_weakness"]},
+          "finding_type": {"enum": ["dependency_vulnerability", "static_code_weakness", "dynamic_runtime_observation", "correlated_security_finding"]},
           "score": {"type": "number", "minimum": 0, "maximum": 100},
           "tier": {"enum": ["urgent", "high", "medium", "low", "informational"]},
           "artifact": {"type": "object"},
           "component": {"type": "object"},
           "vulnerability": {"type": "object"},
           "weakness": {"type": "object"},
+          "runtime_evidence": {
+            "type": "object",
+            "properties": {
+              "state": {"enum": ["not_observed", "endpoint_observed", "vulnerability_observed", "authenticated_observed", "unauthenticated_observed"]},
+              "confidence": {"enum": ["high", "medium", "low"]},
+              "tool": {"type": ["string", "null"]},
+              "url": {"type": ["string", "null"]},
+              "method": {"type": ["string", "null"]},
+              "parameter": {"type": ["string", "null"]},
+              "request_evidence": {"type": ["string", "null"]},
+              "response_evidence": {"type": ["string", "null"]},
+              "authentication_context": {"type": ["string", "null"]},
+              "evidence_source": {"type": ["string", "null"]},
+              "diagnostics": {"type": "array", "items": {"type": "object"}}
+            }
+          },
+          "correlated_evidence": {"type": "array", "items": {"type": "object"}},
+          "input_sources": {"type": "array", "items": {"type": "object"}},
+          "unknowns": {"type": "array", "items": {"type": "string"}},
+          "evidence_summary": {"type": "array", "items": {"type": "string"}},
           "source_reachability": {
             "type": "object",
             "required": ["state", "label"],
@@ -75,6 +95,21 @@
               "model_version": {"type": "string"},
               "dimensions": {"type": "array", "items": {"type": "object"}},
               "gates": {"type": "array", "items": {"type": "object"}},
+              "graph_decision": {
+                "type": "object",
+                "properties": {
+                  "scoring_model": {"type": "string"},
+                  "tier": {"enum": ["urgent", "high", "medium", "low", "informational"]},
+                  "potential_tier": {"enum": ["urgent", "high", "medium", "low", "informational"]},
+                  "confidence": {"enum": ["high", "medium", "low"]},
+                  "matched_rule": {"type": "string"},
+                  "drivers": {"type": "array", "items": {"type": "string"}},
+                  "blockers": {"type": "array", "items": {"type": "string"}},
+                  "unknowns": {"type": "array", "items": {"type": "string"}},
+                  "visibility_gaps": {"type": "array", "items": {"type": "string"}},
+                  "band_adjustments": {"type": "array", "items": {"type": "object"}}
+                }
+              },
               "final_score": {"type": "number", "minimum": 0, "maximum": 100},
               "tier": {"enum": ["urgent", "high", "medium", "low", "informational"]}
             }

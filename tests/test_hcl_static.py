@@ -425,7 +425,7 @@ class HclStaticCoverageBoostTests(unittest.TestCase):
                     "scan",
                     "--sbom",
                     str(Path("samples/sboms/audit-api.cdx.json")),
-                    "--vulns",
+                    "--vuln-in",
                     str(Path("samples/vulnerabilities.json")),
                     "--terraform-plan",
                     str(plan),

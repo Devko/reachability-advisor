@@ -423,7 +423,7 @@ def _run_advisor(
         args.extend(["--kubernetes-coverage-out", str(kubernetes_coverage_out)])
         if infer_kubernetes_lateral:
             args.append("--kubernetes-infer-lateral")
-    args.extend(["--vulns", str(merged_vulns)])
+    args.extend(["--vuln-in", str(merged_vulns)])
     if terraform_source:
         args.extend(["--terraform-source", str(terraform_source), "--terraform-coverage-out", str(coverage_out)])
     args.extend(

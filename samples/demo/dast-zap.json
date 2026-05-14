@@ -1,0 +1,43 @@
+{
+  "site": [
+    {
+      "@name": "https://demo.example.test",
+      "@host": "demo.example.test",
+      "alerts": [
+        {
+          "pluginid": "40012",
+          "alert": "Cross Site Scripting (Reflected)",
+          "riskdesc": "High (Medium)",
+          "confidence": "high",
+          "cweid": "79",
+          "desc": "Reflected payload was observed in the response.",
+          "solution": "Encode reflected output and set a restrictive content security policy.",
+          "reference": "https://owasp.org/www-community/attacks/xss/",
+          "instances": [
+            {
+              "uri": "https://demo.example.test/search?q=%3Cscript%3Ealert(1)%3C/script%3E",
+              "method": "GET",
+              "param": "q",
+              "attack": "<script>alert(1)</script>",
+              "evidence": "<script>alert(1)</script>"
+            }
+          ]
+        },
+        {
+          "pluginid": "10098",
+          "alert": "Informational header observation",
+          "riskdesc": "Informational",
+          "confidence": "medium",
+          "desc": "A non-critical response header observation.",
+          "instances": [
+            {
+              "uri": "https://unmapped.example.test/status",
+              "method": "GET",
+              "evidence": "Server: demo"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

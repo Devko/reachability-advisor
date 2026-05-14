@@ -1,7 +1,7 @@
 {
   "name": "reachability-advisor-vscode",
   "displayName": "Reachability Advisor",
-  "description": "Runs Reachability Advisor and displays dependency vulnerability diagnostics.",
+  "description": "Runs Reachability Advisor and displays prioritized dependency, SAST, DAST, and evidence diagnostics.",
   "version": "1.0.0",
   "publisher": "reachability-advisor-contributors",
   "license": "GPL-3.0-or-later",
@@ -58,7 +58,7 @@
           "default": "app.cdx.json",
           "description": "CycloneDX SBOM path relative to the workspace root."
         },
-        "reachabilityAdvisor.vulns": {
+        "reachabilityAdvisor.vulnIn": {
           "type": "string",
           "default": "vulnerabilities.json",
           "description": "Vulnerability intelligence JSON path relative to the workspace root."

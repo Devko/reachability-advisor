@@ -23,7 +23,7 @@ What it does:
 
 - `reachabilityAdvisor.executable`: CLI path. Default: `reachability-advisor`.
 - `reachabilityAdvisor.sbom`: CycloneDX SBOM path. If empty or missing, the extension tries common local names.
-- `reachabilityAdvisor.vulns`: Grype or normalized vulnerability JSON path. If empty or missing, the extension tries common local names.
+- `reachabilityAdvisor.vulnIn`: Grype or normalized vulnerability JSON path. If empty or missing, the extension tries common local names.
 - `reachabilityAdvisor.sourceRootArtifact`: artifact name used for `artifact=workspace`.
 - `reachabilityAdvisor.analysisProfile`: `advisory` for local feedback, `production` for strict evidence gates.
 - `reachabilityAdvisor.sourceEvidence`: Semgrep, CodeQL/SARIF, govulncheck, or native evidence paths.

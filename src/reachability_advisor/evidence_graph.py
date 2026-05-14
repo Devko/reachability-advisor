@@ -15,6 +15,7 @@ from typing import Any
 
 from . import __version__
 from .effective_graph import build_effective_exposure_graph, effective_path_id
+from .finding_types import canonical_finding_type, finding_kind, is_dependency_finding
 from .iam_capabilities import dedupe_iam_capabilities
 from .models import Finding, reachability_label
 from .numeric import safe_float
@@ -35,6 +36,8 @@ def build_evidence_graph(findings: list[Finding], metadata: dict[str, Any] | Non
     network_edges: dict[str, dict[str, Any]] = {}
     iam_edges: dict[str, dict[str, Any]] = {}
     finding_edges: list[dict[str, Any]] = []
+    runtime_nodes: dict[str, dict[str, Any]] = {}
+    correlation_edges: dict[str, dict[str, Any]] = {}
 
     for finding in findings:
         asset_id = _asset_id(finding.artifact.name)
@@ -81,7 +84,7 @@ def build_evidence_graph(findings: list[Finding], metadata: dict[str, Any] | Non
             vulnerability_id,
             {
                 "id": vulnerability_id,
-                "kind": "vulnerability" if finding.finding_type == "dependency_vulnerability" else "code_weakness",
+                "kind": _finding_kind(finding),
                 "advisory_id": finding.vulnerability.id,
                 "aliases": finding.vulnerability.aliases,
                 "severity": finding.vulnerability.severity,
@@ -102,6 +105,10 @@ def build_evidence_graph(findings: list[Finding], metadata: dict[str, Any] | Non
                 "vulnerability_id": vulnerability_id,
                 "finding_type": finding.finding_type,
                 "weakness": finding.weakness,
+                "runtime_evidence": finding.runtime_evidence.to_json(),
+                "correlated_evidence": [item.to_json() for item in finding.correlated_evidence],
+                "unknowns": finding.unknowns,
+                "evidence_summary": finding.evidence_summary,
                 "tier": finding.tier.value,
                 "score": round(finding.score, 2),
                 "confidence": finding.confidence.value,
@@ -113,10 +120,36 @@ def build_evidence_graph(findings: list[Finding], metadata: dict[str, Any] | Non
             [
                 {"id": f"{asset_id}->{finding_id}", "source": asset_id, "target": finding_id, "kind": "asset_finding", "finding_key": finding.key},
                 {"id": f"{finding_id}->{component_id}", "source": finding_id, "target": component_id, "kind": "finding_component", "finding_key": finding.key},
-                {"id": f"{component_id}->{vulnerability_id}", "source": component_id, "target": vulnerability_id, "kind": "component_vulnerability" if finding.finding_type == "dependency_vulnerability" else "component_code_weakness", "finding_key": finding.key},
+                {"id": f"{component_id}->{vulnerability_id}", "source": component_id, "target": vulnerability_id, "kind": "component_vulnerability" if _is_dependency(finding) else "component_security_finding", "finding_key": finding.key},
             ]
         )
         code_edges.append(_code_edge(finding, asset_id, component_id, finding_id))
+        if canonical_finding_type(finding.finding_type) == "dynamic_runtime_observation":
+            runtime_id = f"runtime:{_stable_token(finding.key + ':' + (finding.runtime_evidence.url or finding.vulnerability.id))}"
+            runtime_nodes[runtime_id] = {
+                "id": runtime_id,
+                "kind": "runtime_evidence",
+                "state": finding.runtime_evidence.state.value,
+                "confidence": finding.runtime_evidence.confidence.value,
+                "tool": finding.runtime_evidence.tool,
+                "url": finding.runtime_evidence.url,
+                "method": finding.runtime_evidence.method,
+                "parameter": finding.runtime_evidence.parameter,
+                "finding_keys": [finding.key],
+            }
+            finding_edges.append({"id": f"{runtime_id}->{finding_id}", "source": runtime_id, "target": finding_id, "kind": "runtime_observes_finding", "finding_key": finding.key})
+        for correlation in finding.correlated_evidence:
+            related_id = _finding_id(correlation.related_finding_key)
+            edge_id = f"correlation:{_stable_token(finding.key + ':' + correlation.related_finding_key + ':' + correlation.correlation_type)}"
+            correlation_edges[edge_id] = {
+                "id": edge_id,
+                "source": finding_id,
+                "target": related_id,
+                "kind": correlation.correlation_type,
+                "confidence": correlation.confidence.value,
+                "reason": correlation.reason,
+                "evidence": correlation.evidence,
+            }
         for path in _network_paths_for_finding(finding, asset_id):
             _merge_node(network_paths, path)
         for edge in _iam_edges_for_finding(finding, asset_id):
@@ -143,6 +176,8 @@ def build_evidence_graph(findings: list[Finding], metadata: dict[str, Any] | Non
         "network_nodes": sorted(network_nodes.values(), key=lambda item: (item["kind"], item["label"], item["id"])),
         "network_edges": sorted(network_edges.values(), key=lambda item: (item["path_id"], item["sequence"])),
         "iam_edges": sorted(iam_edges.values(), key=lambda item: (item["asset_id"], item["id"])),
+        "runtime_nodes": sorted(runtime_nodes.values(), key=lambda item: (item["tool"] or "", item["id"])),
+        "correlation_edges": sorted(correlation_edges.values(), key=lambda item: (item["kind"], item["id"])),
         "code_edges": sorted(code_edges, key=lambda item: item["finding_key"]),
         "effective_exposure_graph": effective_exposure_graph,
         "edges": finding_edges,
@@ -188,10 +223,18 @@ def _stronger_value(left: Any, right: Any, rank: dict[str, int]) -> str:
     return right_s if rank.get(right_s, 0) > rank.get(left_s, 0) else left_s
 
 
+def _is_dependency(finding: Finding) -> bool:
+    return is_dependency_finding(finding.finding_type)
+
+
+def _finding_kind(finding: Finding) -> str:
+    return finding_kind(finding.finding_type)
+
+
 def _code_edge(finding: Finding, asset_id: str, component_id: str, finding_id: str) -> dict[str, Any]:
     return {
         "id": f"code:{finding.key}",
-        "kind": "code_reachability" if finding.finding_type == "dependency_vulnerability" else "code_weakness_reachability",
+        "kind": "code_reachability" if _is_dependency(finding) else "security_finding_source_evidence",
         "source": asset_id,
         "target": component_id,
         "finding_id": finding_id,
