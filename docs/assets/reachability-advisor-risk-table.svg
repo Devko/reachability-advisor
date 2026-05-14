@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">Reachability Advisor risk table preview</title>
+  <desc id="desc">A screenshot-style risk table showing prioritized findings, evidence, deployment context, and suggested fixes.</desc>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#0f172a" flood-opacity="0.16"/>
+    </filter>
+    <style>
+      .bg { fill: #f5f7fb; }
+      .panel { fill: #ffffff; stroke: #d8dee9; stroke-width: 1; }
+      .muted { fill: #64748b; font: 500 18px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .small { fill: #64748b; font: 500 15px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .title { fill: #0f172a; font: 700 34px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .metric { fill: #0f172a; font: 700 22px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .header { fill: #475569; font: 700 14px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-transform: uppercase; }
+      .cell { fill: #111827; font: 600 17px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .cell2 { fill: #334155; font: 500 15px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .pillText { fill: #ffffff; font: 700 13px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .chipText { fill: #334155; font: 700 13px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .line { stroke: #e2e8f0; stroke-width: 1; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1280" height="720"/>
+  <rect x="48" y="38" width="1184" height="644" rx="8" class="panel" filter="url(#shadow)"/>
+
+  <text x="82" y="94" class="title">Visible Risk</text>
+  <text x="82" y="126" class="muted">Prioritized from scanner evidence, source reachability, Kubernetes exposure, and identity context.</text>
+
+  <g transform="translate(814 70)">
+    <rect width="90" height="42" rx="8" fill="#eef2ff" stroke="#c7d2fe"/>
+    <text x="18" y="27" class="metric">7</text>
+    <text x="42" y="27" class="small">findings</text>
+  </g>
+  <g transform="translate(920 70)">
+    <rect width="95" height="42" rx="8" fill="#fee2e2" stroke="#fecaca"/>
+    <text x="18" y="27" class="metric">3</text>
+    <text x="42" y="27" class="small">high</text>
+  </g>
+  <g transform="translate(1030 70)">
+    <rect width="158" height="42" rx="8" fill="#dcfce7" stroke="#bbf7d0"/>
+    <text x="17" y="27" class="small" fill="#166534">public path proven</text>
+  </g>
+
+  <g transform="translate(82 166)">
+    <rect width="1116" height="466" rx="8" fill="#ffffff" stroke="#dbe3ef"/>
+    <rect width="1116" height="56" rx="8" fill="#f8fafc"/>
+    <line x1="0" y1="56" x2="1116" y2="56" class="line"/>
+    <text x="24" y="35" class="header">Severity</text>
+    <text x="145" y="35" class="header">Risk</text>
+    <text x="238" y="35" class="header">Finding</text>
+    <text x="498" y="35" class="header">Evidence</text>
+    <text x="716" y="35" class="header">Context</text>
+    <text x="932" y="35" class="header">Suggested action</text>
+
+    <g transform="translate(0 56)">
+      <rect x="20" y="24" width="76" height="28" rx="8" fill="#dc2626"/>
+      <text x="38" y="43" class="pillText">HIGH</text>
+      <text x="145" y="44" class="cell">77.0</text>
+      <text x="238" y="34" class="cell">Reflected XSS</text>
+      <text x="238" y="58" class="cell2">GET /search</text>
+      <text x="498" y="34" class="cell2">SAST and DAST route match</text>
+      <text x="498" y="58" class="cell2">request parameter reaches HTML</text>
+      <text x="716" y="34" class="cell2">public Kubernetes ingress</text>
+      <text x="716" y="58" class="cell2">limited RBAC, visibility gaps</text>
+      <text x="932" y="34" class="cell2">Encode untrusted output</text>
+      <text x="932" y="58" class="cell2">add response protections</text>
+    </g>
+    <line x1="0" y1="136" x2="1116" y2="136" class="line"/>
+
+    <g transform="translate(0 136)">
+      <rect x="20" y="24" width="76" height="28" rx="8" fill="#dc2626"/>
+      <text x="38" y="43" class="pillText">HIGH</text>
+      <text x="145" y="44" class="cell">73.5</text>
+      <text x="238" y="34" class="cell">express 4.17.1</text>
+      <text x="238" y="58" class="cell2">GHSA-demo-express</text>
+      <text x="498" y="34" class="cell2">request-controlled source path</text>
+      <text x="498" y="58" class="cell2">package used by route handler</text>
+      <text x="716" y="34" class="cell2">public service endpoint</text>
+      <text x="716" y="58" class="cell2">reachable workload image</text>
+      <text x="932" y="34" class="cell2">npm install express@4.18.2</text>
+      <text x="932" y="58" class="cell2">fixed version available</text>
+    </g>
+    <line x1="0" y1="216" x2="1116" y2="216" class="line"/>
+
+    <g transform="translate(0 216)">
+      <rect x="20" y="24" width="96" height="28" rx="8" fill="#d97706"/>
+      <text x="38" y="43" class="pillText">MEDIUM</text>
+      <text x="145" y="44" class="cell">54.5</text>
+      <text x="238" y="34" class="cell">Location-only SAST</text>
+      <text x="238" y="58" class="cell2">background job</text>
+      <text x="498" y="34" class="cell2">function-reachable API</text>
+      <text x="498" y="58" class="cell2">location present, lower proof</text>
+      <text x="716" y="34" class="cell2">public deployment context</text>
+      <text x="716" y="58" class="cell2">not attacker-controlled</text>
+      <text x="932" y="34" class="cell2">review handler evidence</text>
+      <text x="932" y="58" class="cell2">tighten source mapping</text>
+    </g>
+    <line x1="0" y1="296" x2="1116" y2="296" class="line"/>
+
+    <g transform="translate(0 296)">
+      <rect x="20" y="24" width="64" height="28" rx="8" fill="#15803d"/>
+      <text x="39" y="43" class="pillText">LOW</text>
+      <text x="145" y="44" class="cell">25.5</text>
+      <text x="238" y="34" class="cell">lodash 4.17.20</text>
+      <text x="238" y="58" class="cell2">GHSA-demo-lodash</text>
+      <text x="498" y="34" class="cell2">SBOM only</text>
+      <text x="498" y="58" class="cell2">source usage not observed</text>
+      <text x="716" y="34" class="cell2">public path exists</text>
+      <text x="716" y="58" class="cell2">weak source gate applied</text>
+      <text x="932" y="34" class="cell2">npm install lodash@4.17.21</text>
+      <text x="932" y="58" class="cell2">upgrade when scheduled</text>
+    </g>
+    <line x1="0" y1="376" x2="1116" y2="376" class="line"/>
+
+    <g transform="translate(24 406)">
+      <rect width="135" height="30" rx="8" fill="#e0f2fe" stroke="#bae6fd"/>
+      <text x="16" y="20" class="chipText">graph-first score</text>
+      <rect x="151" width="150" height="30" rx="8" fill="#fef3c7" stroke="#fde68a"/>
+      <text x="167" y="20" class="chipText">unknowns stay visible</text>
+      <rect x="317" width="128" height="30" rx="8" fill="#f3e8ff" stroke="#e9d5ff"/>
+      <text x="333" y="20" class="chipText">fixes grouped</text>
+      <text x="690" y="20" class="small">Demo report: outputs/demo/summary.md and findings.json</text>
+    </g>
+  </g>
+</svg>

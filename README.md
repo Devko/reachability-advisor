@@ -2,13 +2,17 @@
 
 Local-first attack-path prioritization for dependency, SAST, DAST, and CSPM findings.
 
-![Reachability Advisor attack-path overview](docs/assets/reachability-advisor-attack-path.svg)
-
 Reachability Advisor is a CI and IDE correlation layer for security scanner output. It answers one practical question:
 
 > Which findings are connected to reachable code, deployed assets, network exposure, identity access, and business impact?
 
 It does not replace scanners. It consumes their evidence, connects it to deployment context, and ranks findings without treating missing evidence as safe.
+
+## Preview
+
+![Reachability Advisor risk table preview](docs/assets/reachability-advisor-risk-table.svg)
+
+![Reachability Advisor attack path preview](docs/assets/reachability-advisor-attack-path-screenshot.svg)
 
 ## What It Does
 

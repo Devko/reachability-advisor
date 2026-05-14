@@ -1,0 +1,124 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">Reachability Advisor attack path preview</title>
+  <desc id="desc">A screenshot-style attack path connecting public ingress, workload, source evidence, vulnerable dependency, and risk decision.</desc>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#0f172a" flood-opacity="0.16"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#64748b"/>
+    </marker>
+    <style>
+      .bg { fill: #f5f7fb; }
+      .panel { fill: #ffffff; stroke: #d8dee9; stroke-width: 1; }
+      .title { fill: #0f172a; font: 700 34px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .subtitle { fill: #64748b; font: 500 18px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .lane { fill: #475569; font: 700 14px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .nodeTitle { fill: #0f172a; font: 700 18px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .nodeMeta { fill: #64748b; font: 500 14px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .body { fill: #334155; font: 500 15px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .strong { fill: #111827; font: 700 17px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .pillText { fill: #ffffff; font: 700 13px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .chipText { fill: #334155; font: 700 13px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .link { stroke: #64748b; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+      .softLink { stroke: #cbd5e1; stroke-width: 2; fill: none; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1280" height="720"/>
+  <rect x="48" y="38" width="1184" height="644" rx="8" class="panel" filter="url(#shadow)"/>
+  <text x="82" y="94" class="title">Attack Path</text>
+  <text x="82" y="126" class="subtitle">Why a high finding is prioritized: public ingress, request-controlled code, and scanner correlation line up.</text>
+
+  <g transform="translate(82 166)">
+    <rect width="758" height="448" rx="8" fill="#f8fafc" stroke="#dbe3ef"/>
+    <text x="28" y="38" class="lane">EVIDENCE PATH</text>
+
+    <path class="link" d="M107 142 H211"/>
+    <path class="link" d="M319 142 H423"/>
+    <path class="link" d="M531 142 H635"/>
+    <path class="softLink" d="M372 212 C430 286, 476 326, 555 344"/>
+    <path class="softLink" d="M579 212 C638 274, 670 312, 684 344"/>
+
+    <g transform="translate(28 90)">
+      <rect width="116" height="104" rx="8" fill="#e0f2fe" stroke="#7dd3fc"/>
+      <circle cx="58" cy="34" r="17" fill="#0284c7"/>
+      <text x="34" y="40" class="pillText">NET</text>
+      <text x="22" y="72" class="nodeTitle">Internet</text>
+      <text x="22" y="94" class="nodeMeta">public entry</text>
+    </g>
+
+    <g transform="translate(240 90)">
+      <rect width="116" height="104" rx="8" fill="#ecfccb" stroke="#bef264"/>
+      <circle cx="58" cy="34" r="17" fill="#65a30d"/>
+      <text x="32" y="40" class="pillText">K8S</text>
+      <text x="21" y="72" class="nodeTitle">Ingress</text>
+      <text x="18" y="94" class="nodeMeta">demo-api</text>
+    </g>
+
+    <g transform="translate(452 90)">
+      <rect width="116" height="104" rx="8" fill="#fef3c7" stroke="#fde68a"/>
+      <circle cx="58" cy="34" r="17" fill="#d97706"/>
+      <text x="34" y="40" class="pillText">APP</text>
+      <text x="21" y="72" class="nodeTitle">Service</text>
+      <text x="20" y="94" class="nodeMeta">demo-api</text>
+    </g>
+
+    <g transform="translate(664 90)">
+      <rect width="66" height="104" rx="8" fill="#fee2e2" stroke="#fecaca"/>
+      <circle cx="33" cy="34" r="17" fill="#dc2626"/>
+      <text x="19" y="40" class="pillText">77</text>
+      <text x="15" y="72" class="nodeTitle">High</text>
+      <text x="10" y="94" class="nodeMeta">risk</text>
+    </g>
+
+    <g transform="translate(62 262)">
+      <rect width="238" height="120" rx="8" fill="#ffffff" stroke="#dbe3ef"/>
+      <text x="20" y="34" class="strong">Source reachability</text>
+      <text x="20" y="62" class="body">GET /search reads q</text>
+      <text x="20" y="86" class="body">q reaches HTML response</text>
+      <rect x="20" y="96" width="150" height="24" rx="8" fill="#fee2e2"/>
+      <text x="34" y="113" class="chipText">attacker controlled</text>
+    </g>
+
+    <g transform="translate(330 262)">
+      <rect width="238" height="120" rx="8" fill="#ffffff" stroke="#dbe3ef"/>
+      <text x="20" y="34" class="strong">Scanner correlation</text>
+      <text x="20" y="62" class="body">Semgrep dataflow</text>
+      <text x="20" y="86" class="body">ZAP route match, CWE-79</text>
+      <rect x="20" y="96" width="144" height="24" rx="8" fill="#dcfce7"/>
+      <text x="34" y="113" class="chipText">high confidence</text>
+    </g>
+
+    <g transform="translate(598 262)">
+      <rect width="124" height="120" rx="8" fill="#ffffff" stroke="#dbe3ef"/>
+      <text x="18" y="34" class="strong">Fix</text>
+      <text x="18" y="62" class="body">encode output</text>
+      <text x="18" y="86" class="body">tighten CSP</text>
+    </g>
+  </g>
+
+  <g transform="translate(878 166)">
+    <rect width="320" height="448" rx="8" fill="#ffffff" stroke="#dbe3ef"/>
+    <text x="24" y="38" class="lane">RISK DECISION</text>
+
+    <rect x="24" y="64" width="84" height="30" rx="8" fill="#dc2626"/>
+    <text x="44" y="84" class="pillText">HIGH</text>
+    <text x="124" y="86" class="strong">Score 77.0</text>
+
+    <line x1="24" y1="120" x2="296" y2="120" stroke="#e2e8f0"/>
+    <text x="24" y="152" class="strong">Drivers</text>
+    <text x="24" y="182" class="body">public network path</text>
+    <text x="24" y="208" class="body">request-controlled source path</text>
+    <text x="24" y="234" class="body">SAST and DAST corroboration</text>
+
+    <line x1="24" y1="262" x2="296" y2="262" stroke="#e2e8f0"/>
+    <text x="24" y="294" class="strong">Guardrails</text>
+    <text x="24" y="324" class="body">unknown network policy shown</text>
+    <text x="24" y="350" class="body">limited RBAC context retained</text>
+    <text x="24" y="376" class="body">no automatic suppression</text>
+
+    <rect x="24" y="402" width="272" height="28" rx="8" fill="#eef2ff" stroke="#c7d2fe"/>
+    <text x="42" y="421" class="chipText">Evidence stays traceable in findings.json</text>
+  </g>
+</svg>
