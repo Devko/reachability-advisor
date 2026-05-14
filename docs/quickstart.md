@@ -10,6 +10,8 @@ python -m venv .venv
 python -m pip install -e .
 ```
 
+On Windows, use `py -3` in place of `python` if `python` is not on `PATH`.
+
 ## Run The Demo
 
 The demo uses checked-in files only. It does not require cloud credentials or network access.
@@ -78,6 +80,8 @@ Use Terraform plans and rendered Kubernetes manifests for release gates. Static 
 ```bash
 ./scripts/run_sample.sh
 ```
+
+Without a Unix-like shell, run `make sample` or copy the command from `Makefile`.
 
 The command writes:
 
@@ -176,6 +180,8 @@ The baseline file is written by `scan --baseline-out` on the default branch. Wit
 ```bash
 ./scripts/run_fixture_packs.sh
 ```
+
+Without a Unix-like shell, run `make fixtures`.
 
 The fixture harness writes:
 

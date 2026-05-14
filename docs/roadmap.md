@@ -1,135 +1,128 @@
 # Roadmap
 
-## v1.0 baseline
+Reachability Advisor is at the `1.1.0` baseline: a local-first CLI and CI/IDE correlation layer for dependency, SAST, DAST, CSPM, Terraform, Kubernetes, source, and artifact identity evidence. The next phase is not feature sprawl. The priority is making the tool boring to run, review, and release.
 
-- Local-first CLI.
-- CycloneDX JSON ingestion.
-- Grype, local vulnerability intelligence, and OSV-style parsers.
-- Java, Node, Python, and Go source heuristics with same-function and bounded handler-to-sink evidence.
-- CycloneDX dependency-graph source evidence and external evidence import for Semgrep traces, CodeQL/SARIF data-flow paths, and govulncheck-style output.
-- Terraform plan context, context JSON enrichment, and conservative HCL static fallback.
-- Artifact identity proof chains with candidate source and strength.
-- JSON, evidence graph JSON, SARIF, diagnostics, Markdown, HTML graph, and annotation outputs.
-- Mapping reports, source coverage reports, Terraform coverage reports, HCL audit reports, SBOM planning, and remediation groups.
-- PR delta workflow.
-- Release validation against repository JSON schemas.
-- VS Code extension wrapper.
-- Governance, contribution, and security docs.
+## Stabilization Goal
 
-## v1.1 roadmap: quality, evidence, and CI adoption
+Make every high-value workflow deterministic from checked-in or CI-produced artifacts:
 
-Goal: make CI behavior reviewable from local artifacts. The scanner should stay local, deterministic, and explainable.
+- local demo and sample scans should run the same way on every supported Python version;
+- CI gates should explain exactly which evidence is missing instead of hiding uncertainty;
+- output formats should remain schema-validated and backwards-conscious;
+- scoring changes should be benchmarked against real and synthetic fixtures before release;
+- documentation should point users to one clear path for advisory scans, release gates, and maintainer work.
 
-Priority 1: CI quality gates
+## Current Stable Baseline
 
-- Done: install `.[dev]` in CI and run `make lint`, `make type-check`, `make coverage`, `make release-check`, and `make package`.
-- Keep Python 3.10, 3.11, and 3.12 in the matrix.
-- Keep strict `mypy` passing across all `src` modules.
-- Done: smoke-test the built wheel entry point after packaging.
-- Done: publish generated reports and package files as workflow artifacts.
-- Keep generated outputs deterministic so PR reviews can diff them.
+- Package version: `1.1.0`.
+- Python support target: 3.10, 3.11, 3.12, and 3.13.
+- Active gate set: compile, lint, strict type-checking, unit/workflow tests, coverage, sample, demo, Terraform fixture packs, release validation, package build, and wheel smoke test.
+- Coverage threshold: 93% branch-aware coverage.
+- Test inventory: 592 unit and workflow tests.
+- Local-first boundary: no live cloud API calls, telemetry, automatic suppression, or automatic `not_affected` claims.
 
-Priority 2: Source reachability coverage
+## Near-Term Stabilization
 
-- Keep package-manager manifest coverage current for Gradle, Maven POMs, pnpm, Yarn, npm locks, Poetry, Python requirements, and Go modules.
-- Add richer source diagnostics for package-manager roots, imported vulnerable packages, vulnerable call sites, and handler-to-sink paths.
-- Done: source coverage reports rule coverage, rule gaps, weak-source findings, and usable external evidence ratio.
-- Done: native adapters import Semgrep `dataflow_trace` taint paths and CodeQL SARIF `codeFlows` when package, purl, or vulnerability selectors are available.
-- Done: external source evidence reports artifact-only and unscoped selector records instead of silently ignoring them.
-- Done: `--analysis-profile production` requires external analyzer evidence and rendered deployment evidence for release gates.
-- Add native adapters for more language-specific analyzer output when selectors are available.
-- Done: unknown source states are split into diagnostics for rule gaps, package-manager gaps, missing source roots, unsupported source roots, and unobserved imports.
+### 1. Release Evidence Determinism
 
-Priority 3: Terraform and IaC coverage
+Acceptance criteria:
 
-- Done: rendered Kubernetes YAML/JSON manifests are first-class `scan` inputs with workload, service, ingress, RBAC, context, and coverage output.
-- Done: fixture packs now cover AWS Lambda function URLs, Azure App Service, GKE plus Kubernetes workloads, Helm-heavy Kubernetes deployments, and private service meshes.
-- Expand rendered Helm/Kustomize validation cases beyond the current Kubernetes manifest parser.
-- Done: route-table associations, private endpoints, VPC access connectors, and firewall target tags can contribute explicit internal path evidence.
-- Done: provider network adapter signals are emitted in Terraform coverage for route, private endpoint, VPC connector, firewall target, firewall priority, and NSG allow/deny evidence.
-- Done: IAM capability records include effective risk and risk multipliers so scoped or conditional critical permissions are not scored the same as broad unconditioned permissions.
-- Done: Terraform context emits effective-access records per matched workload identity/resource/action with confidence, scope, condition, target, and blocker evidence.
-- Done: explicit AWS `sts:AssumeRole` edges inherit visible target-role capabilities, and rendered Kubernetes NetworkPolicy deny-all ingress can override Service/Ingress exposure.
-- Expand lateral movement evidence for service endpoints, Kubernetes network policies, and deeper firewall priority semantics.
-- Done: Terraform context emits typed network path records with provider, path type, confidence, steps, and blockers/constraints where visible.
-- Keep unsupported IaC resources visible in coverage reports.
+- The CI matrix and documented local gates produce deterministic JSON, SARIF, Markdown, HTML, baseline, mapping, readiness, and coverage artifacts.
+- Generated artifacts are easy to diff across pull requests and releases.
+- `scripts/validate_release.py` remains the single release-contract check for schemas, sample outputs, action metadata, fixture packs, and end-to-end no-cloud evidence.
+- Release docs and changelog entries are updated before every tag.
 
-Priority 4: Policy and baseline workflow
+Work items:
 
-- Publish a schema for runtime policy files.
-- Validate the example policy during release checks.
-- Done: default-branch baseline artifacts are generated with `scan --baseline-out`.
-- Done: `compare --baseline` emits PR deltas with only new and worsened findings.
-- Done: policy examples cover strict release gates, advisory PR mode, exception expiration, and backlog migration.
+- Keep generated output ordering stable across Python versions.
+- Add regression checks whenever a report adds, removes, or renames fields.
+- Keep GitHub Action inputs and CLI gates in sync through release validation.
+- Add signed release artifacts after the tag workflow is stable enough to make signatures useful.
 
-Priority 5: Validation corpus
+### 2. CLI And Workflow Reliability
 
-- Keep AWS Retail Store and Google Online Boutique as scale tests.
-- Done: the scoring benchmark now covers public, external, internal, private, unknown context, admin, critical limited role, read-only role, no role, code reachable, dependency evidence, weak source evidence, and code not observed.
-- Done: add golden sample-output regressions for finding counts, tier spread, top remediation order, coverage summaries, and graph connectivity.
-- Done: complex validation now emits schema-validated `benchmark.json` and `benchmark.md` for release-to-release metric drift tracking.
-- Done: release validation includes a synthetic no-cloud Terraform plan E2E fixture for scanner path, artifact proof, source reachability, network context, IAM capability extraction, evidence graph, and HTML output.
-- Publish expected outputs for fixtures so downstream contributors can verify behavior without reading implementation details.
-- Done: visual graph regression tests cover connected network-path rendering and dense multi-asset layouts.
-- Done: VS Code wrapper supports config discovery, scan profiles, diagnostics filtering, baseline filtering, and finding evidence views.
+Acceptance criteria:
 
-## Completed milestone: Multi-cloud Terraform context
+- First-run commands work from a clean checkout after `python -m pip install -e ".[dev]"`.
+- Advisory workflows remain useful with partial evidence, while production profile failures identify missing release evidence directly.
+- Windows, Linux, and GitHub Actions examples describe equivalent paths where shell behavior differs.
 
-- AWS, Azure, GCP, and Kubernetes Terraform plan support.
-- Manifest-driven resource coverage.
-- 100% resource accounting coverage for valid plans.
-- Semantic classification coverage report with visibility gaps.
-- Workload matching for containers, serverless, batch, app services, VMs, Cloud Run, and Kubernetes workloads.
-- Exposure hints for public networks, APIs, load balancers, function URLs, public invoker IAM, services, and ingresses.
-- Coarse IAM blast-radius classification across providers.
-- Expanded sample data, 134 tests, and 90%+ coverage gate.
+Work items:
 
-## Completed milestone: Community Terraform fixture packs
+- Add a Windows-native sample command path alongside Bash wrappers where needed.
+- Keep `demo`, `sample`, `fixtures`, and `release-check` documented as the preferred local sanity checks.
+- Improve user-facing errors for malformed inputs, missing source roots, missing deployment evidence, and unusable external evidence selectors.
+- Keep `analysis-profile=production` strict about external analyzer evidence and rendered deployment evidence.
 
-- Fixture harness with `fixtures list`, `fixtures validate`, and `fixtures run`.
-- Sanitized module-shaped fixture packs for AWS ECS/Fargate, AWS Lambda function URLs, Azure Container Apps, Azure App Service, GCP Cloud Run, GKE workloads, Kubernetes ingress, Helm-heavy Kubernetes, and private service-mesh workloads.
-- Per-fixture expected assertions for resource accounting, semantic classification, artifact matching, required resource types, and minimum finding tiers.
-- CI target `make fixtures`.
-- Fixture pack and fixture report schemas.
-- Expanded test suite to 174 tests and raised the coverage gate to 92%.
+### 3. Output Contract Stability
 
-## Completed milestone: Logic verification and mapping hardening
+Acceptance criteria:
 
-- `sbom-plan` command for SBOM acquisition guidance.
-- Stronger CycloneDX metadata parsing, including metadata component properties and external references.
-- Explicit artifact alias support for generated SBOMs without image metadata.
-- Conservative artifact identity matching with digest/repository/tag scores and reduced substring matching.
-- `--mapping-out` to inspect SBOM candidates, source roots, Terraform match scores, and warnings.
-- Vulnerability-aware source reachability rules.
-- Same-function and bounded handler-to-sink requirement for `attacker_controlled` evidence.
-- Custom reachability rule JSON.
-- Go import evidence plus common JWT/YAML sink hints.
-- Expanded test suite to 224 tests and raised the coverage gate to 93%.
+- Every persisted JSON report used by CI or downstream tooling has a schema or a documented reason for not having one.
+- Schema changes are reflected in samples, tests, docs, and release validation in the same change.
+- Additive fields preserve older consumer behavior unless the changelog documents a breaking change.
 
-## Completed milestone: Grype handoff and real-world validation
+Work items:
 
-- Grype JSON parser for using Grype as the vulnerability scanner and database handoff.
-- Package-level remediation grouping with fixed-version recommendations when scanner data includes them.
-- HCL static audit mode for public Terraform repositories and early PR/IDE checks.
-- Real-world replay scripts for external HCL corpus validation and existing Grype/CycloneDX outputs.
-- Expanded source rules for Express, NestJS/Express, Spring Web, FastAPI, Chainlit, aiohttp, common SSRF/template/JWT/XML/deserialization/archive families, and direct call-path evidence.
-- Linked IaC exposure inference instead of provider-wide public fallback for supported workload patterns.
-- Expanded test suite to 269 tests while keeping the coverage gate at 93%.
+- Keep `docs/data_formats.md` as the canonical report-format reference.
+- Add schema-contract tests for any new report surface.
+- Keep `findings.json`, readiness, mapping, coverage, baseline, evidence graph, and benchmark outputs stable enough for downstream automation.
+- Document migration guidance when a report shape must change.
 
-## Post-v1 Candidates
+### 4. Scoring And Evidence Calibration
 
-- npm package wrapper for projects that want Node-native install ergonomics.
+Acceptance criteria:
+
+- Scoring changes are covered by focused unit tests, golden output tests, and benchmark snapshot checks.
+- Unknown, weak, blocked, constrained, internal, public, and sensitive/admin paths remain distinguishable in findings and evidence graphs.
+- Weak evidence never becomes proof of exploitability or proof of safety.
+
+Work items:
+
+- Expand benchmark cases for constrained networks, denied paths, low-confidence IAM, source-only evidence, and scanner-only evidence.
+- Keep urgent/high inflation limits visible in benchmark snapshots.
+- Add fixture cases before broadening provider semantics that affect score tiers.
+- Keep rationale strings concise and tied to observable evidence fields.
+
+### 5. Adapter And Fixture Hardening
+
+Acceptance criteria:
+
+- Scanner adapters tolerate partial real-world output without crashing and report skipped or unusable records as diagnostics.
+- Terraform and Kubernetes fixture packs cover each supported provider/resource family with explicit expected assertions.
+- Unsupported deployment shapes remain visibility gaps, not silent success.
+
+Work items:
+
+- Add adapter fixtures for additional Semgrep, CodeQL/SARIF, ZAP, Nuclei, Grype, OSV-style, and CSPM variants as they are observed.
+- Expand rendered Helm/Kustomize validation cases beyond the current manifest parser coverage.
+- Grow provider network and policy fixtures for route precedence, private endpoints, firewall/NSG decisions, service-mesh policy, IAM deny precedence, and scoped identity access.
+- Add Docker Compose only when it can provide deployment evidence without weakening release-gate semantics.
+
+### 6. Documentation And Contributor Onboarding
+
+Acceptance criteria:
+
+- The README links to one documentation index.
+- New contributors can find the right doc for inputs, algorithms, scoring, CI, fixtures, release process, and maintainer rules without reading source first.
+- Any behavior change updates the matching docs, schemas, samples, and tests in the same pull request.
+
+Work items:
+
+- Keep [Documentation Index](README.md) current when docs are added, removed, or renamed.
+- Keep roadmap work here, domain target states in [Maturity Targets](maturity_targets.md), and current gates in [Code Quality](code_quality.md).
+- Add focused troubleshooting notes only when they reflect common failures from real use.
+
+## Later Stabilization Candidates
+
+- npm wrapper for teams that want Node-native install ergonomics.
 - pre-commit hook example for source-only advisory runs.
-- Small public corpus for action-level workflow validation.
-
-## Longer-term candidates
-
-- language-server wrapper.
-- Baseline cache format.
+- Language-server wrapper after the VS Code extension contract is settled.
+- Baseline cache format once PR-delta usage patterns are clear.
 - Community registry for source-reachability rules.
-- call-graph plugin interface for projects that want deeper source reachability.
+- Call-graph plugin interface for projects that want deeper source reachability than built-in heuristics.
 
-## Out of scope for now
+## Out Of Scope
 
 - Live cloud inventory.
 - Commercial CNAPP replacement features.

@@ -19,7 +19,7 @@ Releases are created from Git tags matching `v*`.
    make package
    ```
 
-2. Review `CHANGELOG.md` and update the Unreleased section.
+2. Review `CHANGELOG.md` and add or update the release entry.
 3. Tag the release:
 
    ```bash

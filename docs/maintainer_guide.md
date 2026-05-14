@@ -14,6 +14,7 @@ A release must meet these gates:
 - Changelog entry is added.
 - Any new output format has a schema update or documented rationale.
 - Any new supported Terraform resource type is backed by at least one unit test or fixture-pack assertion.
+- Documentation that describes changed behavior is updated in the same pull request.
 
 ## Adding a source reachability rule
 
@@ -34,6 +35,20 @@ A release must meet these gates:
 ## Project governance
 
 The repository uses GNU GPL v3.0 or later for code and DCO sign-off for contributions. Releases must be documented and reproducible through the local quality gates.
+
+## Documentation maintenance
+
+Use `docs/README.md` as the documentation map. Keep it current when files are added, renamed, or removed.
+
+- Put user setup and common commands in `docs/quickstart.md`.
+- Put report schemas, fields, and examples in `docs/data_formats.md`.
+- Put algorithm and evidence semantics in `docs/algorithms.md`, `docs/evidence_model.md`, `docs/reachability_mapping.md`, and `docs/scoring.md`.
+- Put CI, release gates, and action usage in `docs/pipeline.md`.
+- Put strategic stabilization work in `docs/roadmap.md`.
+- Put detailed domain target states and implemented controls in `docs/maturity_targets.md`.
+- Keep current gates and test coverage in `docs/code_quality.md`.
+
+When CLI options, generated reports, schemas, gates, scoring, or supported inputs change, update the relevant docs, samples, and tests in the same change.
 
 
 ## Adding a Terraform fixture pack

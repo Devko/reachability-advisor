@@ -69,16 +69,12 @@ Reachability Advisor is intentionally conservative. It does not make live cloud 
 
 ## Documentation
 
-- [Quickstart](docs/quickstart.md)
-- [Input adapters](docs/input_adapters.md)
-- [Evidence model](docs/evidence_model.md)
-- [Scoring model](docs/scoring.md)
-- [Pipeline integration](docs/pipeline.md)
-- [Terraform coverage](docs/terraform_coverage.md)
-- [Security evidence](docs/security_evidence.md)
-- [Scope and boundaries](docs/scope.md)
-- [Real-world validation](docs/real_world_validation.md)
-- [Maturity targets](docs/maturity_targets.md)
+- [Documentation index](docs/README.md) - complete map of user, operator, design, and maintainer docs.
+- [Quickstart](docs/quickstart.md) - install, demo, sample scan, release gate, PR delta, and fixture commands.
+- [Input adapters](docs/input_adapters.md) - scanner and context inputs accepted by the CLI.
+- [Evidence model](docs/evidence_model.md) and [scoring model](docs/scoring.md) - how evidence becomes prioritized findings.
+- [Pipeline integration](docs/pipeline.md) - CI, GitHub Actions, baselines, release gates, and generated artifacts.
+- [Roadmap](docs/roadmap.md) - stabilization priorities and release-readiness acceptance criteria.
 
 ## Quality Snapshot
 

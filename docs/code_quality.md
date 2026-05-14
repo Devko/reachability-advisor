@@ -136,6 +136,7 @@ Provider network fixtures live under `fixtures/network/`. They validate the prov
 
 ## Future hardening
 
+- Keep documentation examples and roadmap references aligned with the active CLI, schemas, release workflow, and CI matrix.
 - Add signed release artifacts.
 - Add property-based parser tests with a dedicated generator once the project accepts a test-only dependency.
 - Expand fuzz-style malformed-input tests for SBOM, vulnerability, source, Kubernetes, and Terraform inputs.
