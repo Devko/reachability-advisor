@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0 - 2026-05-15
+
+- v1.2: replaced per-finding attack-path cards with a unified attack graph that starts from a shared Internet/attacker node and branches into route, workload, and finding nodes.
+- v1.2: added draggable, clickable, expandable attack graph nodes with right-side context details for routes, assets, finding groups, individual findings, and graph edges.
+- v1.2: moved visible risk scenarios into a dedicated left sidebar in the attack-path view so the right panel can stay focused on selected context.
+- v1.2: added attack-surface grouping for outside entry, lateral movement, private/no-external-entry, and unresolved network paths.
+- v1.2: improved graph layout behavior when finding groups are expanded so rows resize instead of overlapping.
+- v1.2: refreshed the real-app benchmark snapshot expectations after the current validation corpus distribution changed.
+- v1.2: kept the release gate at 612 unit and workflow tests, 93% coverage threshold, strict typing, linting, release validation, demo generation, fixture validation, scale validation, and package build.
+
 ## 1.1.0 - 2026-05-14
 
 - v1.1: separated DAST runtime evidence from source reachability.

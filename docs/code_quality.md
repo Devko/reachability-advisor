@@ -2,7 +2,7 @@
 
 ## Current gates
 
-- Unit and workflow tests: 610.
+- Unit and workflow tests: 612.
 - Coverage threshold: 93%.
 - Current measured coverage: passes the 93% line/branch-aware coverage gate.
 - Test runner: `scripts/run_tests.py`.
@@ -52,6 +52,8 @@ python -m coverage run --source=src/reachability_advisor scripts/run_tests.py
 python -m coverage report -m --fail-under=93
 python -m compileall -q src scripts tests
 python scripts/validate_release.py
+python scripts/validate_scoring_benchmark.py
+python scripts/run_complex_app_validation.py --no-clone --strict
 python -m ruff check src tests scripts
 python -m mypy src
 python -m build --no-isolation

@@ -1,6 +1,6 @@
 # Roadmap
 
-Reachability Advisor is at the `1.1.0` baseline: a local-first CLI and CI/IDE correlation layer for dependency, SAST, DAST, CSPM, Terraform, Kubernetes, source, and artifact identity evidence. The next phase is not feature sprawl. The priority is making the tool boring to run, review, and release.
+Reachability Advisor is at the `1.2.0` baseline: a local-first CLI and CI/IDE correlation layer for dependency, SAST, DAST, CSPM, Terraform, Kubernetes, source, artifact identity, and attack-graph evidence. The next phase is not feature sprawl. The priority is making the tool boring to run, review, and release.
 
 ## Stabilization Goal
 
@@ -14,11 +14,11 @@ Make every high-value workflow deterministic from checked-in or CI-produced arti
 
 ## Current Stable Baseline
 
-- Package version: `1.1.0`.
+- Package version: `1.2.0`.
 - Python support target: 3.10, 3.11, 3.12, and 3.13.
 - Active gate set: compile, lint, strict type-checking, unit/workflow tests, coverage, sample, demo, Terraform fixture packs, release validation, package build, and wheel smoke test.
 - Coverage threshold: 93% branch-aware coverage.
-- Test inventory: 610 unit and workflow tests.
+- Test inventory: 612 unit and workflow tests.
 - Local-first boundary: no live cloud API calls, telemetry, automatic suppression, or automatic `not_affected` claims.
 
 ## Near-Term Stabilization

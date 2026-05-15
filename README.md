@@ -34,7 +34,7 @@ Key outputs:
 
 - `outputs/demo/summary.md` - prioritized findings and visibility gaps.
 - `outputs/demo/findings.json` - machine-readable findings with evidence and graph decisions.
-- `outputs/demo/reachability-graph.html` - interactive attack-path report with path cards, evidence graph, and finding details.
+- `outputs/demo/reachability-graph.html` - interactive attack-path report with a unified graph, risk sidebar, expandable finding nodes, and right-side context details.
 
 See [Quickstart](docs/quickstart.md) for install steps, sample scans, release gates, and common workflow commands.
 
@@ -64,7 +64,7 @@ Details: [Evidence model](docs/evidence_model.md), [Scoring](docs/scoring.md), [
 - Markdown summary
 - SARIF
 - IDE diagnostics JSON
-- Interactive HTML attack-path report: Attack Paths, Architecture, Evidence Paths, and Findings views
+- Interactive HTML attack-path report: Attack Paths, Architecture, Evidence Paths, and Risk views
 - Mapping, coverage, readiness, and baseline delta reports
 
 ## Safety Boundary

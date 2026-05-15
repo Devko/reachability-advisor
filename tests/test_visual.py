@@ -382,6 +382,67 @@ class VisualPayloadTests(unittest.TestCase):
         self.assertEqual(set(group["scenarioIds"]), {scenario["id"] for scenario in payload["riskScenarios"]})
         self.assertTrue(group["routeNodes"])
 
+    def test_attack_surfaces_group_outside_and_lateral_entry_options(self) -> None:
+        payload = _visual_payload([
+            finding_for_visual(
+                "api",
+                "public",
+                ["terraform network path: public via aws_lb.edge public load balancer -> aws_ecs_service.api"],
+                component="express",
+                vulnerability="CVE-API",
+            ),
+            finding_for_visual(
+                "worker",
+                "public",
+                ["terraform network path: public via aws_lb.edge public load balancer -> aws_ecs_service.worker"],
+                component="requests",
+                vulnerability="CVE-WORKER",
+            ),
+            finding_for_visual(
+                "reports",
+                "internal",
+                ["terraform network path: internal via aws_security_group.reports allows traffic from sg-web -> aws_ecs_service.reports"],
+                component="flask",
+                vulnerability="CVE-REPORTS",
+            ),
+        ])
+
+        surfaces = payload["attackSurfaces"]
+        self.assertEqual({surface["surfaceMode"] for surface in surfaces}, {"outside", "lateral"})
+        outside = next(surface for surface in surfaces if surface["surfaceMode"] == "outside")
+        lateral = next(surface for surface in surfaces if surface["surfaceMode"] == "lateral")
+        self.assertEqual(outside["entryLabel"], "Internet / attacker")
+        self.assertEqual(set(outside["assetIds"]), {"asset:api", "asset:worker"})
+        self.assertEqual(outside["findingCount"], 2)
+        self.assertIn("outside entry route option", outside["summary"])
+        self.assertEqual(lateral["entryLabel"], "Internal pivot")
+        self.assertEqual(lateral["assetIds"], ["asset:reports"])
+        self.assertTrue(all(group["surfaceId"] in {surface["id"] for surface in surfaces} for group in payload["attackPathGroups"]))
+
+    def test_attack_view_labels_entry_surfaces_and_graph_nodes(self) -> None:
+        html = render_html_report([
+            finding_for_visual(
+                "api",
+                "public",
+                ["terraform network path: public via aws_lb.edge public load balancer -> aws_ecs_service.api"],
+            )
+        ])
+
+        self.assertIn("attack-risk-sidebar", html)
+        self.assertIn("renderAttackRiskSidebar", html)
+        self.assertIn('id="leftPanel"', html)
+        self.assertIn('id="riskSidebar"', html)
+        self.assertIn('layoutRoot.classList.toggle("with-left-sidebar", viewMode === "attack")', html)
+        self.assertNotIn("cards.replaceChildren(\n      renderAttackRiskSidebar", html)
+        self.assertIn("visible", html)
+        self.assertIn("route options", html)
+        self.assertIn("attack-graph-node", html)
+        self.assertIn("attack-graph-edge", html)
+        self.assertIn("function renderAttackGraphNode", html)
+        self.assertIn('const internetRootId = "attack-entry:internet"', html)
+        self.assertIn("shared outside entry", html)
+        self.assertIn("function graphRouteNodes", html)
+
     def test_risk_scenario_category_counts_cover_issue_buckets(self) -> None:
         path = ["context network path: public via kubernetes_ingress.edge -> kubernetes_deployment.search-api"]
         payload = _visual_payload([
@@ -699,10 +760,18 @@ class VisualPayloadTests(unittest.TestCase):
         self.assertIn("Attack path", html)
         self.assertIn("Open attack path", html)
         self.assertIn("risk-path-link", html)
-        self.assertIn("function renderAttackPathCard", html)
-        self.assertIn("function renderAttackScenarioCard", html)
-        self.assertIn("function renderAttackSummary", html)
-        self.assertIn("function renderAttackNodeCard", html)
+        self.assertIn("function renderAttackRiskSidebar", html)
+        self.assertIn("function renderAttackRiskSidebarCard", html)
+        self.assertIn("layout.with-left-sidebar", html)
+        self.assertIn("riskSidebar.replaceChildren(renderAttackRiskSidebar(riskScenarios))", html)
+        self.assertIn(".layout.with-left-sidebar .right-panel", html)
+        self.assertIn(".layout.with-left-sidebar .finding-list", html)
+        self.assertIn("height: auto;", html)
+        self.assertIn("color: var(--ink);", html)
+        self.assertIn("function renderAttackGraphNode", html)
+        self.assertIn("function attackGraphEdgePath", html)
+        self.assertIn("function beginGraphNodeDrag", html)
+        self.assertIn("function toggleGraphNodeExpansion", html)
         self.assertIn("function nodeIcon", html)
         self.assertIn("function rawDisclosure", html)
         self.assertIn("function appendCategoryPanels", html)
@@ -710,18 +779,25 @@ class VisualPayloadTests(unittest.TestCase):
         self.assertIn("detail-link-button", html)
         self.assertIn("const overviewLimit", html)
         self.assertIn("function compactRouteNodes", html)
-        self.assertIn("function renderAttackOverviewLane", html)
-        self.assertIn("attack-overview-lane", html)
+        self.assertIn("function graphRouteNodes", html)
+        self.assertIn('const internetRootId = "attack-entry:internet"', html)
+        self.assertIn("shared outside entry", html)
+        self.assertIn("expandedGraphNodes", html)
+        self.assertIn("nodePositionOverrides", html)
+        self.assertIn("click to expand finding list", html)
+        self.assertIn("Show one node per finding", html)
+        self.assertIn("graphEdge", html)
+        self.assertIn("role\", \"button", html)
         self.assertIn("risk-board", html)
         self.assertIn("Issue categories", html)
-        self.assertIn("shown on map", html)
+        self.assertIn("Risks", html)
         self.assertIn("Why this is prioritized", html)
         self.assertIn("Unknown evidence and visibility gaps", html)
         self.assertIn("Recommended next steps", html)
         self.assertIn("Path nodes", html)
         self.assertIn("Raw evidence", html)
-        self.assertIn("attack-list-card", html)
-        self.assertIn("attack-node-card", html)
+        self.assertIn("attack-risk-sidebar-card", html)
+        self.assertIn("attack-graph-node", html)
         self.assertIn("function layoutArchitecture", html)
         self.assertIn("function renderArchitectureAsset", html)
         self.assertIn("zone-panel", html)

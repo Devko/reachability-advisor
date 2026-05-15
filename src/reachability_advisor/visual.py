@@ -154,6 +154,7 @@ def _visual_payload(findings: list[Finding], metadata: dict[str, Any] | None = N
         "attackPaths": attack_paths,
         "riskScenarios": scenario_view["riskScenarios"],
         "attackPathGroups": scenario_view["attackPathGroups"],
+        "attackSurfaces": scenario_view["attackSurfaces"],
         "issueCategories": scenario_view["issueCategories"],
         "vulnerabilities": vulnerabilities,
         "links": links,
@@ -1022,6 +1023,20 @@ label.check input {
   grid-template-columns: minmax(0, 1fr) 410px;
   min-height: calc(100vh - 105px);
 }
+.layout.with-left-sidebar {
+  grid-template-columns: 386px minmax(0, 1fr) 410px;
+}
+.left-panel {
+  display: none;
+  min-width: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+}
+.layout.with-left-sidebar .left-panel {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+}
 .graph-shell {
   position: relative;
   min-width: 0;
@@ -1277,262 +1292,291 @@ label.check input {
   background: #f8fafc;
   border-bottom: 1px solid #e4e9f1;
 }
-.attack-entry-card {
-  border-left-color: #0f172a;
-}
-.attack-entry-card .top {
-  background: #111827;
-  color: white;
-}
-.attack-entry-card .sub {
-  color: #cbd5e1;
-}
-.attack-asset-card {
-  border-left-width: 9px;
-}
-.attack-asset-card .top {
-  grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
+.attack-risk-sidebar {
+  min-width: 0;
+  height: calc(100vh - 105px);
+  overflow: auto;
+  padding: 14px 12px;
   background: #ffffff;
-  border-bottom: 1px solid #e4e9f1;
 }
-.attack-asset-card .top > .chips {
-  max-width: 100%;
-  justify-content: flex-start;
-}
-.attack-asset-card .title-main {
-  -webkit-line-clamp: 2;
-}
-.attack-asset-card .body {
-  padding-top: 9px;
-}
-.attack-risk-card {
-  border-left-width: 0;
-  border: 1px dashed rgba(219, 39, 119, .58);
-  background: rgba(253, 242, 248, .72);
-  box-shadow: 0 10px 22px rgba(15, 23, 42, .08);
-}
-.attack-risk-card .top {
-  grid-template-columns: minmax(0, 1fr);
-  gap: 6px;
-  background: transparent;
-  border-bottom: 0;
-  padding-bottom: 6px;
-}
-.attack-risk-card .top > .chips {
-  justify-content: flex-start;
-}
-.attack-risk-card .title-main {
-  -webkit-line-clamp: 2;
-}
-.attack-risk-card .body {
-  padding-top: 2px;
-}
-.attack-risk-card .sub {
-  -webkit-line-clamp: 2;
-}
-.attack-risk-card[data-risk-kind="identity"],
-.attack-risk-card[data-risk-kind="visibility"] {
-  border-color: rgba(14, 165, 233, .48);
-  background: rgba(240, 249, 255, .72);
-}
-.attack-risk-card[data-risk-kind="runtime"] {
-  border-color: rgba(225, 29, 72, .55);
-  background: rgba(255, 241, 242, .74);
-}
-.attack-risk-card[data-risk-kind="static"] {
-  border-color: rgba(124, 58, 237, .5);
-  background: rgba(245, 243, 255, .74);
-}
-.attack-summary {
-  position: absolute;
+.attack-risk-sidebar-title {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  justify-content: space-between;
+  gap: 10px;
   align-items: center;
-  padding: 10px 12px;
+  padding: 0 2px 12px;
+  color: #111827;
+  font-size: 14px;
+  font-weight: 850;
+}
+.attack-risk-sidebar-list {
+  display: grid;
+  gap: 10px;
+}
+.attack-risk-sidebar-card {
+  width: 100%;
+  height: auto;
+  min-height: 0;
   border: 1px solid #d7deea;
-  border-radius: 10px;
-  background: rgba(255,255,255,.88);
-  box-shadow: 0 8px 22px rgba(16,24,40,.08);
-  color: #344054;
-  font-size: 12px;
-  font-weight: 700;
-}
-.attack-overview-lane {
-  position: absolute;
-  border: 1px solid rgba(148, 163, 184, .34);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, .42);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.78);
-}
-.attack-overview-lane.selected {
-  border-color: rgba(17, 24, 39, .38);
-  background: rgba(255, 255, 255, .7);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 12px 28px rgba(16,24,40,.08);
-}
-.attack-overview-lane .lane-title {
-  position: absolute;
-  left: 14px;
-  top: 9px;
-  max-width: min(520px, calc(100% - 360px));
-  color: #344054;
-  font-size: 12px;
-  font-weight: 800;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.attack-overview-lane .lane-meta {
-  position: absolute;
-  right: 12px;
-  top: 8px;
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-.attack-overview-lane.dimmed {
-  opacity: .62;
-}
-.attack-list-card {
-  border-left-width: 8px;
-}
-.attack-list-card .top {
+  border-left-width: 7px;
+  border-radius: 8px;
   background: #ffffff;
-  border-bottom: 1px solid #e4e9f1;
+  color: var(--ink);
+  padding: 10px 10px 9px;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, .07);
+  font: inherit;
+  overflow: visible;
 }
-.attack-list-card .body {
-  padding-top: 0;
+.attack-risk-sidebar-card:hover,
+.attack-risk-sidebar-card.selected {
+  border-color: #aab7c8;
+  background: #f8fafc;
 }
-.attack-list-card:focus {
-  outline: 3px solid #111827;
-  outline-offset: 2px;
+.attack-risk-sidebar-card.urgent {
+  border-left-color: #8b1e12;
 }
-.attack-node-card {
-  border-left-width: 0;
-  border-radius: 12px;
-  text-align: center;
-  overflow: hidden;
+.attack-risk-sidebar-card.high {
+  border-left-color: #c2410c;
 }
-.attack-node-card.compact {
-  border-radius: 11px;
+.attack-risk-sidebar-card.medium {
+  border-left-color: #b7791f;
 }
-.attack-node-card.compact .top {
-  padding: 8px 8px 6px;
+.attack-risk-sidebar-card.low {
+  border-left-color: #2563eb;
 }
-.attack-node-card.compact .body {
-  padding: 0 8px 8px;
+.attack-risk-sidebar-card.informational {
+  border-left-color: #64748b;
 }
-.attack-node-card.compact .title-main {
-  font-size: 12px;
-  line-height: 1.16;
-  overflow-wrap: anywhere;
-}
-.attack-node-card.compact .sub {
-  font-size: 10.5px;
-  line-height: 1.2;
-  overflow-wrap: anywhere;
-}
-.attack-node-card.compact .attack-node-icon {
-  width: 26px;
-  height: 26px;
-  margin-bottom: 5px;
-  font-size: 10px;
-}
-.attack-node-card.compact .chips {
-  max-height: 21px;
-  overflow: hidden;
-  justify-content: center;
-}
-.attack-node-card.compact .chip {
-  max-width: 72px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.attack-node-card.dimmed {
-  opacity: .5;
-}
-.attack-node-card .top {
-  display: block;
-  padding: 11px 10px 8px;
-}
-.attack-node-card .title-main {
-  -webkit-line-clamp: 2;
+.attack-risk-sidebar-card .risk-title {
   font-size: 13px;
-  line-height: 1.18;
+  line-height: 1.2;
+  font-weight: 800;
+  color: #111827;
   overflow-wrap: anywhere;
 }
-.attack-node-card .sub {
-  -webkit-line-clamp: 2;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+.attack-risk-sidebar-card .risk-meta {
+  margin-top: 5px;
+  font-size: 11px;
+  line-height: 1.25;
+  color: var(--muted);
   overflow-wrap: anywhere;
 }
-.attack-node-card .body {
-  padding: 0 10px 10px;
+.attack-risk-sidebar-card .chips {
+  margin-top: 8px;
 }
-.attack-node-icon {
-  width: 30px;
-  height: 30px;
-  margin: 0 auto 7px;
+.attack-graph-node {
+  position: absolute;
+  display: grid;
+  grid-template-rows: max-content max-content max-content;
+  justify-items: center;
+  align-content: start;
+  gap: 4px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #111827;
+  cursor: pointer;
+  text-align: center;
+  min-width: 0;
+  transition: opacity .16s ease, transform .16s ease;
+}
+.attack-graph-node.draggable {
+  cursor: grab;
+}
+.attack-graph-node.dragging {
+  cursor: grabbing;
+  z-index: 12;
+}
+.attack-graph-node:focus {
+  outline: none;
+}
+.attack-graph-node:hover {
+  transform: translateY(-2px);
+}
+.attack-graph-node.selected .attack-graph-circle,
+.attack-graph-node:focus .attack-graph-circle {
+  outline: 3px solid #111827;
+  outline-offset: 4px;
+}
+.attack-graph-node.dimmed {
+  opacity: .32;
+}
+.attack-graph-circle {
+  position: relative;
+  width: 58px;
+  height: 58px;
   border-radius: 999px;
   display: grid;
   place-items: center;
-  border: 2px solid #cbd5e1;
-  background: #f8fafc;
+  border: 3px solid #ffffff;
+  background: #475569;
+  color: white;
+  box-shadow: 0 16px 34px rgba(15, 23, 42, .18), 0 0 0 1px rgba(15, 23, 42, .10);
+  font-size: 13px;
+  font-weight: 850;
+  transition: box-shadow .16s ease, transform .16s ease;
+}
+.attack-graph-node:hover .attack-graph-circle {
+  box-shadow: 0 20px 42px rgba(15, 23, 42, .22), 0 0 0 1px rgba(15, 23, 42, .14);
+}
+.attack-graph-node[data-node-type="entry"] .attack-graph-circle {
+  width: 78px;
+  height: 78px;
+  background: linear-gradient(135deg, #2563eb 0%, #0f766e 100%);
+  font-size: 16px;
+}
+.attack-graph-node[data-node-type="lateral"] .attack-graph-circle {
+  width: 78px;
+  height: 78px;
+  background: linear-gradient(135deg, #7c3aed 0%, #2563eb 100%);
+  font-size: 15px;
+}
+.attack-graph-node[data-node-type="ingress"] .attack-graph-circle {
+  background: linear-gradient(135deg, #f97316 0%, #c2410c 100%);
+}
+.attack-graph-node[data-node-type="workload"] .attack-graph-circle,
+.attack-graph-node[data-node-type="runtime"] .attack-graph-circle {
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+}
+.attack-graph-node[data-node-type="identity"] .attack-graph-circle {
+  background: linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%);
+}
+.attack-graph-node[data-node-type="data"] .attack-graph-circle {
+  background: linear-gradient(135deg, #059669 0%, #047857 100%);
+}
+.attack-graph-node[data-node-type="vulnerability"] .attack-graph-circle,
+.attack-graph-node[data-node-type="weakness"] .attack-graph-circle {
+  background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%);
+}
+.attack-graph-node[data-node-type="finding"].urgent .attack-graph-circle,
+.attack-graph-node[data-node-type="finding"].high .attack-graph-circle {
+  background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%);
+}
+.attack-graph-node[data-node-type="finding"].medium .attack-graph-circle {
+  background: linear-gradient(135deg, #d97706 0%, #92400e 100%);
+}
+.attack-graph-node[data-node-type="finding"].low .attack-graph-circle {
+  background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%);
+}
+.attack-graph-node[data-node-type="finding"].informational .attack-graph-circle {
+  background: linear-gradient(135deg, #64748b 0%, #334155 100%);
+}
+.attack-graph-node[data-node-type="unknown"] .attack-graph-circle,
+.attack-graph-node[data-node-state="unknown"] .attack-graph-circle {
+  background: #64748b;
+  border-style: dashed;
+}
+.attack-graph-node[data-node-state="blocked"] .attack-graph-circle {
+  background: #c2410c;
+  border-style: dashed;
+}
+.attack-graph-badge {
+  position: absolute;
+  right: -5px;
+  top: -6px;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 5px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: #dc2626;
+  color: #ffffff;
+  border: 2px solid #ffffff;
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1;
+}
+.attack-graph-toggle {
+  position: absolute;
+  left: -5px;
+  top: -6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: #ffffff;
   color: #111827;
+  border: 2px solid #cbd5e1;
+  font-size: 14px;
+  font-weight: 850;
+  line-height: 1;
+}
+.attack-graph-label {
+  width: 132px;
+  color: #111827;
+  font-size: 13px;
   font-weight: 800;
-  font-size: 12px;
+  line-height: 1.16;
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .86);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, .07);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
-.attack-node-card[data-node-type="entry"] .attack-node-icon,
-.attack-node-card[data-node-type="runtime"] .attack-node-icon {
-  border-color: #0ea5e9;
-  background: #e0f2fe;
-  color: #075985;
-}
-.attack-node-card[data-node-type="ingress"] .attack-node-icon,
-.attack-node-card[data-node-type="workload"] .attack-node-icon {
-  border-color: #0f766e;
-  background: #ccfbf1;
-  color: #115e59;
-}
-.attack-node-card[data-node-type="vulnerability"] .attack-node-icon,
-.attack-node-card[data-node-type="weakness"] .attack-node-icon {
-  border-color: #dc2626;
-  background: #fee2e2;
-  color: #991b1b;
-}
-.attack-node-card[data-node-type="identity"] .attack-node-icon,
-.attack-node-card[data-node-type="data"] .attack-node-icon {
-  border-color: #7c3aed;
-  background: #ede9fe;
-  color: #5b21b6;
-}
-.attack-node-card[data-node-state="unknown"] {
-  border-style: dashed;
-  background: rgba(248,250,252,.88);
-}
-.attack-node-card[data-node-state="blocked"] {
-  border-style: dashed;
-  background: rgba(255,247,237,.9);
-}
-.attack-node-card[data-node-state="unknown"] .attack-node-icon {
-  border-style: dashed;
-  border-color: #64748b;
-  color: #475569;
-}
-.attack-node-card[data-node-state="blocked"] .attack-node-icon {
-  border-color: #c2410c;
-  color: #9a3412;
-  background: #ffedd5;
+.attack-graph-sub {
+  width: 132px;
+  color: #667085;
+  font-size: 11px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .edge.attack-path {
   stroke: #334155;
   stroke-width: 2.4;
   opacity: .9;
+}
+.edge.attack-graph-edge {
+  stroke: #475569;
+  stroke-width: 2.4;
+  opacity: .82;
+  marker-end: url(#edge-arrow);
+  pointer-events: stroke;
+  cursor: pointer;
+  stroke-linecap: round;
+}
+.edge.attack-graph-edge.high,
+.edge.attack-graph-edge.urgent {
+  stroke: #dc2626;
+}
+.edge.attack-graph-edge.medium {
+  stroke: #b7791f;
+}
+.edge.attack-graph-edge.lateral {
+  stroke: #7c3aed;
+}
+.edge.attack-graph-edge.unknown {
+  stroke-dasharray: 7 6;
+}
+.edge.attack-graph-edge.blocker {
+  stroke-dasharray: 2 6;
+  stroke: #c2410c;
+}
+.edge.attack-graph-edge.selected {
+  stroke-width: 3.1;
+  opacity: 1;
+  animation: pulse-edge 1.8s ease-in-out infinite;
+}
+.edge.attack-graph-edge:hover,
+.edge.attack-graph-edge:focus {
+  stroke-width: 4;
+  opacity: 1;
+  outline: none;
+}
+.edge.attack-graph-edge.dimmed {
+  opacity: .18;
+  stroke-width: 1.6;
 }
 .edge.attack-path.unknown {
   stroke-dasharray: 7 6;
@@ -1790,13 +1834,19 @@ label.check input {
   stroke-width: 3.4;
   filter: drop-shadow(0 1px 3px rgba(16,24,40,.28));
 }
-aside {
+.right-panel {
   border-left: 1px solid var(--line);
   background: var(--panel);
   min-width: 0;
   overflow: hidden;
   display: grid;
   grid-template-rows: auto minmax(180px, 42vh) 1fr;
+}
+.layout.with-left-sidebar .right-panel {
+  grid-template-rows: auto 1fr;
+}
+.layout.with-left-sidebar .finding-list {
+  display: none;
 }
 .legend {
   display: flex;
@@ -1933,7 +1983,10 @@ li {
 @media (max-width: 980px) {
   .toolbar { grid-template-columns: 1fr 1fr; }
   .layout { grid-template-columns: 1fr; }
-  aside { border-left: 0; border-top: 1px solid var(--line); }
+  .layout.with-left-sidebar { grid-template-columns: 1fr; }
+  .left-panel { border-right: 0; border-bottom: 1px solid var(--line); }
+  .attack-risk-sidebar { height: auto; max-height: 34vh; }
+  .right-panel { border-left: 0; border-top: 1px solid var(--line); }
   #graph { height: 58vh; min-height: 430px; }
 }
 </style>
@@ -1991,7 +2044,10 @@ li {
   <button id="fit" title="Fit the current graph into the visible area">Fit</button>
   <button id="reset" class="secondary" title="Reset graph zoom and pan">Reset</button>
 </section>
-<main class="layout">
+<main class="layout" id="layout">
+  <aside class="left-panel" id="leftPanel">
+    <div id="riskSidebar"></div>
+  </aside>
   <section class="graph-shell">
     <div id="graph" role="img" aria-label="Attack paths, architecture zones, network hops, assets, and evidence path graph">
       <div id="surface">
@@ -2000,7 +2056,7 @@ li {
       </div>
     </div>
   </section>
-  <aside>
+  <aside class="right-panel">
     <div class="legend">
       <span><i class="swatch" style="background:var(--urgent)"></i>urgent</span>
       <span><i class="swatch" style="background:var(--high)"></i>high</span>
@@ -2025,6 +2081,7 @@ const vulnerabilityByFindingKey = new Map((DATA.vulnerabilities || []).map(vuln 
 const attackPathByFindingKey = new Map((DATA.attackPaths || []).map(path => [path.findingKey, path]));
 const scenarioById = new Map((DATA.riskScenarios || []).map(scenario => [scenario.id, scenario]));
 const attackPathGroupById = new Map((DATA.attackPathGroups || []).map(group => [group.id, group]));
+const attackSurfaceById = new Map((DATA.attackSurfaces || []).map(surface => [surface.id, surface]));
 const scenarioByFindingKey = new Map();
 for (const scenario of DATA.riskScenarios || []) {
   for (const findingKey of scenario.findingKeys || []) {
@@ -2091,6 +2148,8 @@ const attackRiskHeight = 110;
 const attackAssetGap = 14;
 const attackRowGap = 42;
 const graph = document.getElementById("graph");
+const layoutRoot = document.getElementById("layout");
+const riskSidebar = document.getElementById("riskSidebar");
 const surface = document.getElementById("surface");
 const edgesSvg = document.getElementById("edges");
 const cards = document.getElementById("cards");
@@ -2109,6 +2168,10 @@ let viewMode = "risk";
 let selected = null;
 let transform = {x: 30, y: 30, scale: 1};
 let drag = null;
+let nodeDrag = null;
+let suppressNodeClickId = null;
+const nodePositionOverrides = new Map();
+const expandedGraphNodes = new Set();
 let surfaceBounds = {width: 1000, height: 700};
 
 function init() {
@@ -2273,9 +2336,11 @@ function render() {
   for (const tab of viewTabs) {
     tab.classList.toggle("active", (tab.dataset.view || "architecture") === viewMode);
   }
+  layoutRoot.classList.toggle("with-left-sidebar", viewMode === "attack");
   const riskScenarios = visibleRiskScenarios();
   const visibleScenarioIds = new Set(riskScenarios.map(scenario => scenario.id));
   const visibleGroupIds = new Set((DATA.attackPathGroups || []).filter(group => (group.scenarioIds || []).some(id => visibleScenarioIds.has(id))).map(group => group.id));
+  const visibleSurfaceIds = new Set((DATA.attackPathGroups || []).filter(group => visibleGroupIds.has(group.id)).map(group => group.surfaceId).filter(Boolean));
   const findings = visibleFindings();
   const visibleKeys = new Set(findings.map(finding => finding.key));
   const visibleVulns = findings.map(finding => vulnerabilityByFindingKey.get(finding.key)).filter(Boolean);
@@ -2287,15 +2352,10 @@ function render() {
   if (viewMode === "attack") {
     const layout = layoutAttackPaths(visibleScenarioIds);
     edgesSvg.replaceChildren(renderEdgeDefs(), ...renderAttackPathEdges(layout));
-    cards.replaceChildren(
-      renderAttackSummary(layout.summary),
-      ...renderAttackLaneLabels(),
-      ...layout.lanes.map(lane => renderAttackOverviewLane(lane.datum, lane.position)),
-      ...layout.pathCards.map(path => renderAttackPathCard(path.datum, path.position)),
-      ...layout.routeNodes.map(node => renderAttackNodeCard(node.datum, node.position)),
-      ...layout.assetCards.map(asset => renderAttackScenarioCard(asset.datum, asset.position))
-    );
+    riskSidebar.replaceChildren(renderAttackRiskSidebar(riskScenarios));
+    cards.replaceChildren(...layout.graphNodes.map(node => renderAttackGraphNode(node.datum, node.position)));
   } else if (viewMode === "evidence") {
+    riskSidebar.replaceChildren();
     const layout = layoutCards(visibleAssets, visibleVulns, visibleNetworkPaths);
     edgesSvg.replaceChildren(renderEdgeDefs(), ...renderEdges(visibleVulns, visibleNetworkPaths, layout));
     cards.replaceChildren(
@@ -2306,10 +2366,12 @@ function render() {
       ...visibleVulns.map(vuln => renderVulnerabilityCard(vuln, layout.vulnerabilities.get(vuln.id)))
     );
   } else if (viewMode === "risk" || viewMode === "findings") {
+    riskSidebar.replaceChildren();
     const layout = layoutRiskScenarios(riskScenarios);
     edgesSvg.replaceChildren(renderEdgeDefs());
     cards.replaceChildren(renderRiskBoard(riskScenarios, layout));
   } else {
+    riskSidebar.replaceChildren();
     const layout = layoutArchitecture(visibleAssetIds, visibleKeys);
     edgesSvg.replaceChildren(renderEdgeDefs(), ...renderArchitectureEdges(layout));
     cards.replaceChildren(
@@ -2335,6 +2397,12 @@ function render() {
   if (selected && selected.attackKind === "group" && !visibleGroupIds.has(selected.id)) {
     selected = null;
   }
+  if (selected && selected.attackKind === "surface" && !visibleSurfaceIds.has(selected.id)) {
+    selected = null;
+  }
+  if (selected && (selected.attackKind === "graphNode" || selected.attackKind === "graphEdge") && selected.path && !visibleGroupIds.has(selected.path.id)) {
+    selected = null;
+  }
   if (selected && !selected.attackKind && !selected.architectureKind && !visibleAssetIds.has(selected.id) && !visibleKeys.has(selected.findingKey) && !visibleNetworkIds.has(selected.id) && !visibleAssetIds.has(selected.assetId) && ![...selectedAssetIds].some(assetId => visibleAssetIds.has(assetId))) {
     selected = null;
   }
@@ -2343,131 +2411,294 @@ function render() {
 }
 
 function layoutAttackPaths(visibleScenarioIds) {
-  const attackPaths = (DATA.attackPathGroups || [])
+  const attackGroups = (DATA.attackPathGroups || [])
     .map(group => ({
       ...group,
       assets: (group.assets || []).filter(asset => visibleScenarioIds.has(asset.id)).map(asset => scenarioById.get(asset.id) || asset),
     }))
     .filter(group => group.assets.length)
     .sort((a, b) => (tierRank[b.tier] - tierRank[a.tier]) || ((b.score || 0) - (a.score || 0)) || String(a.title || "").localeCompare(String(b.title || "")));
-  if (selected && selected.attackKind === "group" && !attackPaths.some(path => path.id === selected.id)) {
+  const attackSurfaces = groupAttackSurfaces(attackGroups);
+  if (selected && selected.attackKind === "group" && !attackGroups.some(path => path.id === selected.id)) {
     selected = null;
   }
-  const selectedPathId = selected?.attackKind === "group"
+  if (selected && selected.attackKind === "surface" && !attackSurfaces.some(surface => surface.id === selected.id)) {
+    selected = null;
+  }
+  const selectedGroupId = selected?.attackKind === "group"
     ? selected.id
     : selected?.attackKind === "scenario"
       ? selected.attackPathGroupId
-      : selected?.attackKind === "node"
+      : selected?.attackKind === "node" || selected?.attackKind === "graphNode" || selected?.attackKind === "graphEdge"
         ? selected.path?.id
         : null;
-  if (selected && selected.attackKind === "node" && selectedPathId && !attackPaths.some(path => path.id === selectedPathId)) {
+  if (selected && selected.attackKind === "node" && selectedGroupId && !attackGroups.some(path => path.id === selectedGroupId)) {
     selected = null;
   }
-  const selectedPath = selectedPathId
-    ? attackPaths.find(path => path.id === selectedPathId) || attackPaths[0]
-    : attackPaths[0];
-  if (!selected && selectedPath) selected = {...selectedPath, attackKind: "group"};
+  const selectedSurfaceId = selected?.attackKind === "surface"
+    ? selected.id
+    : selectedGroupId
+      ? (attackGroups.find(path => path.id === selectedGroupId) || {}).surfaceId
+      : null;
+  const selectedSurface = selectedSurfaceId
+    ? attackSurfaces.find(surface => surface.id === selectedSurfaceId) || attackSurfaces[0]
+    : attackSurfaces[0];
+  const selectedRouteGroups = selectedSurface ? selectedSurface.groups || [] : [];
 
   const positions = new Map();
-  const pathCards = attackPaths.map((path, index) => {
-    const position = {x: 42, y: attackFirstRowY + index * 156, width: 330, height: 138};
-    positions.set(path.id, position);
-    return {datum: {...path, attackKind: "group"}, position};
-  });
 
-  const overviewLimit = 6;
-  let overviewPaths = attackPaths.slice(0, overviewLimit);
-  if (selectedPath && !overviewPaths.some(path => path.id === selectedPath.id)) {
-    overviewPaths = [selectedPath, ...overviewPaths.slice(0, Math.max(overviewLimit - 1, 0))];
+  const overviewLimit = 14;
+  let overviewPaths = uniqueById([...selectedRouteGroups, ...attackGroups]).slice(0, overviewLimit);
+  if (!overviewPaths.length) {
+    overviewPaths = attackGroups.slice(0, overviewLimit);
   }
   overviewPaths = uniqueById(overviewPaths);
 
-  const lanes = [];
-  const routeNodes = [];
-  const assetCards = [];
+  const graphNodes = [];
+  const graphNodeById = new Map();
   const graphEdges = [];
-  const nodeWidth = 136;
-  const nodeHeight = 104;
-  const gapX = 22;
-  const laneGap = 34;
-  const routeAssetGap = 58;
-  const startX = 430;
-  let laneY = attackFirstRowY + 112;
-  const assetWidth = 300;
-  const assetHeight = 112;
-  const assetGap = 12;
+  const graphStartX = 92;
+  const entryX = graphStartX;
+  const hopStartX = graphStartX + 190;
+  const hopGapX = 155;
+  const branchGapY = 132;
+  const surfaceGapY = 90;
+  const nodeSize = 86;
+  const entrySize = 106;
+  const groupsBySurface = new Map();
   for (const path of overviewPaths) {
-    const pathSelected = selectedPath && path.id === selectedPath.id;
-    const laneNodes = compactRouteNodes(path.routeNodes || []);
-    const scenarioAssets = path.assets || [];
-    const laneHeight = Math.max(176, 78 + scenarioAssets.length * assetHeight + Math.max(0, scenarioAssets.length - 1) * assetGap);
-    const assetX = startX + laneNodes.length * (nodeWidth + gapX) + routeAssetGap;
-    const laneWidth = Math.max(920, assetX - startX + assetWidth + 46);
-    const laneDatum = {
-      ...path,
-      id: `${path.id}:lane`,
-      attackKind: "lane",
-      sourcePath: path,
-      selected: pathSelected,
-      hiddenNodeCount: Math.max(0, (path.routeNodes || []).length - laneNodes.length),
+    const key = path.surfaceId || "surface:unknown";
+    if (!groupsBySurface.has(key)) groupsBySurface.set(key, []);
+    groupsBySurface.get(key).push(path);
+  }
+  const visibleSurfaces = attackSurfaces.filter(surface => groupsBySurface.has(surface.id));
+  let currentY = 46;
+  const surfaceBlocks = [];
+  for (const surface of visibleSurfaces) {
+    const groups = groupsBySurface.get(surface.id) || [];
+    let branchOffset = 66;
+    const branches = groups.map((path, index) => {
+      const height = attackBranchHeight(path);
+      const branch = {path, index, y: currentY + branchOffset, height};
+      branchOffset += height;
+      return branch;
+    });
+    const surfaceHeight = Math.max(190, branchOffset + 36);
+    surfaceBlocks.push({
+      surface,
+      groups,
+      branches,
+      height: surfaceHeight,
+      y: currentY,
+      centerY: currentY + surfaceHeight / 2,
+    });
+    currentY += surfaceHeight + surfaceGapY;
+  }
+  const outsideBlocks = surfaceBlocks.filter(block => block.surface.surfaceMode === "outside");
+  const internetRootId = "attack-entry:internet";
+  if (outsideBlocks.length) {
+    const outsideRows = outsideBlocks.flatMap(block => block.branches.map(branch => ({path: branch.path, y: branch.y})));
+    const rootY = average(outsideRows.map(row => row.y));
+    const selectedOutside = selected && selected.attackKind === "surface" && outsideBlocks.some(block => block.surface.id === selected.id);
+    const rootScore = Math.max(...outsideBlocks.map(block => Number(block.surface.score || 0)));
+    const rootTier = outsideBlocks.reduce((tierValue, block) => strongerTier(tierValue, block.surface.tier), "informational");
+    const rootDatum = {
+      id: internetRootId,
+      attackKind: "graphNode",
+      graphKind: "entryRoot",
+      graphType: "entry",
+      type: "entry",
+      label: "Internet / attacker",
+      subtitle: "shared outside entry",
+      badge: String(outsideRows.length),
+      routeCount: outsideRows.length,
+      surfaceIds: outsideBlocks.map(block => block.surface.id),
+      surfaceTitles: outsideBlocks.map(block => block.surface.title),
+      tier: rootTier,
+      score: rootScore,
+      selected: Boolean(selectedOutside || (selected && selected.id === internetRootId)),
+      dimmed: Boolean(selected && selected.attackKind === "surface" && !selectedOutside),
     };
-    lanes.push({datum: laneDatum, position: {x: startX - 18, y: laneY - 40, width: laneWidth, height: laneHeight}});
-    laneNodes.forEach((node, index) => {
-      const viewNodeId = `${path.id}:node:${node.id}`;
-      const position = {x: startX + index * (nodeWidth + gapX), y: laneY + 28, width: nodeWidth, height: nodeHeight};
-      positions.set(viewNodeId, position);
-      routeNodes.push({
-        datum: {
-          ...node,
-          id: viewNodeId,
+    positions.set(internetRootId, {x: entryX, y: rootY - entrySize / 2, width: entrySize, height: entrySize});
+    graphNodes.push({datum: rootDatum, position: positions.get(internetRootId)});
+    graphNodeById.set(internetRootId, rootDatum);
+  }
+  for (const block of surfaceBlocks) {
+    const surface = block.surface;
+    const groups = block.groups;
+    const outsideSurface = surface.surfaceMode === "outside";
+    const surfaceNodeId = outsideSurface ? internetRootId : `${surface.id}:graph-entry`;
+    const surfaceSelected = selected?.attackKind === "surface" && selected.id === surface.id;
+    if (!outsideSurface) {
+      positions.set(surfaceNodeId, {x: entryX, y: block.centerY - entrySize / 2, width: entrySize, height: entrySize});
+      const surfaceDatum = {
+        ...surface,
+        id: surfaceNodeId,
+        sourceId: surface.id,
+        attackKind: "surface",
+        graphKind: "entry",
+        graphType: surface.surfaceMode === "lateral" ? "lateral" : "entry",
+        label: surface.surfaceMode === "lateral" ? "Internal pivot" : surface.entryLabel || "Internet / attacker",
+        subtitle: surface.surfaceModeLabel || surface.exposure || "",
+        badge: surface.routeCount ? String(surface.routeCount) : "",
+        selected: surfaceSelected,
+      };
+      graphNodes.push({datum: surfaceDatum, position: positions.get(surfaceNodeId)});
+      graphNodeById.set(surfaceNodeId, surfaceDatum);
+    }
+    groups.forEach((path, groupIndex) => {
+      const pathSelected = selectedGroupId ? selectedGroupId === path.id : surfaceSelected;
+      const dimmed = selectedGroupId ? selectedGroupId !== path.id : selected && selected.attackKind === "surface" ? selected.id !== surface.id : false;
+      const routeNodes = compactRouteNodes(graphRouteNodes(path, surface));
+      const branch = block.branches[groupIndex] || {y: block.y + 64 + groupIndex * branchGapY};
+      const branchY = branch.y;
+      let previousNodeId = surfaceNodeId;
+      if (!routeNodes.length) {
+        const routeId = `${path.id}:graph-route`;
+        positions.set(routeId, {x: hopStartX, y: branchY - nodeSize / 2, width: nodeSize, height: nodeSize});
+        const routeDatum = attackGraphNodeDatum(routeId, "ingress", path.pathLabel || path.title || "Network route", path.pathType || path.provider || "", path, pathSelected, dimmed);
+        graphNodes.push({datum: routeDatum, position: positions.get(routeId)});
+        graphNodeById.set(routeId, routeDatum);
+        graphEdges.push(attackGraphEdge(surfaceNodeId, routeId, path, pathSelected, dimmed, false, false, "Entry to network route"));
+        previousNodeId = routeId;
+      }
+      routeNodes.forEach((node, nodeIndex) => {
+        const viewNodeId = `${path.id}:graph-node:${node.id}`;
+        const position = {x: hopStartX + nodeIndex * hopGapX, y: branchY - nodeSize / 2, width: nodeSize, height: nodeSize};
+        positions.set(viewNodeId, position);
+        const nodeDatum = {
+          ...attackGraphNodeDatum(viewNodeId, node.type || "unknown", node.label || node.type || "Node", node.subtitle || node.evidenceLayer || "", path, pathSelected, dimmed),
           rawNodeId: node.id,
-          attackKind: "node",
-          path,
-          tier: path.tier,
-          score: path.score,
-          compact: true,
-          dimmed: !pathSelected,
-        },
-        position,
+          state: node.state || "normal",
+          evidenceLayer: node.evidenceLayer,
+          confidence: node.confidence,
+        };
+        graphNodes.push({datum: nodeDatum, position});
+        graphNodeById.set(viewNodeId, nodeDatum);
+        graphEdges.push(attackGraphEdge(previousNodeId, viewNodeId, path, pathSelected, dimmed, node.state === "unknown", node.state === "blocked", `${path.pathType || "route"} step`));
+        previousNodeId = viewNodeId;
       });
+      const assetId = `${path.id}:graph-assets`;
+      const assetNames = (path.assets || []).map(asset => asset.assetName || asset.title || asset.id).filter(Boolean);
+      const assetLabel = assetNames.length === 1 ? assetNames[0] : `${path.assetCount || assetNames.length || 0} assets`;
+      const assetX = hopStartX + Math.max(routeNodes.length, 1) * hopGapX + 40;
+      positions.set(assetId, {x: assetX, y: branchY - nodeSize / 2, width: nodeSize, height: nodeSize});
+      const assetDatum = {
+        ...attackGraphNodeDatum(assetId, "workload", assetLabel, path.provider || path.exposure || "", path, pathSelected, dimmed),
+        badge: path.assetCount ? String(path.assetCount) : "",
+      };
+      graphNodes.push({datum: assetDatum, position: positions.get(assetId)});
+      graphNodeById.set(assetId, assetDatum);
+      graphEdges.push(attackGraphEdge(previousNodeId, assetId, path, pathSelected, dimmed, false, false, "Route reaches workload"));
+      const issueId = `${path.id}:graph-findings`;
+      positions.set(issueId, {x: assetX + 170, y: branchY - nodeSize / 2, width: nodeSize, height: nodeSize});
+      const findingsExpanded = expandedGraphNodes.has(issueId);
+      const issueDatum = {
+        ...attackGraphNodeDatum(issueId, "vulnerability", `${path.findingCount || 0} findings`, findingsExpanded ? "expanded finding list" : "click to expand finding list", path, pathSelected, dimmed),
+        badge: path.findingCount ? String(path.findingCount) : "",
+        graphKind: "findingGroup",
+        expandable: true,
+        expanded: findingsExpanded,
+        findingKeys: path.findingKeys || [],
+      };
+      graphNodes.push({datum: issueDatum, position: positions.get(issueId)});
+      graphNodeById.set(issueId, issueDatum);
+      graphEdges.push(attackGraphEdge(assetId, issueId, path, pathSelected, dimmed, false, false, "Workload has linked findings"));
+      if (findingsExpanded) {
+        const linkedFindings = (path.findingKeys || []).map(key => vulnerabilityByFindingKey.get(key)).filter(Boolean);
+        linkedFindings.forEach((finding, findingIndex) => {
+          const findingId = `${issueId}:finding:${findingIndex}:${slug(finding.findingKey || finding.label || "finding")}`;
+          const findingY = branchY - ((linkedFindings.length - 1) * 74) / 2 + findingIndex * 74;
+          positions.set(findingId, {x: assetX + 340, y: findingY - nodeSize / 2, width: nodeSize, height: nodeSize});
+          const findingDatum = {
+            id: findingId,
+            attackKind: "graphNode",
+            graphKind: "finding",
+            graphType: "finding",
+            type: "finding",
+            label: finding.label || finding.findingKey || "Finding",
+            subtitle: compactComponent(finding.component, finding.componentVersion),
+            path,
+            finding,
+            findingKey: finding.findingKey,
+            tier: finding.tier || path.tier,
+            score: finding.score || path.score,
+            selected: Boolean(selected && selected.findingKey === finding.findingKey),
+            dimmed: Boolean(dimmed),
+          };
+          graphNodes.push({datum: findingDatum, position: positions.get(findingId)});
+          graphNodeById.set(findingId, findingDatum);
+          graphEdges.push(attackGraphEdge(issueId, findingId, {...path, tier: findingDatum.tier, score: findingDatum.score}, pathSelected, dimmed, false, false, "Finding detail"));
+        });
+      }
     });
-    scenarioAssets.forEach((scenario, index) => {
-      const position = {x: assetX, y: laneY + 24 + index * (assetHeight + assetGap), width: assetWidth, height: assetHeight};
-      positions.set(scenario.id, position);
-      assetCards.push({datum: {...scenario, attackKind: "scenario", scenarioKind: "scenario"}, position});
-    });
-    for (let index = 0; index < laneNodes.length - 1; index += 1) {
-      const sourceId = `${path.id}:node:${laneNodes[index].id}`;
-      const targetId = `${path.id}:node:${laneNodes[index + 1].id}`;
-      graphEdges.push({
-        from: sourceId,
-        to: targetId,
-        tier: path.tier,
-        selected: pathSelected,
-        dimmed: !pathSelected,
-        unknown: laneNodes[index].state === "unknown" || laneNodes[index + 1].state === "unknown",
-        blocker: laneNodes[index].state === "blocked" || laneNodes[index + 1].state === "blocked",
-      });
-    }
-    const lastRouteNode = laneNodes.length ? `${path.id}:node:${laneNodes[laneNodes.length - 1].id}` : path.id;
-    for (const scenario of scenarioAssets) {
-      graphEdges.push({
-        from: lastRouteNode,
-        to: scenario.id,
-        tier: scenario.tier || path.tier,
-        selected: pathSelected,
-        dimmed: !pathSelected,
-      });
-    }
-    laneY += laneHeight + laneGap;
   }
 
-  const summary = attackSummary(attackPaths);
+  for (const item of graphNodes) {
+    const override = nodePositionOverrides.get(item.datum.id);
+    if (!override) continue;
+    item.position = {...item.position, x: override.x, y: override.y};
+    positions.set(item.datum.id, item.position);
+  }
+  const summary = attackSummary(attackSurfaces, attackGroups);
   summary.shown = overviewPaths.length;
-  const maxY = Math.max(620, ...[...positions.values()].map(position => position.y + position.height + 70));
-  const maxX = Math.max(1540, ...[...positions.values()].map(position => position.x + position.width + 90));
+  const maxY = Math.max(840, ...[...positions.values()].map(position => position.y + position.height + 70));
+  const maxX = Math.max(1260, ...[...positions.values()].map(position => position.x + position.width + 90));
   surfaceBounds = {width: maxX, height: maxY, maxVulnCount: 0};
-  return {pathCards, lanes, routeNodes, assetCards, edges: graphEdges, positions, selectedPath, summary};
+  return {graphNodes, graphNodeById, edges: graphEdges, positions, selectedSurface, summary};
+}
+
+function attackBranchHeight(path) {
+  const issueId = `${path.id}:graph-findings`;
+  if (!expandedGraphNodes.has(issueId)) return 132;
+  const findingCount = (path.findingKeys || []).map(key => vulnerabilityByFindingKey.get(key)).filter(Boolean).length;
+  return Math.max(132, findingCount * 82 + 58);
+}
+
+function attackGraphNodeDatum(id, type, label, subtitle, path, selectedNode, dimmed) {
+  return {
+    id,
+    attackKind: "graphNode",
+    graphKind: "route",
+    graphType: type,
+    type,
+    label,
+    subtitle,
+    path,
+    tier: path.tier,
+    score: path.score,
+    selected: Boolean(selectedNode),
+    dimmed: Boolean(dimmed),
+  };
+}
+
+function attackGraphEdge(from, to, path, selectedEdge, dimmed, unknown, blocker, label) {
+  return {
+    id: `${from}->${to}`,
+    from,
+    to,
+    graph: true,
+    attackKind: "graphEdge",
+    label: label || "Attack route transition",
+    tier: path.tier,
+    score: path.score,
+    path,
+    selected: Boolean(selectedEdge),
+    dimmed: Boolean(dimmed),
+    unknown: Boolean(unknown),
+    blocker: Boolean(blocker),
+    lateral: path.surfaceMode === "lateral" || path.exposure === "internal",
+  };
+}
+
+function graphRouteNodes(path, surface) {
+  const nodes = [...(path.routeNodes || [])];
+  if (!nodes.length) return nodes;
+  const firstNode = nodes[0] || {};
+  const firstLabel = String(firstNode.label || "").toLowerCase();
+  const entryLabel = String(surface?.entryLabel || path.entryLabel || "").toLowerCase();
+  const isEntryNode = firstNode.type === "entry" || firstLabel === entryLabel || firstLabel.includes("internet / attacker") || firstLabel.includes("internal pivot");
+  return isEntryNode ? nodes.slice(1) : nodes;
 }
 
 function compactRouteNodes(nodes) {
@@ -2476,28 +2707,120 @@ function compactRouteNodes(nodes) {
   return uniqueById(picked);
 }
 
-function attackSummary(paths) {
+function groupAttackSurfaces(groups) {
+  const surfaces = new Map();
+  for (const group of groups) {
+    const surfaceId = group.surfaceId || `attack-surface:${slug([group.surfaceMode, group.entryLabel, group.exposure, group.provider].join("-"))}`;
+    const base = attackSurfaceById.get(surfaceId) || {};
+    if (!surfaces.has(surfaceId)) {
+      surfaces.set(surfaceId, {
+        ...base,
+        id: surfaceId,
+        attackKind: "surface",
+        title: base.title || surfaceTitleForGroup(group),
+        summary: base.summary || "",
+        surfaceMode: base.surfaceMode || group.surfaceMode || surfaceModeForGroup(group),
+        surfaceModeLabel: base.surfaceModeLabel || group.surfaceModeLabel || surfaceModeLabel(surfaceModeForGroup(group)),
+        entryLabel: base.entryLabel || group.entryLabel || "Unknown entry",
+        entrySubtitle: base.entrySubtitle || group.entrySubtitle || "",
+        provider: base.provider || group.provider || "Context",
+        exposure: base.exposure || group.exposure || "unknown",
+        confidence: base.confidence || group.confidence || "low",
+        tier: "informational",
+        score: 0,
+        groups: [],
+        groupIds: [],
+        assetIds: [],
+        assetNames: [],
+        findingKeys: [],
+        scenarioIds: [],
+        categoryCounts: {},
+      });
+    }
+    const surface = surfaces.get(surfaceId);
+    surface.tier = strongerTier(surface.tier, group.tier);
+    surface.score = Math.max(Number(surface.score || 0), Number(group.score || 0));
+    surface.confidence = strongerConfidence(surface.confidence, group.confidence);
+    surface.groups.push(group);
+    pushUnique(surface.groupIds, group.id);
+    for (const assetId of group.assetIds || []) pushUnique(surface.assetIds, assetId);
+    for (const assetName of group.assetNames || []) pushUnique(surface.assetNames, assetName);
+    for (const findingKey of group.findingKeys || []) pushUnique(surface.findingKeys, findingKey);
+    for (const scenarioId of group.scenarioIds || []) pushUnique(surface.scenarioIds, scenarioId);
+    for (const [categoryId, count] of Object.entries(group.categoryCounts || {})) {
+      surface.categoryCounts[categoryId] = Number(surface.categoryCounts[categoryId] || 0) + Number(count || 0);
+    }
+  }
+  const values = [...surfaces.values()];
+  for (const surface of values) {
+    surface.routeCount = surface.groups.length;
+    surface.assetCount = surface.assetIds.length;
+    surface.findingCount = surface.findingKeys.length;
+    surface.categorySummary = (DATA.issueCategories || [])
+      .filter(category => surface.categoryCounts[category.id])
+      .map(category => ({...category, count: surface.categoryCounts[category.id]}));
+    surface.summary = surface.summary || `${surface.routeCount} ${surface.surfaceModeLabel || "entry"} route option(s) reach ${surface.assetCount} asset(s) with ${surface.findingCount} linked finding(s).`;
+  }
+  return values.sort((a, b) => (tierRank[b.tier] - tierRank[a.tier]) || ((b.score || 0) - (a.score || 0)) || (surfaceModeRank(b.surfaceMode) - surfaceModeRank(a.surfaceMode)) || String(a.title || "").localeCompare(String(b.title || "")));
+}
+
+function surfaceModeForGroup(group) {
+  const exposureValue = String(group.exposure || "unknown").toLowerCase();
+  const entry = String(group.entryLabel || "").toLowerCase();
+  if (["public", "external"].includes(exposureValue) || entry.includes("internet") || entry.includes("attacker")) return "outside";
+  if (exposureValue === "internal" || entry.includes("internal") || entry.includes("pivot")) return "lateral";
+  if (["private", "isolated"].includes(exposureValue)) return "private";
+  return "unknown";
+}
+
+function surfaceModeLabel(mode) {
+  return {
+    outside: "outside entry",
+    lateral: "lateral movement",
+    private: "private/no external entry",
+    unknown: "unresolved entry",
+  }[mode] || "unresolved entry";
+}
+
+function surfaceModeRank(mode) {
+  return {outside: 4, lateral: 3, private: 2, unknown: 1}[mode] || 1;
+}
+
+function surfaceTitleForGroup(group) {
+  const mode = surfaceModeForGroup(group);
+  if (mode === "outside") return `Outside entry options through ${group.entryLabel || "unknown entry"} (${group.provider || "Context"})`;
+  if (mode === "lateral") return `Lateral movement options through ${group.entryLabel || "unknown entry"} (${group.provider || "Context"})`;
+  if (mode === "private") return `Private assets without external entry (${group.provider || "Context"})`;
+  return `Unresolved entry options (${group.provider || "Context"})`;
+}
+
+function strongerConfidence(first, second) {
+  const rank = {low: 0, medium: 1, high: 2};
+  return (rank[first || "low"] || 0) >= (rank[second || "low"] || 0) ? first || "low" : second || "low";
+}
+
+function pushUnique(values, value) {
+  if (value && !values.includes(value)) values.push(value);
+}
+
+function attackSummary(surfaces, groups) {
   return {
     id: "attack:summary",
     attackKind: "summary",
-    pathCount: paths.length,
-    urgent: paths.filter(path => path.tier === "urgent").length,
-    high: paths.filter(path => path.tier === "high").length,
-    public: paths.filter(path => ["public", "external"].includes(path.exposure)).length,
-    runtime: paths.reduce((total, path) => total + Number((path.categoryCounts || {}).events || 0), 0),
-    unknowns: paths.reduce((total, path) => total + Number((path.categoryCounts || {}).visibility_gaps || 0), 0),
+    surfaceCount: surfaces.length,
+    routeCount: groups.length,
+    pathCount: groups.length,
+    urgent: groups.filter(path => path.tier === "urgent").length,
+    high: groups.filter(path => path.tier === "high").length,
+    public: groups.filter(path => ["public", "external"].includes(path.exposure)).length,
+    lateral: groups.filter(path => path.surfaceMode === "lateral" || path.exposure === "internal").length,
+    runtime: groups.reduce((total, path) => total + Number((path.categoryCounts || {}).events || 0), 0),
+    unknowns: groups.reduce((total, path) => total + Number((path.categoryCounts || {}).visibility_gaps || 0), 0),
   };
 }
 
 function slug(value) {
   return String(value || "unknown").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "unknown";
-}
-
-function renderAttackLaneLabels() {
-  return [
-    laneLabel("Prioritized paths", 42, attackLaneY, 330),
-    laneLabel("Attack path overview", 470, attackLaneY, 960),
-  ];
 }
 
 function layoutArchitecture(visibleAssetIds, visibleKeys) {
@@ -2882,10 +3205,51 @@ function renderAttackPathEdges(layout) {
     const source = layout.positions.get(sourceId);
     const target = layout.positions.get(targetId);
     if (!source || !target) continue;
-    const className = `edge attack-path ${edge.tier || "informational"}${edge.unknown ? " unknown" : ""}${edge.blocker ? " blocker" : ""}${edge.selected ? " selected" : ""}${edge.dimmed ? " dimmed" : ""}`;
-    paths.push(edgePath(source.x + source.width, source.y + source.height / 2, target.x, target.y + target.height / 2, className, sourceId, targetId));
+    const selectedEdge = edge.selected || (selected && selected.attackKind === "graphEdge" && selected.id === edge.id);
+    const edgeDatum = {
+      ...edge,
+      fromNode: layout.graphNodeById?.get(sourceId),
+      toNode: layout.graphNodeById?.get(targetId),
+    };
+    const className = `edge ${edge.graph ? "attack-graph-edge" : "attack-path"} ${edge.tier || "informational"}${edge.unknown ? " unknown" : ""}${edge.blocker ? " blocker" : ""}${edge.lateral ? " lateral" : ""}${selectedEdge ? " selected" : ""}${edge.dimmed ? " dimmed" : ""}`;
+    if (edge.graph) {
+      paths.push(attackGraphEdgePath(source, target, className, sourceId, targetId, edgeDatum));
+    } else {
+      paths.push(edgePath(source.x + source.width, source.y + source.height / 2, target.x, target.y + target.height / 2, className, sourceId, targetId));
+    }
   }
   return paths;
+}
+
+function attackGraphEdgePath(source, target, className, sourceId, targetId, edgeDatum) {
+  const x1 = source.x + source.width / 2;
+  const y1 = source.y + source.height / 2;
+  const x2 = target.x + target.width / 2;
+  const y2 = target.y + target.height / 2;
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("class", className);
+  path.dataset.edgeSource = sourceId;
+  path.dataset.edgeTarget = targetId;
+  const distance = Math.max(80, Math.abs(x2 - x1));
+  const curve = Math.min(180, distance * .48);
+  path.setAttribute("d", `M ${x1} ${y1} C ${x1 + curve} ${y1}, ${x2 - curve} ${y2}, ${x2} ${y2}`);
+  path.setAttribute("role", "button");
+  path.setAttribute("tabindex", "0");
+  path.addEventListener("mousedown", event => event.stopPropagation());
+  path.addEventListener("click", event => {
+    event.stopPropagation();
+    selected = selected && selected.attackKind === "graphEdge" && selected.id === edgeDatum.id ? null : edgeDatum;
+    render();
+  });
+  path.addEventListener("keydown", event => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    event.stopPropagation();
+    selected = selected && selected.attackKind === "graphEdge" && selected.id === edgeDatum.id ? null : edgeDatum;
+    render();
+  });
+  markActiveEdge(path, sourceId, targetId);
+  return path;
 }
 
 function architectureEdgePath(source, target, className, sourceId, targetId) {
@@ -2925,7 +3289,7 @@ function fanEdgePath(x1, y1, busX, x2, y2, className, sourceId, targetId) {
 
 function markActiveEdge(path, sourceId, targetId) {
   if (!selected) return;
-  const selectedIds = new Set([selected.id, selected.assetId, selected.findingKey].filter(Boolean));
+  const selectedIds = new Set([selected.id, selected.assetId, selected.findingKey, selected.from, selected.to].filter(Boolean));
   for (const assetId of pathAssetIds(selected)) selectedIds.add(assetId);
   for (const pathId of selected.linkedPathIds || []) selectedIds.add(pathId);
   for (const pathId of selected.pathIds || []) selectedIds.add(pathId);
@@ -3045,127 +3409,160 @@ function renderArchitectureAsset(asset, position) {
   return card;
 }
 
-function renderAttackEntryCard(entry, position) {
-  const card = createCard("attack-entry-card", entry.exposure || "unknown", position, entry);
-  card.append(
-    cardTop(entry.entryLabel || "Entry", [exposureChip(entry.exposure || "unknown")], entry.entrySubtitle || entry.pathType || "")
-  );
-  return card;
+function renderAttackRiskSidebar(scenarios) {
+  const sidebar = document.createElement("aside");
+  sidebar.className = "attack-risk-sidebar";
+  const title = document.createElement("div");
+  title.className = "attack-risk-sidebar-title";
+  title.append(text("Risks"), chipElement(`${scenarios.length} visible`, "count"));
+  const list = document.createElement("div");
+  list.className = "attack-risk-sidebar-list";
+  if (!scenarios.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "No risk scenarios match the current filters.";
+    list.appendChild(empty);
+  }
+  for (const scenario of scenarios) {
+    list.appendChild(renderAttackRiskSidebarCard(scenario));
+  }
+  sidebar.append(title, list);
+  return sidebar;
 }
 
-function renderAttackPathCard(path, position) {
-  const card = createCard("attack-list-card", path.tier || "informational", position, path);
+function renderAttackRiskSidebarCard(scenario) {
+  const card = document.createElement("button");
+  card.type = "button";
+  const selectedScenario = selected && selected.id === scenario.id;
+  card.className = `attack-risk-sidebar-card ${scenario.tier || "informational"}${selectedScenario ? " selected" : ""}`;
+  const title = document.createElement("div");
+  title.className = "risk-title";
+  title.textContent = scenario.title || "Risk scenario";
+  const meta = document.createElement("div");
+  meta.className = "risk-meta";
+  meta.textContent = `${scenario.assetName || "unknown asset"} | ${scenario.entryLabel || "unknown entry"} -> ${scenario.pathLabel || "network path"}`;
   card.append(
-    cardTop(
-      path.title || "Attack path",
-      [
-        priorityChip(path.tier || "informational"),
-        scoreChip(path.score || 0),
-        countChip(path.assetCount || 0, "assets"),
-        countChip(path.findingCount || 0, "findings"),
-      ],
-      `${path.provider || "Context"} | ${path.exposure || "unknown"} | confidence ${path.confidence || "low"}`
-    ),
-    attackPathBody(path)
+    title,
+    meta,
+    chips([priorityChip(scenario.tier), scoreChip(scenario.score), countChip(scenario.totalFindings || 0, "findings"), exposureChip(scenario.exposure)], 4)
   );
-  return card;
-}
-
-function renderAttackOverviewLane(lane, position) {
-  const sourcePath = lane.sourcePath || lane;
-  const laneEl = document.createElement("div");
-  laneEl.className = `attack-overview-lane${lane.selected ? " selected" : " dimmed"}`;
-  laneEl.style.left = `${position.x}px`;
-  laneEl.style.top = `${position.y}px`;
-  laneEl.style.width = `${position.width}px`;
-  laneEl.style.height = `${position.height}px`;
-  laneEl.tabIndex = 0;
-  laneEl.addEventListener("mousedown", event => event.stopPropagation());
-  laneEl.addEventListener("click", event => {
+  card.addEventListener("mousedown", event => event.stopPropagation());
+  card.addEventListener("click", event => {
+    event.preventDefault();
     event.stopPropagation();
-    selected = {...sourcePath, attackKind: "group"};
+    selected = selectedScenario ? null : {...scenario, scenarioKind: "scenario", attackKind: "scenario"};
     render();
   });
-  laneEl.addEventListener("keydown", event => {
+  card.addEventListener("keydown", event => {
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
     event.stopPropagation();
-    selected = {...sourcePath, attackKind: "group"};
+    selected = selectedScenario ? null : {...scenario, scenarioKind: "scenario", attackKind: "scenario"};
     render();
   });
-  const title = document.createElement("div");
-  title.className = "lane-title";
-  title.textContent = sourcePath.title || "Attack path";
-  const meta = document.createElement("div");
-  meta.className = "lane-meta";
-  meta.append(
-    chipElement(`priority ${sourcePath.tier || "unknown"}`, sourcePath.tier || "unknown"),
-    chipElement(`${Number(sourcePath.score || 0).toFixed(1)} score`, "score"),
-    chipElement(`${sourcePath.assetCount || 0} assets`, "count"),
-    chipElement(`${sourcePath.findingCount || 0} findings`, "count")
-  );
-  if (lane.hiddenNodeCount) meta.append(chipElement(`+${lane.hiddenNodeCount} evidence`, "count"));
-  laneEl.append(title, meta);
-  return laneEl;
-}
-
-function attackPathBody(path) {
-  const body = document.createElement("div");
-  body.className = "body";
-  const summary = document.createElement("div");
-  summary.className = "sub";
-  summary.textContent = path.summary || path.pathLabel || "Shared attack path.";
-  body.append(
-    categoryChips(path.categorySummary || []),
-    summary
-  );
-  return body;
-}
-
-function renderAttackSummary(summary) {
-  const box = document.createElement("div");
-  box.className = "attack-summary";
-  box.style.left = "42px";
-  box.style.top = "16px";
-  box.style.width = "1240px";
-  box.append(
-    chipElement(`${summary.pathCount || 0} visible paths`, "count"),
-    chipElement(`${summary.shown || 0} shown on map`, "count"),
-    chipElement(`${summary.urgent || 0} urgent`, "urgent"),
-    chipElement(`${summary.high || 0} high`, "high"),
-    chipElement(`${summary.public || 0} public/external`, "count"),
-    chipElement(`${summary.runtime || 0} runtime observed`, "count"),
-    chipElement(`${summary.unknowns || 0} unknowns`, "informational")
-  );
-  return box;
-}
-
-function renderAttackNodeCard(node, position) {
-  const card = createCard("attack-node-card", node.tier || "informational", position, node);
-  if (node.compact) card.classList.add("compact");
-  if (node.dimmed) card.classList.add("dimmed");
-  card.dataset.nodeType = node.type || "unknown";
-  card.dataset.nodeState = node.state || "normal";
-  const icon = document.createElement("div");
-  icon.className = "attack-node-icon";
-  icon.textContent = nodeIcon(node.type, node.state);
-  const title = document.createElement("div");
-  title.className = "title";
-  const titleMain = document.createElement("div");
-  titleMain.className = "title-main";
-  titleMain.textContent = node.label || node.type || "node";
-  const sub = document.createElement("div");
-  sub.className = "sub";
-  sub.textContent = node.subtitle || node.type || "";
-  title.append(icon, titleMain, sub);
-  const top = document.createElement("div");
-  top.className = "top";
-  top.append(title);
-  const body = document.createElement("div");
-  body.className = "body";
-  body.append(chips([node.type, node.evidenceLayer, node.confidence ? `confidence ${node.confidence}` : null], 3));
-  card.append(top, body);
   return card;
+}
+
+function renderAttackGraphNode(node, position) {
+  const graphNode = document.createElement("button");
+  graphNode.type = "button";
+  const selectedNode = selected && (selected.id === node.id || (node.sourceId && selected.id === node.sourceId) || (node.findingKey && selected.findingKey === node.findingKey));
+  graphNode.className = `attack-graph-node draggable ${node.tier || "informational"}${node.selected || selectedNode ? " selected" : ""}${node.dimmed ? " dimmed" : ""}`;
+  graphNode.dataset.nodeId = node.id;
+  graphNode.dataset.nodeType = node.graphType || node.type || "unknown";
+  graphNode.dataset.nodeState = node.state || "normal";
+  graphNode.style.left = `${position.x}px`;
+  graphNode.style.top = `${position.y}px`;
+  graphNode.style.width = `${position.width}px`;
+  graphNode.style.height = `${position.height}px`;
+  graphNode.addEventListener("mousedown", event => beginGraphNodeDrag(event, node, position));
+  graphNode.addEventListener("click", event => {
+    event.stopPropagation();
+    if (suppressNodeClickId === node.id) {
+      suppressNodeClickId = null;
+      return;
+    }
+    if (node.expandable) {
+      const wasExpanded = expandedGraphNodes.has(node.id);
+      toggleGraphNodeExpansion(node.id);
+      selected = wasExpanded && selected && selected.id === node.id ? null : {...node, expanded: expandedGraphNodes.has(node.id)};
+      render();
+    } else if (node.finding) {
+      selected = selected && selected.findingKey === node.findingKey ? null : node.finding;
+      render();
+    } else if (node.graphKind === "entry") {
+      const surfaceSelection = {...node, id: node.sourceId || node.id, attackKind: "surface"};
+      selected = selected && selected.id === surfaceSelection.id ? null : surfaceSelection;
+      render();
+    } else {
+      selected = selected && selected.id === node.id ? null : node;
+      render();
+    }
+  });
+  graphNode.addEventListener("keydown", event => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (node.expandable) {
+      const wasExpanded = expandedGraphNodes.has(node.id);
+      toggleGraphNodeExpansion(node.id);
+      selected = wasExpanded && selected && selected.id === node.id ? null : {...node, expanded: expandedGraphNodes.has(node.id)};
+    } else if (node.finding) {
+      selected = selected && selected.findingKey === node.findingKey ? null : node.finding;
+    } else if (node.graphKind === "entry") {
+      const surfaceSelection = {...node, id: node.sourceId || node.id, attackKind: "surface"};
+      selected = selected && selected.id === surfaceSelection.id ? null : surfaceSelection;
+    } else {
+      selected = selected && selected.id === node.id ? null : node;
+    }
+    render();
+  });
+  const circle = document.createElement("span");
+  circle.className = "attack-graph-circle";
+  circle.textContent = nodeIcon(node.graphType || node.type, node.state);
+  if (node.expandable) {
+    const toggle = document.createElement("span");
+    toggle.className = "attack-graph-toggle";
+    toggle.textContent = node.expanded ? "-" : "+";
+    circle.appendChild(toggle);
+  }
+  if (node.badge) {
+    const badge = document.createElement("span");
+    badge.className = "attack-graph-badge";
+    badge.textContent = node.badge;
+    circle.appendChild(badge);
+  }
+  const label = document.createElement("span");
+  label.className = "attack-graph-label";
+  label.textContent = node.label || node.type || "Node";
+  const sub = document.createElement("span");
+  sub.className = "attack-graph-sub";
+  sub.textContent = node.subtitle || "";
+  graphNode.append(circle, label, sub);
+  return graphNode;
+}
+
+function toggleGraphNodeExpansion(nodeId) {
+  if (expandedGraphNodes.has(nodeId)) {
+    expandedGraphNodes.delete(nodeId);
+  } else {
+    expandedGraphNodes.add(nodeId);
+  }
+}
+
+function beginGraphNodeDrag(event, node, position) {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  nodeDrag = {
+    id: node.id,
+    x: event.clientX,
+    y: event.clientY,
+    originX: position.x,
+    originY: position.y,
+    moved: false,
+  };
+  event.currentTarget.classList.add("dragging");
 }
 
 function nodeIcon(type, state) {
@@ -3173,6 +3570,7 @@ function nodeIcon(type, state) {
   if (state === "unknown") return "?";
   return {
     entry: "IN",
+    lateral: "PIV",
     ingress: "GW",
     workload: "WL",
     artifact: "SB",
@@ -3181,6 +3579,7 @@ function nodeIcon(type, state) {
     posture: "CFG",
     vulnerability: "CVE",
     weakness: "CWE",
+    finding: "CVE",
     identity: "ID",
     data: "DB",
     blocker: "!",
@@ -3204,67 +3603,6 @@ function priorityText(tierValue) {
   if (tierValue === "urgent") return "Critical";
   const value = String(tierValue || "informational");
   return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-function renderAttackAssetCard(asset, position) {
-  const arch = asset.architecture || {};
-  const counts = arch.findingTypeCounts || {};
-  const card = createCard("attack-asset-card", asset.tier, position, asset);
-  card.append(
-    cardTop(asset.name, [
-      priorityChip(asset.tier),
-      scoreChip(asset.score, "max"),
-      countChip(asset.findingKeys.length, "findings"),
-      counts.dynamic_runtime_observation ? tag(`${counts.dynamic_runtime_observation} runtime`, "count") : null,
-      counts.static_code_weakness ? tag(`${counts.static_code_weakness} static`, "count") : null,
-      counts.cloud_posture_finding ? tag(`${counts.cloud_posture_finding} posture`, "count") : null,
-      counts.dependency_vulnerability ? tag(`${counts.dependency_vulnerability} deps`, "count") : null,
-    ], `${arch.provider || "Context"} | ${asset.owner || "unknown owner"}`),
-    assetBody(asset)
-  );
-  return card;
-}
-
-function renderAttackScenarioCard(scenario, position) {
-  const card = createCard("attack-asset-card", scenario.tier || "informational", position, scenario);
-  card.append(
-    cardTop(
-      scenario.assetName || "Asset",
-      [
-        priorityChip(scenario.tier || "informational"),
-        scoreChip(scenario.score || 0),
-        countChip(scenario.totalFindings || 0, "findings"),
-      ],
-      scenario.title || "Risk scenario"
-    ),
-    scenarioBody(scenario)
-  );
-  return card;
-}
-
-function scenarioBody(scenario) {
-  const body = document.createElement("div");
-  body.className = "body";
-  body.append(categoryChips(scenario.categorySummary || []));
-  return body;
-}
-
-function renderAttackRiskCard(risk, position) {
-  const card = createCard("attack-risk-card", risk.tier || "informational", position, risk);
-  card.dataset.riskKind = risk.kind || "risk";
-  card.append(
-    cardTop(
-      risk.title || risk.label || "Evidence",
-      [
-        priorityChip(risk.tier || "informational"),
-        risk.findingCount ? countChip(risk.findingCount, "findings") : null,
-        countChip((risk.assetIds || []).length, "assets"),
-      ],
-      risk.kind || "evidence"
-    ),
-    smallBody(risk.summary || "Linked evidence on the selected attack path.")
-  );
-  return card;
 }
 
 function strongerTier(first, second) {
@@ -3558,7 +3896,100 @@ function renderDetails(datum) {
     return;
   }
   const section = document.createElement("section");
-  if (datum.attackKind === "group") {
+  if (datum.attackKind === "graphNode") {
+    const path = datum.path || {};
+    section.append(heading(datum.label || "Attack graph node"));
+    section.append(chips([priorityChip(datum.tier || path.tier), scoreChip(datum.score || path.score), tag(datum.graphType || datum.type || "node", "count"), datum.confidence ? tag(`confidence ${datum.confidence}`, "count") : null]));
+    if (datum.graphKind === "entryRoot") {
+      section.append(kv({
+        "node role": "shared outside entry",
+        "entry meaning": "One Internet/attacker source shared by every public or external route shown in the graph.",
+        "route options": datum.routeCount,
+        subtitle: datum.subtitle,
+      }));
+      appendList(section, "Entry surfaces", datum.surfaceTitles || []);
+    } else if (datum.graphKind === "findingGroup") {
+      const linkedFindings = (datum.findingKeys || []).map(key => vulnerabilityByFindingKey.get(key)).filter(Boolean);
+      section.append(kv({
+        "node role": "finding group",
+        route: path.title || path.pathLabel,
+        provider: path.provider,
+        entry: path.entryLabel,
+        exposure: path.exposure,
+        state: datum.expanded ? "expanded" : "collapsed",
+      }));
+      appendActionList(section, datum.expanded ? "Collapse findings" : "Expand findings", [{
+        label: datum.expanded ? "Collapse finding nodes" : "Show one node per finding",
+        onClick: () => {
+          toggleGraphNodeExpansion(datum.id);
+          selected = {...datum, expanded: expandedGraphNodes.has(datum.id)};
+          render();
+        },
+      }]);
+      appendList(section, "Linked findings", linkedFindings.map(finding => `${priorityText(finding.tier)} ${Number(finding.score || 0).toFixed(1)} ${finding.label} in ${finding.component}`));
+    } else {
+      section.append(kv({
+        "node role": humanizeEvidenceKind(datum.graphType || datum.type || "node"),
+        route: path.title || path.pathLabel,
+        provider: path.provider,
+        entry: path.entryLabel,
+        exposure: path.exposure,
+        "path type": path.pathType,
+        subtitle: datum.subtitle,
+      }));
+      appendActionList(section, "Open related route", [{
+        label: `${priorityText(path.tier)} ${Number(path.score || 0).toFixed(1)} ${path.title || path.pathLabel || "route"}`,
+        onClick: () => {
+          selected = {...path, attackKind: "group"};
+          render();
+        },
+      }]);
+      appendList(section, "Affected scenarios", (path.scenarioIds || []).map(id => scenarioById.get(id)).filter(Boolean).map(scenario => `${scenario.priorityLabel || priorityText(scenario.tier)} ${Number(scenario.score || 0).toFixed(1)} ${scenario.title}`));
+      appendList(section, "Path steps", path.pathSteps || []);
+      appendList(section, "Evidence gaps and blockers", [...(path.unknowns || []), ...(path.blockers || []).map(formatBlocker)]);
+    }
+  } else if (datum.attackKind === "graphEdge") {
+    const path = datum.path || {};
+    section.append(heading(datum.label || "Attack graph connection"));
+    section.append(chips([priorityChip(datum.tier || path.tier), scoreChip(datum.score || path.score), datum.lateral ? tag("lateral movement", "count") : tag("route transition", "count"), datum.unknown ? tag("unknown", "informational") : null, datum.blocker ? tag("blocked", "medium") : null]));
+    section.append(kv({
+      from: datum.fromNode?.label || datum.from,
+      to: datum.toNode?.label || datum.to,
+      route: path.title || path.pathLabel,
+      provider: path.provider,
+      entry: path.entryLabel,
+      exposure: path.exposure,
+      "path type": path.pathType,
+    }));
+    appendActionList(section, "Open related route", [{
+      label: `${priorityText(path.tier)} ${Number(path.score || 0).toFixed(1)} ${path.title || path.pathLabel || "route"}`,
+      onClick: () => {
+        selected = {...path, attackKind: "group"};
+        render();
+      },
+    }]);
+    appendList(section, "Path steps", path.pathSteps || []);
+    appendList(section, "Evidence gaps and blockers", [...(path.unknowns || []), ...(path.blockers || []).map(formatBlocker)]);
+  } else if (datum.attackKind === "surface") {
+    section.append(heading(datum.title || "Entry surface"));
+    section.append(chips([priorityChip(datum.tier), scoreChip(datum.score), exposureChip(datum.exposure), countChip(datum.routeCount || 0, "routes"), countChip(datum.assetCount || 0, "assets"), countChip(datum.findingCount || 0, "findings")]));
+    section.append(kv({
+      "entry mode": datum.surfaceModeLabel,
+      provider: datum.provider,
+      entry: datum.entryLabel,
+      confidence: datum.confidence,
+      assets: (datum.assetNames || []).join(", "),
+      summary: datum.summary,
+    }));
+    appendActionList(section, "Route options", (datum.groups || []).map(group => ({
+      label: `${priorityText(group.tier)} ${Number(group.score || 0).toFixed(1)} ${group.title || group.pathLabel || "route"} (${group.assetCount || 0} assets)`,
+      onClick: () => {
+        selected = {...group, attackKind: "group"};
+        render();
+      },
+    })));
+    appendList(section, "Affected scenarios", (datum.scenarioIds || []).map(id => scenarioById.get(id)).filter(Boolean).map(scenario => `${scenario.priorityLabel || priorityText(scenario.tier)} ${Number(scenario.score || 0).toFixed(1)} ${scenario.title}`));
+  } else if (datum.attackKind === "group") {
     section.append(heading(datum.title || "Shared attack path"));
     section.append(chips([priorityChip(datum.tier), scoreChip(datum.score), exposureChip(datum.exposure), countChip(datum.assetCount || 0, "assets"), countChip(datum.findingCount || 0, "findings")]));
     section.append(kv({
@@ -3954,12 +4385,26 @@ function onWheel(event) {
 }
 
 function onMouseDown(event) {
+  if (nodeDrag) return;
   if (event.button !== 0) return;
   drag = {x: event.clientX, y: event.clientY, tx: transform.x, ty: transform.y};
   graph.classList.add("dragging");
 }
 
 function onMouseMove(event) {
+  if (nodeDrag) {
+    const dx = (event.clientX - nodeDrag.x) / transform.scale;
+    const dy = (event.clientY - nodeDrag.y) / transform.scale;
+    if (Math.abs(event.clientX - nodeDrag.x) > 2 || Math.abs(event.clientY - nodeDrag.y) > 2) {
+      nodeDrag.moved = true;
+    }
+    nodePositionOverrides.set(nodeDrag.id, {
+      x: Math.max(0, nodeDrag.originX + dx),
+      y: Math.max(0, nodeDrag.originY + dy),
+    });
+    render();
+    return;
+  }
   if (!drag) return;
   transform.x = drag.tx + event.clientX - drag.x;
   transform.y = drag.ty + event.clientY - drag.y;
@@ -3967,6 +4412,10 @@ function onMouseMove(event) {
 }
 
 function onMouseUp() {
+  if (nodeDrag) {
+    if (nodeDrag.moved) suppressNodeClickId = nodeDrag.id;
+    nodeDrag = null;
+  }
   drag = null;
   graph.classList.remove("dragging");
 }

@@ -57,10 +57,12 @@ def build_scenario_view(
     finalized_scenarios = [_finalize_scenario(scenario) for scenario in scenarios.values()]
     finalized_scenarios.sort(key=lambda item: (-TIER_RANK.get(str(item.get("tier") or "informational"), 0), -safe_float(item.get("score")), str(item.get("title") or "")))
     groups = _attack_path_groups(network_paths, finalized_scenarios)
+    surfaces = _attack_surfaces(groups)
     return {
         "issueCategories": ISSUE_CATEGORIES,
         "riskScenarios": finalized_scenarios,
         "attackPathGroups": groups,
+        "attackSurfaces": surfaces,
     }
 
 
@@ -216,6 +218,7 @@ def _attack_path_groups(network_paths: list[dict[str, Any]], scenarios: list[dic
         if not linked:
             continue
         group_id = f"attack-group:{_stable_token(path_id)}"
+        surface_id = _surface_id_for_path(path)
         category_counts = {category["id"]: 0 for category in ISSUE_CATEGORIES}
         finding_keys: list[str] = []
         for scenario in linked:
@@ -233,6 +236,9 @@ def _attack_path_groups(network_paths: list[dict[str, Any]], scenarios: list[dic
                 "id": group_id,
                 "attackKind": "group",
                 "networkPathId": path_id,
+                "surfaceId": surface_id,
+                "surfaceMode": _surface_mode(path),
+                "surfaceModeLabel": _surface_mode_label(_surface_mode(path)),
                 "title": _group_title(path),
                 "summary": path.get("summary") or path.get("evidence") or "",
                 "entryLabel": path.get("entryLabel") or "Unknown entry",
@@ -265,6 +271,157 @@ def _attack_path_groups(network_paths: list[dict[str, Any]], scenarios: list[dic
             }
         )
     return sorted(groups, key=lambda item: (-TIER_RANK.get(str(item.get("tier") or "informational"), 0), -safe_float(item.get("score")), str(item.get("title") or "")))
+
+
+def _attack_surfaces(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    surfaces: dict[str, dict[str, Any]] = {}
+    for group in groups:
+        surface_id = str(group.get("surfaceId") or _surface_id_for_path(group))
+        surface = surfaces.setdefault(surface_id, _new_attack_surface(surface_id, group))
+        surface["tier"] = _stronger_tier(surface.get("tier"), group.get("tier"))
+        surface["score"] = max(safe_float(surface.get("score")), safe_float(group.get("score")))
+        surface["confidence"] = _stronger_confidence(surface.get("confidence"), group.get("confidence"))
+        _append_unique(surface["groupIds"], group.get("id"))
+        _append_unique(surface["networkPathIds"], group.get("networkPathId"))
+        for asset_id in group.get("assetIds") or []:
+            _append_unique(surface["assetIds"], asset_id)
+        for asset_name in group.get("assetNames") or []:
+            _append_unique(surface["assetNames"], asset_name)
+        for finding_key in group.get("findingKeys") or []:
+            _append_unique(surface["findingKeys"], finding_key)
+        for scenario_id in group.get("scenarioIds") or []:
+            _append_unique(surface["scenarioIds"], scenario_id)
+        for category_id, count in (group.get("categoryCounts") or {}).items():
+            surface["categoryCounts"][category_id] = surface["categoryCounts"].get(category_id, 0) + int(count or 0)
+        surface["routes"].append(_surface_route_summary(group))
+
+    finalized = []
+    for surface in surfaces.values():
+        surface["routeCount"] = len(surface["groupIds"])
+        surface["assetCount"] = len(surface["assetIds"])
+        surface["findingCount"] = len(surface["findingKeys"])
+        surface["priorityLabel"] = _priority_label(str(surface.get("tier") or "informational"))
+        surface["categorySummary"] = [
+            {"id": category["id"], "label": category["label"], "shortLabel": category["shortLabel"], "count": surface["categoryCounts"].get(category["id"], 0)}
+            for category in ISSUE_CATEGORIES
+            if surface["categoryCounts"].get(category["id"], 0)
+        ]
+        surface["summary"] = _surface_summary(surface)
+        finalized.append(surface)
+    return sorted(
+        finalized,
+        key=lambda item: (
+            -TIER_RANK.get(str(item.get("tier") or "informational"), 0),
+            -safe_float(item.get("score")),
+            -_surface_mode_rank(str(item.get("surfaceMode") or "unknown")),
+            str(item.get("title") or ""),
+        ),
+    )
+
+
+def _new_attack_surface(surface_id: str, group: dict[str, Any]) -> dict[str, Any]:
+    mode = str(group.get("surfaceMode") or _surface_mode(group))
+    return {
+        "id": surface_id,
+        "attackKind": "surface",
+        "surfaceMode": mode,
+        "surfaceModeLabel": _surface_mode_label(mode),
+        "title": _surface_title(group, mode),
+        "summary": "",
+        "entryLabel": group.get("entryLabel") or "Unknown entry",
+        "entrySubtitle": group.get("entrySubtitle") or "",
+        "provider": group.get("provider") or "Context",
+        "exposure": group.get("exposure") or "unknown",
+        "confidence": group.get("confidence") or "low",
+        "tier": group.get("tier") or "informational",
+        "score": safe_float(group.get("score")),
+        "priorityLabel": _priority_label(str(group.get("tier") or "informational")),
+        "groupIds": [],
+        "networkPathIds": [],
+        "assetIds": [],
+        "assetNames": [],
+        "findingKeys": [],
+        "scenarioIds": [],
+        "routeCount": 0,
+        "assetCount": 0,
+        "findingCount": 0,
+        "categoryCounts": {category["id"]: 0 for category in ISSUE_CATEGORIES},
+        "categorySummary": [],
+        "routes": [],
+    }
+
+
+def _surface_route_summary(group: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": group.get("id"),
+        "title": group.get("title"),
+        "pathLabel": group.get("pathLabel"),
+        "pathType": group.get("pathType"),
+        "tier": group.get("tier"),
+        "score": group.get("score"),
+        "assetCount": group.get("assetCount"),
+        "findingCount": group.get("findingCount"),
+    }
+
+
+def _surface_id_for_path(path: dict[str, Any]) -> str:
+    return f"attack-surface:{_stable_token(json.dumps(_surface_signature(path), sort_keys=True, default=str))}"
+
+
+def _surface_signature(path: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "mode": _surface_mode(path),
+        "entry": path.get("entryLabel") or "Unknown entry",
+        "entry_subtitle": path.get("entrySubtitle") or "",
+        "exposure": path.get("exposure") or "unknown",
+        "provider": _provider_for_path(path),
+    }
+
+
+def _surface_mode(path: dict[str, Any]) -> str:
+    exposure = str(path.get("exposure") or "unknown").lower()
+    entry = str(path.get("entryLabel") or "").lower()
+    if exposure in {"public", "external"} or "internet" in entry or "attacker" in entry:
+        return "outside"
+    if exposure == "internal" or "internal" in entry or "pivot" in entry:
+        return "lateral"
+    if exposure in {"private", "isolated"}:
+        return "private"
+    return "unknown"
+
+
+def _surface_mode_label(mode: str) -> str:
+    return {
+        "outside": "outside entry",
+        "lateral": "lateral movement",
+        "private": "private/no external entry",
+        "unknown": "unresolved entry",
+    }.get(str(mode or "unknown"), "unresolved entry")
+
+
+def _surface_mode_rank(mode: str) -> int:
+    return {"outside": 4, "lateral": 3, "private": 2, "unknown": 1}.get(str(mode or "unknown"), 1)
+
+
+def _surface_title(group: dict[str, Any], mode: str) -> str:
+    entry = str(group.get("entryLabel") or "Unknown entry")
+    provider = str(group.get("provider") or "Context")
+    if mode == "outside":
+        return f"Outside entry options through {entry} ({provider})"
+    if mode == "lateral":
+        return f"Lateral movement options through {entry} ({provider})"
+    if mode == "private":
+        return f"Private assets without external entry ({provider})"
+    return f"Unresolved entry options ({provider})"
+
+
+def _surface_summary(surface: dict[str, Any]) -> str:
+    mode = str(surface.get("surfaceModeLabel") or "entry")
+    route_count = int(surface.get("routeCount") or 0)
+    asset_count = int(surface.get("assetCount") or 0)
+    finding_count = int(surface.get("findingCount") or 0)
+    entry = str(surface.get("entryLabel") or "unknown entry")
+    return f"{route_count} {mode} route option(s) from {entry} reach {asset_count} asset(s) with {finding_count} linked finding(s)."
 
 
 def _scenario_summary(scenario: dict[str, Any]) -> dict[str, Any]:
