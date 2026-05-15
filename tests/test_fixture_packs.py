@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from dataclasses import replace
+from importlib import resources
 from pathlib import Path
 
 from reachability_advisor.cli import main
@@ -265,6 +267,69 @@ class FixtureEdgeCoverageTests(unittest.TestCase):
 
         self.assertEqual(FixtureIssue("warning", "msg").to_json(), {"severity": "warning", "message": "msg"})
         self.assertEqual(default_fixtures_root().parts[-2:], ("fixtures", "terraform"))
+
+    def test_default_fixtures_root_prefers_env_override(self) -> None:
+        from reachability_advisor.fixtures import default_fixtures_root
+
+        old_root = os.environ.get("REACHABILITY_ADVISOR_FIXTURES_ROOT")
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["REACHABILITY_ADVISOR_FIXTURES_ROOT"] = tmp
+            try:
+                self.assertEqual(default_fixtures_root(), Path(tmp))
+            finally:
+                if old_root is None:
+                    os.environ.pop("REACHABILITY_ADVISOR_FIXTURES_ROOT", None)
+                else:
+                    os.environ["REACHABILITY_ADVISOR_FIXTURES_ROOT"] = old_root
+
+    def test_default_fixtures_root_is_not_cwd_dependent(self) -> None:
+        from reachability_advisor.fixtures import default_fixtures_root
+
+        old_cwd = Path.cwd()
+        old_root = os.environ.pop("REACHABILITY_ADVISOR_FIXTURES_ROOT", None)
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                os.chdir(tmp)
+                self.assertEqual(default_fixtures_root(), FIXTURES)
+            finally:
+                os.chdir(old_cwd)
+                if old_root is not None:
+                    os.environ["REACHABILITY_ADVISOR_FIXTURES_ROOT"] = old_root
+
+    def test_packaged_fixture_data_is_available_for_installed_distributions(self) -> None:
+        from reachability_advisor import fixtures as fixtures_module
+        from reachability_advisor.fixtures import default_fixtures_root
+
+        packaged_root = resources.files("reachability_advisor.fixture_data").joinpath("terraform")
+        self.assertTrue(packaged_root.joinpath("index.json").is_file())
+
+        old_cwd = Path.cwd()
+        old_file = fixtures_module.__file__
+        old_cached = fixtures_module._PACKAGED_FIXTURES_ROOT
+        old_root = os.environ.pop("REACHABILITY_ADVISOR_FIXTURES_ROOT", None)
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                fixtures_module.__file__ = str(Path(tmp) / "site-packages" / "reachability_advisor" / "fixtures.py")
+                fixtures_module._PACKAGED_FIXTURES_ROOT = None
+                os.chdir(tmp)
+                root = default_fixtures_root()
+                self.assertTrue((root / "index.json").exists())
+                self.assertTrue(discover_fixture_packs(root))
+            finally:
+                os.chdir(old_cwd)
+                fixtures_module.__file__ = old_file
+                fixtures_module._PACKAGED_FIXTURES_ROOT = old_cached
+                if old_root is not None:
+                    os.environ["REACHABILITY_ADVISOR_FIXTURES_ROOT"] = old_root
+
+    def test_packaged_fixture_data_mirrors_repo_fixture_files(self) -> None:
+        packaged_root = Path(resources.files("reachability_advisor.fixture_data").joinpath("terraform"))
+        repo_files = sorted(path.relative_to(FIXTURES) for path in FIXTURES.rglob("*") if path.is_file())
+        packaged_files = sorted(path.relative_to(packaged_root) for path in packaged_root.rglob("*") if path.is_file())
+
+        self.assertEqual(packaged_files, repo_files)
+        for relative in repo_files:
+            self.assertEqual((packaged_root / relative).read_bytes(), (FIXTURES / relative).read_bytes())
 
     def test_discover_invalid_index_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

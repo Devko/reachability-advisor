@@ -57,6 +57,12 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"reachability_advisor.fixture_data" = ["terraform/**/*"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["**/__pycache__/*", "**/*.pyc"]
+
 [tool.ruff]
 line-length = 100
 src = ["src", "tests", "scripts"]
@@ -70,6 +76,9 @@ python_version = "3.10"
 strict = true
 warn_unused_ignores = true
 warn_redundant_casts = true
+exclude = [
+  "^src/reachability_advisor/fixture_data/",
+]
 
 [tool.coverage.run]
 source = ["src/reachability_advisor"]

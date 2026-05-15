@@ -1,0 +1,161 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.8.0",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "module.ecs.aws_ecs_cluster.this[0]",
+          "mode": "managed",
+          "type": "aws_ecs_cluster",
+          "name": "this",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "values": {
+            "name": "prod-cluster",
+            "tags": {
+              "environment": "prod",
+              "team": "payments"
+            }
+          }
+        },
+        {
+          "address": "module.ecs_service.aws_ecs_task_definition.this[0]",
+          "mode": "managed",
+          "type": "aws_ecs_task_definition",
+          "name": "this",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "values": {
+            "family": "payments-api",
+            "task_role_arn": "payments-task-role",
+            "container_definitions": "[{\"name\": \"payments-api\", \"image\": \"ghcr.io/acme/payments-api:1.0.0\"}]",
+            "tags": {
+              "environment": "prod",
+              "owner": "payments"
+            }
+          }
+        },
+        {
+          "address": "module.ecs_service.aws_ecs_service.this[0]",
+          "mode": "managed",
+          "type": "aws_ecs_service",
+          "name": "this",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "values": {
+            "name": "payments-api",
+            "task_definition": "payments-api",
+            "network_configuration": [
+              {
+                "security_groups": [
+                  "sg-payments-public"
+                ]
+              }
+            ],
+            "tags": {
+              "environment": "prod",
+              "owner": "payments"
+            }
+          }
+        },
+        {
+          "address": "module.ecs_service.aws_cloudwatch_log_group.this[0]",
+          "mode": "managed",
+          "type": "aws_cloudwatch_log_group",
+          "name": "this",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "values": {
+            "name": "/aws/ecs/payments-api"
+          }
+        },
+        {
+          "address": "module.ecs_service.aws_appautoscaling_target.this[0]",
+          "mode": "managed",
+          "type": "aws_appautoscaling_target",
+          "name": "this",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "values": {
+            "service_namespace": "ecs",
+            "resource_id": "service/prod-cluster/payments-api"
+          }
+        },
+        {
+          "address": "module.alb.aws_lb.this[0]",
+          "mode": "managed",
+          "type": "aws_lb",
+          "name": "this",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "values": {
+            "name": "payments-public",
+            "internal": false
+          }
+        },
+        {
+          "address": "module.alb.aws_lb_listener.https[0]",
+          "mode": "managed",
+          "type": "aws_lb_listener",
+          "name": "https",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "values": {
+            "port": 443,
+            "protocol": "HTTPS"
+          }
+        },
+        {
+          "address": "module.alb.aws_security_group.this[0]",
+          "mode": "managed",
+          "type": "aws_security_group",
+          "name": "this",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "values": {
+            "id": "sg-payments-public",
+            "ingress": [
+              {
+                "cidr_blocks": [
+                  "0.0.0.0/0"
+                ],
+                "from_port": 443,
+                "to_port": 443
+              }
+            ],
+            "tags": {
+              "environment": "prod"
+            }
+          }
+        },
+        {
+          "address": "module.ecs_service.aws_iam_role.task_exec[0]",
+          "mode": "managed",
+          "type": "aws_iam_role",
+          "name": "task_exec",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "values": {
+            "name": "payments-task-role",
+            "managed_policy_arns": [
+              "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+            ]
+          }
+        },
+        {
+          "address": "module.ecs_service.aws_iam_role_policy.task[0]",
+          "mode": "managed",
+          "type": "aws_iam_role_policy",
+          "name": "task",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "values": {
+            "role": "payments-task-role",
+            "policy": "{\"Statement\": [{\"Effect\": \"Allow\", \"Action\": [\"secretsmanager:GetSecretValue\", \"s3:GetObject\"], \"Resource\": \"*\"}]}"
+          }
+        },
+        {
+          "address": "aws_secretsmanager_secret.db_password",
+          "mode": "managed",
+          "type": "aws_secretsmanager_secret",
+          "name": "db_password",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "values": {
+            "name": "payments-db-password"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "schema_version": "3.0",
+  "id": "gcp-gke-workload",
+  "name": "Google GKE workload fixture",
+  "provider": "gcp",
+  "module_reference": {
+    "name": "Google Kubernetes Engine module-shaped fixture",
+    "source": "terraform-google-modules/kubernetes-engine/google",
+    "registry": "https://registry.terraform.io/modules/terraform-google-modules/kubernetes-engine/google/latest",
+    "upstream_note": "The public module documents GKE cluster and workload identity deployment patterns."
+  },
+  "fixture_kind": "sanitized module-shaped terraform-show-json plan",
+  "terraform_plan": "tfplan.json",
+  "sboms": ["sboms/checkout-api.cdx.json"],
+  "vulnerabilities": "../../common/vulnerabilities.json",
+  "source_roots": {
+    "checkout-api": "source/checkout-api"
+  },
+  "expected": {
+    "resource_accounting_coverage": 1.0,
+    "semantic_classification_coverage": 1.0,
+    "artifact_match_coverage": 1.0,
+    "min_findings": 1,
+    "must_match_artifacts": ["checkout-api"],
+    "required_resource_types": [
+      "google_container_cluster",
+      "google_service_account",
+      "google_project_iam_member",
+      "kubernetes_deployment",
+      "kubernetes_service",
+      "kubernetes_service_account"
+    ],
+    "min_tier_by_finding": [
+      {
+        "artifact": "checkout-api",
+        "component": "lodash",
+        "vulnerability": "CVE-2019-10744",
+        "tier": "high"
+      }
+    ]
+  },
+  "notes": [
+    "Models a GKE cluster plus Kubernetes-provider workload resources.",
+    "The Service is public and the workload identity grant exercises GCP IAM context."
+  ]
+}

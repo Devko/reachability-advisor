@@ -2,11 +2,11 @@
 
 ## Current gates
 
-- Unit and workflow tests: 612.
+- Unit and workflow tests: 630.
 - Coverage threshold: 93%.
 - Current measured coverage: passes the 93% line/branch-aware coverage gate.
 - Test runner: `scripts/run_tests.py`.
-- Compile check: `python -m compileall -q src scripts tests`.
+- Compile check: `python -m compileall -q -x fixture_data src scripts tests`.
 - Static lint configuration: `ruff` with `E`, `F`, `I`, `UP`, `B`, `C4`, and `SIM` rules across `src`, `tests`, and `scripts`.
 - Static type configuration: strict `mypy` across `src`.
 - Sample workflow: `make sample`.
@@ -48,9 +48,8 @@ Windows shells without `make` can run the same gates directly:
 
 ```powershell
 python scripts/run_tests.py
-python -m coverage run --source=src/reachability_advisor scripts/run_tests.py
-python -m coverage report -m --fail-under=93
-python -m compileall -q src scripts tests
+python scripts/run_coverage.py
+python -m compileall -q -x fixture_data src scripts tests
 python scripts/validate_release.py
 python scripts/validate_scoring_benchmark.py
 python scripts/run_complex_app_validation.py --no-clone --strict
@@ -60,6 +59,8 @@ python -m build --no-isolation
 ```
 
 `make package` uses `--no-isolation` so the bundled local Python can validate packaging even when `venv` is not available. The development extra supplies the required build backend and quality tools.
+
+`scripts/run_coverage.py` performs a preflight before invoking `coverage`. On Windows it requires a full CPython runtime with the `_overlapped` extension; if the bundled embeddable interpreter is detected or cannot import the required runtime modules cleanly, install Python 3.10+ and run the gate with that interpreter.
 
 ## Engineering choices
 

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .iam_capabilities import dedupe_iam_capabilities
+from .input_limits import InputSizeError, read_text_limited
 from .models import Artifact, Confidence, ContextEvidence
 from .terraform import (
     TerraformContextError,
@@ -59,7 +60,9 @@ def load_context_file(path: str | Path | None) -> dict[str, ContextEvidence]:
         return {}
     context_path = Path(path)
     try:
-        data = json.loads(context_path.read_text(encoding="utf-8"))
+        data = json.loads(read_text_limited(context_path, "context"))
+    except InputSizeError as exc:
+        raise ContextError(str(exc)) from exc
     except json.JSONDecodeError as exc:
         raise ContextError(f"{context_path}: invalid JSON: {exc}") from exc
     if not isinstance(data, dict):

@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from reachability_advisor.artifacts import (
     artifact_candidates,
@@ -33,6 +34,7 @@ from reachability_advisor.sbom_plan import (
 )
 from reachability_advisor.source import (
     analyze_component_source,
+    build_source_index,
     load_external_source_evidence,
     load_reachability_rules,
 )
@@ -449,6 +451,24 @@ class SourceReachabilityV4Tests(unittest.TestCase):
             (nm / "index.js").write_text("const _ = require('lodash'); _.merge({}, {});", encoding="utf-8")
             evidence = analyze_component_source(component, root)
         self.assertEqual(evidence.reachability, Reachability.PACKAGE_PRESENT)
+
+    def test_source_scanner_prunes_ignored_directories_during_walk(self) -> None:
+
+        seen_dirnames: list[str] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            def fake_walk(path: Path):
+                dirnames = ["node_modules", "src", ".venv"]
+                yield str(path), dirnames, []
+                seen_dirnames.extend(dirnames)
+
+            from reachability_advisor import source_index as source_index_module
+
+            with patch.object(source_index_module.os, "walk", fake_walk):
+                build_source_index(root)
+
+        self.assertEqual(seen_dirnames, ["src"])
 
     def test_dependency_graph_parent_import_marks_transitive_component_reachable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

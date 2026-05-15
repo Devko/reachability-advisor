@@ -9,11 +9,10 @@ test:
 	PYTHONPATH=$(PYTHONPATH) $(PYTHON) scripts/run_tests.py
 
 coverage:
-	PYTHONPATH=$(PYTHONPATH) $(PYTHON) -m coverage run --source=src/reachability_advisor scripts/run_tests.py
-	PYTHONPATH=$(PYTHONPATH) $(PYTHON) -m coverage report -m --fail-under=$(COVERAGE_FAIL_UNDER)
+	PYTHONPATH=$(PYTHONPATH) $(PYTHON) scripts/run_coverage.py
 
 compile:
-	$(PYTHON) -m compileall -q src scripts tests
+	$(PYTHON) -m compileall -q -x fixture_data src scripts tests
 
 lint:
 	PYTHONPATH=$(PYTHONPATH) $(PYTHON) -m ruff check src tests scripts

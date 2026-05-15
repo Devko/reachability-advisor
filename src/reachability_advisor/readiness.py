@@ -7,6 +7,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .input_limits import read_text_limited
+
 
 def release_readiness_report(
     *,
@@ -186,7 +188,7 @@ def load_release_readiness_inputs(
 
 
 def _load_json_object(path: str) -> dict[str, Any]:
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    data = json.loads(read_text_limited(Path(path), "readiness"))
     if not isinstance(data, dict):
         raise ValueError(f"{path}: expected a JSON object")
     return data

@@ -1,0 +1,129 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.8.0",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "helm_release.istio",
+          "mode": "managed",
+          "type": "helm_release",
+          "name": "istio",
+          "provider_name": "registry.terraform.io/hashicorp/helm",
+          "values": {
+            "name": "istio-base",
+            "chart": "base",
+            "namespace": "istio-system"
+          }
+        },
+        {
+          "address": "kubernetes_deployment.mesh_worker",
+          "mode": "managed",
+          "type": "kubernetes_deployment",
+          "name": "mesh_worker",
+          "provider_name": "registry.terraform.io/hashicorp/kubernetes",
+          "values": {
+            "metadata": {
+              "name": "mesh-worker",
+              "labels": {
+                "app": "mesh-worker"
+              },
+              "annotations": {
+                "sidecar.istio.io/inject": "true"
+              }
+            },
+            "spec": [
+              {
+                "template": [
+                  {
+                    "metadata": {
+                      "labels": {
+                        "app": "mesh-worker"
+                      }
+                    },
+                    "spec": [
+                      {
+                        "service_account_name": "mesh-worker",
+                        "container": [
+                          {
+                            "name": "mesh-worker",
+                            "image": "ghcr.io/acme/mesh-worker:1.0.0"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "address": "kubernetes_service.mesh_worker",
+          "mode": "managed",
+          "type": "kubernetes_service",
+          "name": "mesh_worker",
+          "provider_name": "registry.terraform.io/hashicorp/kubernetes",
+          "values": {
+            "metadata": {
+              "name": "mesh-worker",
+              "labels": {
+                "app": "mesh-worker"
+              }
+            },
+            "spec": [
+              {
+                "type": "ClusterIP",
+                "selector": {
+                  "app": "mesh-worker"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "address": "kubernetes_service_account.mesh_worker",
+          "mode": "managed",
+          "type": "kubernetes_service_account",
+          "name": "mesh_worker",
+          "provider_name": "registry.terraform.io/hashicorp/kubernetes",
+          "values": {
+            "metadata": {
+              "name": "mesh-worker"
+            }
+          }
+        },
+        {
+          "address": "kubernetes_role_binding.mesh_worker_view",
+          "mode": "managed",
+          "type": "kubernetes_role_binding",
+          "name": "mesh_worker_view",
+          "provider_name": "registry.terraform.io/hashicorp/kubernetes",
+          "values": {
+            "role_ref": {
+              "kind": "ClusterRole",
+              "name": "view"
+            },
+            "subject": [
+              {
+                "kind": "ServiceAccount",
+                "name": "mesh-worker",
+                "namespace": "apps"
+              }
+            ]
+          }
+        },
+        {
+          "address": "kubectl_manifest.mesh_virtual_service",
+          "mode": "managed",
+          "type": "kubectl_manifest",
+          "name": "mesh_virtual_service",
+          "provider_name": "registry.terraform.io/gavinbunney/kubectl",
+          "values": {
+            "yaml_body": "apiVersion: networking.istio.io/v1beta1\nkind: VirtualService\nmetadata:\n  name: mesh-worker\nspec:\n  hosts:\n  - mesh-worker.apps.svc.cluster.local"
+          }
+        }
+      ]
+    }
+  }
+}

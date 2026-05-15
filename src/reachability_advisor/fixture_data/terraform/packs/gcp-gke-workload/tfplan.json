@@ -1,0 +1,134 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.8.0",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "module.gke.google_container_cluster.primary[0]",
+          "mode": "managed",
+          "type": "google_container_cluster",
+          "name": "primary",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "values": {
+            "name": "checkout-gke",
+            "network": "private-vpc",
+            "private_cluster_config": [
+              {
+                "enable_private_nodes": true
+              }
+            ]
+          }
+        },
+        {
+          "address": "google_service_account.checkout",
+          "mode": "managed",
+          "type": "google_service_account",
+          "name": "checkout",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "values": {
+            "account_id": "checkout-gsa",
+            "email": "checkout-gsa@example.iam.gserviceaccount.com"
+          }
+        },
+        {
+          "address": "google_project_iam_member.checkout_secret",
+          "mode": "managed",
+          "type": "google_project_iam_member",
+          "name": "checkout_secret",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "values": {
+            "project": "example",
+            "role": "roles/secretmanager.secretAccessor",
+            "member": "serviceAccount:checkout-gsa@example.iam.gserviceaccount.com"
+          }
+        },
+        {
+          "address": "kubernetes_service_account.checkout",
+          "mode": "managed",
+          "type": "kubernetes_service_account",
+          "name": "checkout",
+          "provider_name": "registry.terraform.io/hashicorp/kubernetes",
+          "values": {
+            "metadata": {
+              "name": "checkout-api",
+              "annotations": {
+                "iam.gke.io/gcp-service-account": "checkout-gsa@example.iam.gserviceaccount.com"
+              }
+            }
+          }
+        },
+        {
+          "address": "kubernetes_deployment.checkout",
+          "mode": "managed",
+          "type": "kubernetes_deployment",
+          "name": "checkout",
+          "provider_name": "registry.terraform.io/hashicorp/kubernetes",
+          "values": {
+            "metadata": {
+              "name": "checkout-api",
+              "labels": {
+                "app": "checkout-api",
+                "environment": "prod"
+              }
+            },
+            "spec": [
+              {
+                "selector": [
+                  {
+                    "match_labels": {
+                      "app": "checkout-api"
+                    }
+                  }
+                ],
+                "template": [
+                  {
+                    "metadata": {
+                      "labels": {
+                        "app": "checkout-api"
+                      }
+                    },
+                    "spec": [
+                      {
+                        "service_account_name": "checkout-api",
+                        "container": [
+                          {
+                            "name": "checkout-api",
+                            "image": "us-docker.pkg.dev/acme/checkout-api:1.0.0"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "address": "kubernetes_service.checkout",
+          "mode": "managed",
+          "type": "kubernetes_service",
+          "name": "checkout",
+          "provider_name": "registry.terraform.io/hashicorp/kubernetes",
+          "values": {
+            "metadata": {
+              "name": "checkout-api",
+              "labels": {
+                "app": "checkout-api"
+              }
+            },
+            "spec": [
+              {
+                "type": "LoadBalancer",
+                "selector": {
+                  "app": "checkout-api"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

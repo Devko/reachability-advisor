@@ -1,0 +1,73 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.8.0",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "module.web.azurerm_linux_web_app.this[0]",
+          "mode": "managed",
+          "type": "azurerm_linux_web_app",
+          "name": "this",
+          "provider_name": "registry.terraform.io/hashicorp/azurerm",
+          "values": {
+            "name": "web-portal",
+            "public_network_access_enabled": true,
+            "site_config": [
+              {
+                "application_stack": [
+                  {
+                    "docker_image_name": "contoso.azurecr.io/web-portal:1.0.0"
+                  }
+                ]
+              }
+            ],
+            "identity": [
+              {
+                "type": "UserAssigned",
+                "identity_ids": ["id-web-portal"]
+              }
+            ],
+            "tags": {
+              "environment": "prod",
+              "owner": "web"
+            }
+          }
+        },
+        {
+          "address": "module.web.azurerm_user_assigned_identity.this[0]",
+          "mode": "managed",
+          "type": "azurerm_user_assigned_identity",
+          "name": "this",
+          "provider_name": "registry.terraform.io/hashicorp/azurerm",
+          "values": {
+            "name": "id-web-portal",
+            "principal_id": "id-web-portal"
+          }
+        },
+        {
+          "address": "module.web.azurerm_role_assignment.keyvault[0]",
+          "mode": "managed",
+          "type": "azurerm_role_assignment",
+          "name": "keyvault",
+          "provider_name": "registry.terraform.io/hashicorp/azurerm",
+          "values": {
+            "principal_id": "id-web-portal",
+            "role_definition_name": "Key Vault Secrets User",
+            "scope": "kv-web-prod"
+          }
+        },
+        {
+          "address": "module.web.azurerm_key_vault.this[0]",
+          "mode": "managed",
+          "type": "azurerm_key_vault",
+          "name": "this",
+          "provider_name": "registry.terraform.io/hashicorp/azurerm",
+          "values": {
+            "name": "kv-web-prod"
+          }
+        }
+      ]
+    }
+  }
+}

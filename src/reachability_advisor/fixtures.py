@@ -12,10 +12,14 @@ and finding prioritization still behave as expected.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from dataclasses import dataclass, field
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
+from .input_limits import read_text_limited
 from .models import Finding, Tier
 from .sbom import load_sboms
 from .scoring import generate_findings_with_source_report
@@ -57,12 +61,54 @@ class FixtureIssue:
 
 
 TIER_ORDER = {Tier.INFORMATIONAL.value: 0, Tier.LOW.value: 1, Tier.MEDIUM.value: 2, Tier.HIGH.value: 3, Tier.URGENT.value: 4}
+FIXTURES_ROOT_ENV = "REACHABILITY_ADVISOR_FIXTURES_ROOT"
+_PACKAGED_FIXTURES_ROOT: Path | None = None
 
 
 def default_fixtures_root() -> Path:
-    """Return the conventional repository-local Terraform fixtures directory."""
+    """Return the default Terraform fixtures directory without depending on cwd."""
 
-    return Path.cwd() / "fixtures" / "terraform"
+    if override := os.environ.get(FIXTURES_ROOT_ENV):
+        return Path(override)
+    module_root = Path(__file__).resolve().parents[2] / "fixtures" / "terraform"
+    if module_root.exists():
+        return module_root
+    if packaged_root := _packaged_fixtures_root():
+        return packaged_root
+    cwd_root = Path.cwd() / "fixtures" / "terraform"
+    if cwd_root.exists():
+        return cwd_root
+    return module_root
+
+
+def _packaged_fixtures_root() -> Path | None:
+    global _PACKAGED_FIXTURES_ROOT
+    if _PACKAGED_FIXTURES_ROOT is not None:
+        return _PACKAGED_FIXTURES_ROOT
+    try:
+        root = resources.files("reachability_advisor.fixture_data").joinpath("terraform")
+    except ModuleNotFoundError:
+        return None
+    candidate = Path(str(root))
+    if candidate.exists():
+        _PACKAGED_FIXTURES_ROOT = candidate
+        return candidate
+    if not root.is_dir():
+        return None
+    materialized = Path(tempfile.mkdtemp(prefix="reachability-advisor-fixtures-")) / "terraform"
+    _copy_traversable_tree(root, materialized)
+    _PACKAGED_FIXTURES_ROOT = materialized
+    return materialized
+
+
+def _copy_traversable_tree(source: Any, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    for child in source.iterdir():
+        target = destination / child.name
+        if child.is_dir():
+            _copy_traversable_tree(child, target)
+        elif child.is_file():
+            target.write_bytes(child.read_bytes())
 
 
 def discover_fixture_packs(root: str | Path | None = None) -> list[Path]:
@@ -76,7 +122,7 @@ def discover_fixture_packs(root: str | Path | None = None) -> list[Path]:
     index_path = fixture_root / "index.json"
     if index_path.exists():
         try:
-            index = json.loads(index_path.read_text(encoding="utf-8"))
+            index = json.loads(read_text_limited(index_path, "fixture index"))
         except json.JSONDecodeError as exc:
             raise FixtureError(f"{index_path}: invalid JSON: {exc}") from exc
         packs = index.get("packs", []) if isinstance(index, dict) else []
@@ -97,7 +143,7 @@ def load_fixture_pack(path_or_dir: str | Path) -> FixturePack:
     if not manifest_path.exists():
         raise FixtureError(f"fixture manifest not found: {manifest_path}")
     try:
-        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        data = json.loads(read_text_limited(manifest_path, "fixture manifest"))
     except json.JSONDecodeError as exc:
         raise FixtureError(f"{manifest_path}: invalid JSON: {exc}") from exc
     if not isinstance(data, dict):

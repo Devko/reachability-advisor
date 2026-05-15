@@ -17,6 +17,7 @@ from typing import Any
 from .artifacts import ArtifactMatch, artifact_identity_proof, artifact_match_evidence
 from .effective_exposure import evaluate_effective_exposure
 from .iam_capabilities import dedupe_iam_capabilities
+from .input_limits import InputSizeError, read_text_limited
 from .models import Artifact, Confidence, ContextEvidence
 from .terraform import max_confidence, max_criticality, max_exposure, max_privilege
 
@@ -99,7 +100,9 @@ def analyze_kubernetes_manifests(
 def load_kubernetes_resources(path: str | Path) -> list[KubernetesResource]:
     manifest_path = Path(path)
     try:
-        text = manifest_path.read_text(encoding="utf-8")
+        text = read_text_limited(manifest_path, "Kubernetes manifest")
+    except InputSizeError as exc:
+        raise KubernetesManifestError(str(exc)) from exc
     except OSError as exc:
         raise KubernetesManifestError(f"{manifest_path}: read failed: {exc}") from exc
     try:

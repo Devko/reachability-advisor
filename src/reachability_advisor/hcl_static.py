@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from .artifacts import artifact_identity_proof, artifact_match_evidence
+from .input_limits import InputSizeError, read_text_limited
 from .models import Artifact
 from .terraform import (
     TerraformAnalysis,
@@ -76,6 +77,7 @@ class HclProjectAudit:
     coverage: dict[str, Any]
     variables: dict[str, Any] = field(default_factory=dict, repr=False)
     warnings: tuple[str, ...] = field(default_factory=tuple)
+    skipped_files: tuple[dict[str, str], ...] = field(default_factory=tuple)
 
     def to_json(self) -> dict[str, Any]:
         resource_types = sorted({block.type for block in self.resources if block.type})
@@ -96,6 +98,7 @@ class HclProjectAudit:
                 "unresolved_image_references": len(images["unresolved"]),
                 "module_expansion_gaps": len(self.modules),
                 "resolved_variable_values": len(self.variables),
+                "skipped_files": len(self.skipped_files),
             },
             "resource_types_seen": resource_types,
             "resources": [_block_row(block, self.variables) for block in self.resources],
@@ -103,6 +106,7 @@ class HclProjectAudit:
             "data": [_block_row(block, self.variables) for block in self.data_blocks],
             "image_references": images,
             "coverage": self.coverage,
+            "skipped_files": list(self.skipped_files),
             "warnings": list(self.warnings),
             "notes": [
                 "HCL static mode resolves simple literal variables but does not evaluate count/for_each, modules, data sources, locals, expressions, or provider defaults.",
@@ -152,17 +156,16 @@ def audit_hcl_project(path: str | Path, artifacts: list[Artifact] | None = None)
     data_blocks: list[HclBlock] = []
     variables: dict[str, Any] = {}
     warnings: list[str] = []
+    skipped_files: list[dict[str, str]] = []
     for tf_file in files:
-        try:
-            text = tf_file.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            text = tf_file.read_text(encoding="utf-8", errors="replace")
-            warnings.append(f"{tf_file}: decoded with replacement characters")
+        text = _read_hcl_text(tf_file, "Terraform HCL source", warnings, skipped_files)
+        if text is None:
+            continue
         resources.extend(_extract_blocks(text, tf_file, RESOURCE_RE, kind="resource"))
         data_blocks.extend(_extract_blocks(text, tf_file, DATA_RE, kind="data"))
         modules.extend(_extract_blocks(text, tf_file, MODULE_RE, kind="module"))
         variables.update(_variable_defaults_from_text(text))
-    variables.update(_tfvars_values(root_dir))
+    variables.update(_tfvars_values(root_dir, warnings, skipped_files))
     synthetic_plan = hcl_blocks_to_plan(resources, variables=variables)
     plan_resources = extract_resources(synthetic_plan)
     coverage = coverage_report(plan_resources, artifacts or [], _artifact_matches(plan_resources, artifacts or []))
@@ -173,6 +176,7 @@ def audit_hcl_project(path: str | Path, artifacts: list[Artifact] | None = None)
         "resource_blocks": len(resources),
         "module_blocks": len(modules),
         "data_blocks": len(data_blocks),
+        "skipped_files": len(skipped_files),
     }
     coverage.setdefault("visibility_gaps", [])
     for block in modules:
@@ -209,6 +213,7 @@ def audit_hcl_project(path: str | Path, artifacts: list[Artifact] | None = None)
         coverage=coverage,
         variables=variables,
         warnings=tuple(warnings),
+        skipped_files=tuple(skipped_files),
     )
 
 
@@ -331,16 +336,44 @@ def _variable_defaults_from_text(text: str) -> dict[str, Any]:
     return variables
 
 
-def _tfvars_values(root: Path) -> dict[str, Any]:
+def _read_hcl_text(
+    path: Path,
+    label: str,
+    warnings: list[str],
+    skipped_files: list[dict[str, str]],
+) -> str | None:
+    try:
+        return read_text_limited(path, label)
+    except UnicodeDecodeError:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            reason = f"read failed: {exc}"
+            skipped_files.append({"path": str(path), "reason": reason})
+            warnings.append(f"{path}: skipped: {reason}")
+            return None
+        warnings.append(f"{path}: decoded with replacement characters")
+        return text
+    except InputSizeError as exc:
+        reason = str(exc)
+        skipped_files.append({"path": str(path), "reason": reason})
+        warnings.append(f"{path}: skipped: {reason}")
+        return None
+    except OSError as exc:
+        reason = f"read failed: {exc}"
+        skipped_files.append({"path": str(path), "reason": reason})
+        warnings.append(f"{path}: skipped: {reason}")
+        return None
+
+
+def _tfvars_values(root: Path, warnings: list[str], skipped_files: list[dict[str, str]]) -> dict[str, Any]:
     root_dir = root.parent if root.is_file() else root
     values: dict[str, Any] = {}
     for path in sorted(root_dir.glob("*.tfvars")) + sorted(root_dir.glob("*.auto.tfvars")):
-        try:
-            values.update(_simple_assignments(path.read_text(encoding="utf-8")))
-        except UnicodeDecodeError:
-            values.update(_simple_assignments(path.read_text(encoding="utf-8", errors="replace")))
-        except OSError:
+        text = _read_hcl_text(path, "Terraform tfvars source", warnings, skipped_files)
+        if text is None:
             continue
+        values.update(_simple_assignments(text))
     return values
 
 

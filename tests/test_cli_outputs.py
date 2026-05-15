@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import runpy
 import tempfile
@@ -414,6 +415,21 @@ class CliTests(unittest.TestCase):
             data = json.loads((out / "findings.json").read_text(encoding="utf-8"))
             self.assertTrue(any(finding["finding_type"] == "dynamic_runtime_observation" for finding in data["findings"]))
             self.assertTrue(any(finding["correlated_evidence"] for finding in data["findings"]))
+
+    def test_demo_command_is_not_cwd_dependent(self) -> None:
+        old_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            out = root / "demo"
+            try:
+                os.chdir(root)
+                code = main(["demo", "--output-dir", str(out)])
+            finally:
+                os.chdir(old_cwd)
+
+            self.assertEqual(code, 0)
+            self.assertTrue((out / "findings.json").exists())
+            self.assertTrue((out / "_inputs" / "source" / "app.js").exists())
 
     def test_semgrep_oss_sarif_sample_imports_as_static_finding(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,0 +1,45 @@
+{
+  "schema_version": "3.0",
+  "id": "aws-lambda-function-url",
+  "name": "AWS Lambda function URL fixture",
+  "provider": "aws",
+  "module_reference": {
+    "name": "AWS Lambda module-shaped fixture",
+    "source": "terraform-aws-modules/lambda/aws",
+    "registry": "https://registry.terraform.io/modules/terraform-aws-modules/lambda/aws/latest",
+    "upstream_note": "The public module documents Lambda image-package and function URL resource patterns."
+  },
+  "fixture_kind": "sanitized module-shaped terraform-show-json plan",
+  "terraform_plan": "tfplan.json",
+  "sboms": ["sboms/lambda-orders.cdx.json"],
+  "vulnerabilities": "../../common/vulnerabilities.json",
+  "source_roots": {
+    "lambda-orders": "source/lambda-orders"
+  },
+  "expected": {
+    "resource_accounting_coverage": 1.0,
+    "semantic_classification_coverage": 1.0,
+    "artifact_match_coverage": 1.0,
+    "min_findings": 1,
+    "must_match_artifacts": ["lambda-orders"],
+    "required_resource_types": [
+      "aws_lambda_function",
+      "aws_lambda_function_url",
+      "aws_iam_role",
+      "aws_iam_role_policy",
+      "aws_secretsmanager_secret"
+    ],
+    "min_tier_by_finding": [
+      {
+        "artifact": "lambda-orders",
+        "component": "lodash",
+        "vulnerability": "CVE-2019-10744",
+        "tier": "high"
+      }
+    ]
+  },
+  "notes": [
+    "Models a container-image Lambda exposed through a public function URL.",
+    "The IAM role policy includes secret read access to test Lambda identity blast-radius evidence."
+  ]
+}

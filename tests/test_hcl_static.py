@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -222,6 +223,48 @@ class HclStaticCoverageBoostTests(unittest.TestCase):
             audit = audit_hcl_project(path)
         self.assertTrue(audit.warnings)
         self.assertEqual(audit.to_json()["summary"]["resource_blocks"], 1)
+
+    def test_oversized_hcl_file_is_skipped_before_reading(self) -> None:
+        old_limit = os.environ.get("REACHABILITY_ADVISOR_MAX_INPUT_BYTES")
+        os.environ["REACHABILITY_ADVISOR_MAX_INPUT_BYTES"] = "32"
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "main.tf").write_text('resource "aws_ecs_service" "service" { name = "too-large" }', encoding="utf-8")
+                audit = audit_hcl_project(root)
+        finally:
+            if old_limit is None:
+                os.environ.pop("REACHABILITY_ADVISOR_MAX_INPUT_BYTES", None)
+            else:
+                os.environ["REACHABILITY_ADVISOR_MAX_INPUT_BYTES"] = old_limit
+
+        report = audit.to_json()
+        self.assertEqual(report["summary"]["resource_blocks"], 0)
+        self.assertEqual(report["summary"]["skipped_files"], 1)
+        self.assertIn("above the configured limit", report["skipped_files"][0]["reason"])
+
+    def test_oversized_tfvars_file_is_skipped_and_reported(self) -> None:
+        old_limit = os.environ.get("REACHABILITY_ADVISOR_MAX_INPUT_BYTES")
+        os.environ["REACHABILITY_ADVISOR_MAX_INPUT_BYTES"] = "120"
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "main.tf").write_text(
+                    'variable "name" { default = "fallback" }\nresource "aws_ecs_service" "service" { name = var.name }',
+                    encoding="utf-8",
+                )
+                (root / "terraform.tfvars").write_text('name = "' + ("x" * 200) + '"', encoding="utf-8")
+                audit = audit_hcl_project(root)
+        finally:
+            if old_limit is None:
+                os.environ.pop("REACHABILITY_ADVISOR_MAX_INPUT_BYTES", None)
+            else:
+                os.environ["REACHABILITY_ADVISOR_MAX_INPUT_BYTES"] = old_limit
+
+        report = audit.to_json()
+        self.assertEqual(report["summary"]["resource_blocks"], 1)
+        self.assertEqual(report["summary"]["skipped_files"], 1)
+        self.assertEqual(audit.variables["name"], "fallback")
 
     def test_hcl_static_handles_aws_ipv6_and_container_definitions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

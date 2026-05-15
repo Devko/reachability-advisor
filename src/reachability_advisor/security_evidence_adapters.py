@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from .input_limits import InputSizeError, iter_text_lines_limited, read_text_limited
 from .models import Confidence, SourceLocation
 from .security_evidence_model import SecurityEvidenceError, SecurityEvidenceRecord
 
@@ -21,7 +22,9 @@ def load_security_evidence(paths: Sequence[str | Path], *, default_scanner_type:
             records.extend(_records_from_jsonl(evidence_path, default_scanner_type=default_scanner_type))
             continue
         try:
-            data = json.loads(evidence_path.read_text(encoding="utf-8"))
+            data = json.loads(read_text_limited(evidence_path, "security evidence"))
+        except InputSizeError as exc:
+            raise SecurityEvidenceError(str(exc)) from exc
         except json.JSONDecodeError as exc:
             raise SecurityEvidenceError(f"{evidence_path}: invalid JSON security evidence: {exc}") from exc
         records.extend(_records_from_data(data, evidence_path, default_scanner_type=default_scanner_type))
@@ -30,43 +33,61 @@ def load_security_evidence(paths: Sequence[str | Path], *, default_scanner_type:
 
 def _records_from_jsonl(path: Path, *, default_scanner_type: str | None = None) -> list[SecurityEvidenceRecord]:
     records: list[SecurityEvidenceRecord] = []
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        if not line.strip():
-            continue
-        try:
-            item = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise SecurityEvidenceError(f"{path}:{line_number}: invalid JSONL security evidence: {exc}") from exc
-        if not isinstance(item, dict):
-            continue
-        if _is_nuclei_record(item):
-            records.append(_record_from_nuclei(item, path, default_scanner_type=default_scanner_type))
-        else:
-            records.append(_record_from_plain(item, path, default_scanner_type=default_scanner_type))
+    try:
+        lines = iter_text_lines_limited(path, "security evidence JSONL")
+        for line_number, line in enumerate(lines, start=1):
+            if not line.strip():
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise SecurityEvidenceError(f"{path}:{line_number}: invalid JSONL security evidence: {exc}") from exc
+            if not isinstance(item, dict):
+                continue
+            if _is_nuclei_record(item):
+                records.append(_record_from_nuclei(item, path, default_scanner_type=default_scanner_type))
+            else:
+                records.append(_record_from_plain(item, path, default_scanner_type=default_scanner_type))
+    except InputSizeError as exc:
+        raise SecurityEvidenceError(str(exc)) from exc
     return records
 
 
+def _require_list(data: dict[str, Any], key: str, path: Path) -> list[Any] | None:
+    if key not in data:
+        return None
+    value = data.get(key)
+    if not isinstance(value, list):
+        raise SecurityEvidenceError(f"{path}: {key} must be a list")
+    return value
+
+
 def _records_from_data(data: Any, path: Path, *, default_scanner_type: str | None = None) -> list[SecurityEvidenceRecord]:
-    if isinstance(data, dict) and isinstance(data.get("security_evidence"), list):
-        return [_record_from_plain(item, path, default_scanner_type=default_scanner_type) for item in data["security_evidence"] if isinstance(item, dict)]
-    if isinstance(data, dict) and isinstance(data.get("findings"), list):
-        return [_record_from_plain(item, path, default_scanner_type=default_scanner_type) for item in data["findings"] if isinstance(item, dict)]
-    if isinstance(data, dict) and _is_checkov_report(data):
-        return _records_from_checkov(data, path, default_scanner_type=default_scanner_type)
-    if isinstance(data, dict) and _is_trivy_config_report(data):
-        return _records_from_trivy_config(data, path, default_scanner_type=default_scanner_type)
-    if isinstance(data, dict) and _is_kics_report(data):
-        return _records_from_kics(data, path, default_scanner_type=default_scanner_type)
-    if isinstance(data, dict) and _is_tfsec_report(data):
-        return _records_from_tfsec(data, path, default_scanner_type=default_scanner_type)
-    if isinstance(data, dict) and isinstance(data.get("site"), list):
-        return _records_from_zap(data, path, default_scanner_type=default_scanner_type)
-    if isinstance(data, dict) and isinstance(data.get("results"), list):
-        if data.get("version") == "2.1.0" or data.get("$schema"):
+    if isinstance(data, dict):
+        normalized = _require_list(data, "security_evidence", path)
+        if normalized is not None:
+            return [_record_from_plain(item, path, default_scanner_type=default_scanner_type) for item in normalized if isinstance(item, dict)]
+        findings = _require_list(data, "findings", path)
+        if findings is not None:
+            return [_record_from_plain(item, path, default_scanner_type=default_scanner_type) for item in findings if isinstance(item, dict)]
+        if _is_checkov_report(data):
+            return _records_from_checkov(data, path, default_scanner_type=default_scanner_type)
+        if _is_trivy_config_report(data):
+            return _records_from_trivy_config(data, path, default_scanner_type=default_scanner_type)
+        if _is_kics_report(data):
+            return _records_from_kics(data, path, default_scanner_type=default_scanner_type)
+        if _is_tfsec_report(data):
+            return _records_from_tfsec(data, path, default_scanner_type=default_scanner_type)
+        if isinstance(data.get("site"), list):
+            return _records_from_zap(data, path, default_scanner_type=default_scanner_type)
+        results = _require_list(data, "results", path)
+        if results is not None:
+            if data.get("version") == "2.1.0" or data.get("$schema"):
+                return _records_from_sarif(data, path, default_scanner_type=default_scanner_type)
+            return [_record_from_semgrep(item, path) for item in results if isinstance(item, dict)]
+        runs = _require_list(data, "runs", path)
+        if runs is not None:
             return _records_from_sarif(data, path, default_scanner_type=default_scanner_type)
-        return [_record_from_semgrep(item, path) for item in data["results"] if isinstance(item, dict)]
-    if isinstance(data, dict) and isinstance(data.get("runs"), list):
-        return _records_from_sarif(data, path, default_scanner_type=default_scanner_type)
     if isinstance(data, list):
         return [_record_from_plain(item, path, default_scanner_type=default_scanner_type) for item in data if isinstance(item, dict)]
     if isinstance(data, dict):

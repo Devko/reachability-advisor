@@ -1,0 +1,51 @@
+{
+  "schema_version": "3.0",
+  "id": "aws-ecs-fargate-service",
+  "name": "AWS ECS/Fargate service module fixture",
+  "provider": "aws",
+  "module_reference": {
+    "name": "terraform-aws-modules/ecs/aws service submodule",
+    "source": "terraform-aws-modules/ecs/aws//modules/service",
+    "registry": "https://registry.terraform.io/modules/terraform-aws-modules/ecs/aws/latest",
+    "upstream_note": "The public module documents ECS cluster and service resource creation patterns."
+  },
+  "fixture_kind": "sanitized module-shaped terraform-show-json plan",
+  "terraform_plan": "tfplan.json",
+  "sboms": [
+    "sboms/payments-api.cdx.json"
+  ],
+  "vulnerabilities": "../../common/vulnerabilities.json",
+  "source_roots": {
+    "payments-api": "source/payments-api"
+  },
+  "expected": {
+    "resource_accounting_coverage": 1.0,
+    "semantic_classification_coverage": 1.0,
+    "artifact_match_coverage": 1.0,
+    "min_findings": 1,
+    "must_match_artifacts": [
+      "payments-api"
+    ],
+    "required_resource_types": [
+      "aws_ecs_task_definition",
+      "aws_ecs_service",
+      "aws_lb",
+      "aws_security_group",
+      "aws_iam_role_policy",
+      "aws_cloudwatch_log_group",
+      "aws_appautoscaling_target"
+    ],
+    "min_tier_by_finding": [
+      {
+        "artifact": "payments-api",
+        "component": "log4j-core",
+        "vulnerability": "CVE-2021-44228",
+        "tier": "urgent"
+      }
+    ]
+  },
+  "notes": [
+    "This fixture is reduced and sanitized. It models resource shapes emitted by common Terraform modules without vendoring module code.",
+    "It asserts 100% resource accounting and semantic classification for the resources included in the pack."
+  ]
+}

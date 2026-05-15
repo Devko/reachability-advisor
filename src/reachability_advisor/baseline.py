@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .input_limits import read_text_limited
 from .models import Finding
 from .numeric import safe_float
 
@@ -37,7 +38,7 @@ def write_baseline(baseline: dict[str, Any], path: str | Path) -> None:
 
 
 def load_baseline(path: str | Path) -> dict[str, Any]:
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    data = json.loads(read_text_limited(Path(path), "baseline"))
     if not isinstance(data, dict):
         raise ValueError("baseline artifact must be a JSON object")
     if data.get("kind") != BASELINE_KIND:

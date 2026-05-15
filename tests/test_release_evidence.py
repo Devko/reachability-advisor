@@ -618,6 +618,24 @@ class RenderedIacPlanTests(unittest.TestCase):
         self.assertIn("--terraform-plan", markdown)
 
 
+class ActionWorkflowTests(unittest.TestCase):
+    def test_composite_action_does_not_interpolate_inputs_inside_shell_script(self) -> None:
+        action = (ROOT / "action.yml").read_text(encoding="utf-8")
+        run_blocks = re.findall(r"\n\s+run: \|\n((?:\s{8,}.*\n)+)", action)
+
+        self.assertTrue(run_blocks)
+        self.assertNotIn("${{ inputs.", "\n".join(run_blocks))
+        self.assertIn("RA_INPUT_SBOM: ${{ inputs.sbom }}", action)
+        self.assertIn('add_repeated_args "--sbom" "$RA_INPUT_SBOM"', action)
+
+    def test_composite_action_output_file_writes_are_not_echo_based(self) -> None:
+        action = (ROOT / "action.yml").read_text(encoding="utf-8")
+
+        self.assertIn("output-dir must not contain newline characters", action)
+        self.assertIn("printf 'findings=%s\\n' \"$findings\"", action)
+        self.assertNotIn('echo "findings=$findings"', action)
+
+
 class DocumentationConsistencyTests(unittest.TestCase):
     def test_documented_test_count_matches_discovered_tests(self) -> None:
         expected = unittest.defaultTestLoader.discover(str(ROOT / "tests")).countTestCases()

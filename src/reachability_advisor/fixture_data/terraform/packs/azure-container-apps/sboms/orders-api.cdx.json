@@ -1,0 +1,47 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "name": "orders-api",
+      "version": "1.0.0",
+      "purl": "contoso.azurecr.io/orders-api:2.0.0",
+      "properties": [
+        {
+          "name": "container:image",
+          "value": "contoso.azurecr.io/orders-api:2.0.0"
+        },
+        {
+          "name": "reachability:artifact_ref",
+          "value": "contoso.azurecr.io/orders-api:2.0.0"
+        },
+        {
+          "name": "environment",
+          "value": "prod"
+        },
+        {
+          "name": "owner",
+          "value": "team-orders-api"
+        }
+      ]
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "name": "lodash",
+      "version": "4.17.20",
+      "purl": "pkg:npm/lodash@4.17.20",
+      "scope": "runtime"
+    },
+    {
+      "type": "library",
+      "name": "minimist",
+      "version": "1.2.5",
+      "purl": "pkg:npm/minimist@1.2.5",
+      "scope": "dev"
+    }
+  ]
+}

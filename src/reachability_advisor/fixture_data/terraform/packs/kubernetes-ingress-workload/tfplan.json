@@ -1,0 +1,122 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.8.0",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "module.k8s.kubernetes_namespace.app[0]",
+          "mode": "managed",
+          "type": "kubernetes_namespace",
+          "name": "app",
+          "provider_name": "registry.terraform.io/hashicorp/kubernetes",
+          "values": {
+            "metadata": {
+              "name": "apps"
+            }
+          }
+        },
+        {
+          "address": "module.k8s.kubernetes_deployment.dashboard[0]",
+          "mode": "managed",
+          "type": "kubernetes_deployment",
+          "name": "dashboard",
+          "provider_name": "registry.terraform.io/hashicorp/kubernetes",
+          "values": {
+            "metadata": {
+              "name": "dashboard-api",
+              "labels": {
+                "environment": "prod",
+                "owner": "platform"
+              }
+            },
+            "spec": [
+              {
+                "template": [
+                  {
+                    "spec": [
+                      {
+                        "service_account_name": "dashboard-api",
+                        "container": [
+                          {
+                            "name": "dashboard-api",
+                            "image": "ghcr.io/acme/dashboard-api:4.0.0"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "address": "module.k8s.kubernetes_service.dashboard[0]",
+          "mode": "managed",
+          "type": "kubernetes_service",
+          "name": "dashboard",
+          "provider_name": "registry.terraform.io/hashicorp/kubernetes",
+          "values": {
+            "metadata": {
+              "name": "dashboard-api"
+            },
+            "type": "LoadBalancer"
+          }
+        },
+        {
+          "address": "module.k8s.kubernetes_ingress_v1.dashboard[0]",
+          "mode": "managed",
+          "type": "kubernetes_ingress_v1",
+          "name": "dashboard",
+          "provider_name": "registry.terraform.io/hashicorp/kubernetes",
+          "values": {
+            "metadata": {
+              "name": "dashboard-api"
+            },
+            "rules": [
+              {
+                "host": "dashboard.example.com"
+              }
+            ]
+          }
+        },
+        {
+          "address": "module.k8s.kubernetes_service_account.dashboard[0]",
+          "mode": "managed",
+          "type": "kubernetes_service_account",
+          "name": "dashboard",
+          "provider_name": "registry.terraform.io/hashicorp/kubernetes",
+          "values": {
+            "metadata": {
+              "name": "dashboard-api",
+              "annotations": {
+                "eks.amazonaws.com/role-arn": "arn:aws:iam::123456789012:role/dashboard-secrets-role"
+              }
+            }
+          }
+        },
+        {
+          "address": "module.k8s.kubernetes_cluster_role_binding.dashboard[0]",
+          "mode": "managed",
+          "type": "kubernetes_cluster_role_binding",
+          "name": "dashboard",
+          "provider_name": "registry.terraform.io/hashicorp/kubernetes",
+          "values": {
+            "role_ref": {
+              "name": "cluster-admin",
+              "kind": "ClusterRole"
+            },
+            "subject": [
+              {
+                "kind": "ServiceAccount",
+                "name": "dashboard-api",
+                "namespace": "apps"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from reachability_advisor.context import infer_context_from_terraform, load_context_file
-from reachability_advisor.models import Component, Confidence, Reachability, Tier
+from reachability_advisor.models import Component, Confidence, Reachability, SourceLocation, Tier
 from reachability_advisor.outputs import (
     explain_finding,
     render_table,
@@ -462,6 +462,18 @@ class ScoringTests(unittest.TestCase):
             self.assertIn("No matching dependency vulnerabilities or imported scanner findings", empty_markdown_path.read_text(encoding="utf-8"))
             self.assertTrue(annotations_path.read_text(encoding="utf-8").startswith("::"))
             self.assertEqual(empty_annotations_path.read_text(encoding="utf-8"), "")
+
+    def test_annotations_escape_command_properties_and_clamp_positions(self) -> None:
+        finding = self._findings()[0]
+        finding.source.locations = [SourceLocation(Path("bad,name%file\nnext.py"), line=0, column=-2)]
+        with tempfile.TemporaryDirectory() as tmp:
+            annotations_path = Path(tmp) / "annotations.txt"
+
+            write_annotations([finding], annotations_path, min_tier=Tier.LOW)
+
+            annotation = annotations_path.read_text(encoding="utf-8")
+        self.assertIn("file=bad%2Cname%25file%0Anext.py", annotation)
+        self.assertIn("line=1,col=1", annotation)
 
 
 class ValidationTests(unittest.TestCase):

@@ -29,6 +29,7 @@
 |---|---|
 | Malformed input causes crash | Input validation and parser tests. |
 | Findings are over-demoted | Conservative scoring and no auto-suppression. |
-| CI command injection through annotations | Annotation output escapes `%`, CR, and LF. |
+| CI command injection through action inputs or annotations | Composite-action inputs are passed through environment variables before shell parsing. Annotation messages and command properties are escaped before publishing. |
+| Oversized scanner artifacts exhaust memory | Main JSON/JSONL loaders enforce a configurable local input size limit before parsing. |
 | Sensitive source leaves environment | No network calls; all outputs are local files. The HTML graph is self-contained and does not load remote assets. |
 | Misleading context | Confidence and evidence fields are explicit. |

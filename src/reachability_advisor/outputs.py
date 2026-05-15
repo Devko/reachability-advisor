@@ -17,6 +17,7 @@ from .finding_types import (
     is_security_finding,
     is_static_finding,
 )
+from .input_limits import read_text_limited
 from .models import Finding, SourceLocation, Tier, reachability_label
 from .remediation import build_remediation_groups
 
@@ -53,7 +54,7 @@ def write_json_findings(findings: list[Finding], path: str | Path, metadata: dic
 
 
 def load_findings_json(path: str | Path) -> dict[str, Any]:
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    data = json.loads(read_text_limited(Path(path), "findings"))
     if not isinstance(data, dict):
         raise ValueError(f"{path}: expected a JSON object")
     return data
@@ -415,9 +416,12 @@ def write_annotations(findings: list[Finding], path: str | Path, min_tier: Tier 
             continue
         location = _primary_location(finding)
         if location:
-            lines.append(f"::error file={location.path},line={location.line},col={location.column}::{_escape_annotation(_finding_message(finding))}")
+            file_property = _escape_annotation_property(str(location.path))
+            line_property = _annotation_number(location.line)
+            column_property = _annotation_number(location.column)
+            lines.append(f"::error file={file_property},line={line_property},col={column_property}::{_escape_annotation_message(_finding_message(finding))}")
         else:
-            lines.append(f"::warning title=Reachability Advisor::{_escape_annotation(_finding_message(finding))}")
+            lines.append(f"::warning title=Reachability Advisor::{_escape_annotation_message(_finding_message(finding))}")
         if len(lines) >= max_findings:
             break
     out = Path(path)
@@ -425,8 +429,16 @@ def write_annotations(findings: list[Finding], path: str | Path, min_tier: Tier 
     out.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
-def _escape_annotation(message: str) -> str:
+def _escape_annotation_message(message: str) -> str:
     return message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def _escape_annotation_property(value: str) -> str:
+    return _escape_annotation_message(value).replace(":", "%3A").replace(",", "%2C")
+
+
+def _annotation_number(value: int) -> int:
+    return max(1, int(value))
 
 
 def render_table(findings: list[Finding], limit: int = 20) -> str:

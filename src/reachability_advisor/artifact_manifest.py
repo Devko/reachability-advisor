@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .artifacts import normalize_image_reference
+from .input_limits import InputSizeError, read_text_limited
 
 
 class ArtifactManifestError(ValueError):
@@ -167,7 +168,9 @@ def validate_artifact_manifest(path: str | Path, *, strict_provenance: bool = Fa
 def load_artifact_manifest(path: str | Path) -> list[ArtifactManifestEntry]:
     manifest_path = Path(path)
     try:
-        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        data = json.loads(read_text_limited(manifest_path, "artifact manifest"))
+    except InputSizeError as exc:
+        raise ArtifactManifestError(str(exc)) from exc
     except json.JSONDecodeError as exc:
         raise ArtifactManifestError(f"{manifest_path}: invalid JSON: {exc}") from exc
     if not isinstance(data, dict):

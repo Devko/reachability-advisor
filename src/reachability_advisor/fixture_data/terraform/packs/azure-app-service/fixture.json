@@ -1,0 +1,44 @@
+{
+  "schema_version": "3.0",
+  "id": "azure-app-service",
+  "name": "Azure App Service fixture",
+  "provider": "azure",
+  "module_reference": {
+    "name": "Azure App Service module-shaped fixture",
+    "source": "Azure/avm-res-web-site/azurerm",
+    "registry": "https://registry.terraform.io/modules/Azure/avm-res-web-site/azurerm/latest",
+    "upstream_note": "The public module documents App Service site, managed identity, and role-assignment patterns."
+  },
+  "fixture_kind": "sanitized module-shaped terraform-show-json plan",
+  "terraform_plan": "tfplan.json",
+  "sboms": ["sboms/web-portal.cdx.json"],
+  "vulnerabilities": "../../common/vulnerabilities.json",
+  "source_roots": {
+    "web-portal": "source/web-portal"
+  },
+  "expected": {
+    "resource_accounting_coverage": 1.0,
+    "semantic_classification_coverage": 1.0,
+    "artifact_match_coverage": 1.0,
+    "min_findings": 1,
+    "must_match_artifacts": ["web-portal"],
+    "required_resource_types": [
+      "azurerm_linux_web_app",
+      "azurerm_user_assigned_identity",
+      "azurerm_role_assignment",
+      "azurerm_key_vault"
+    ],
+    "min_tier_by_finding": [
+      {
+        "artifact": "web-portal",
+        "component": "requests",
+        "vulnerability": "CVE-2023-32681",
+        "tier": "medium"
+      }
+    ]
+  },
+  "notes": [
+    "Models a public Linux Web App using a container image and managed identity.",
+    "The role assignment exercises Azure data-access IAM evidence for a web workload."
+  ]
+}

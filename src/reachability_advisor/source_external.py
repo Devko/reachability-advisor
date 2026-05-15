@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .input_limits import InputSizeError, iter_text_lines_limited, read_text_limited
 from .models import (
     Component,
     Confidence,
@@ -152,7 +153,13 @@ def load_external_source_evidence(paths: Iterable[str | Path]) -> ExternalSource
     store = ExternalSourceEvidenceStore()
     for path in paths:
         evidence_path = Path(path)
-        text = evidence_path.read_text(encoding="utf-8")
+        if evidence_path.suffix.lower() in {".jsonl", ".ndjson"}:
+            store.records.extend(_external_records_from_jsonl(evidence_path))
+            continue
+        try:
+            text = read_text_limited(evidence_path, "external source evidence")
+        except InputSizeError as exc:
+            raise ExternalSourceEvidenceError(str(exc)) from exc
         try:
             data = json.loads(text)
             store.records.extend(_external_records_from_data(data, evidence_path))
@@ -172,17 +179,48 @@ def load_external_source_evidence(paths: Iterable[str | Path]) -> ExternalSource
     return store
 
 
+def _external_records_from_jsonl(path: Path) -> list[ExternalSourceEvidenceRecord]:
+    records: list[ExternalSourceEvidenceRecord] = []
+    try:
+        lines = iter_text_lines_limited(path, "external source evidence JSONL")
+        for line_number, line in enumerate(lines, start=1):
+            if not line.strip():
+                continue
+            try:
+                line_data = json.loads(line)
+            except json.JSONDecodeError as line_error:
+                raise ExternalSourceEvidenceError(f"{path}: invalid JSON evidence on line {line_number}: {line_error}") from line_error
+            records.extend(_external_records_from_data(line_data, path))
+    except InputSizeError as exc:
+        raise ExternalSourceEvidenceError(str(exc)) from exc
+    return records
+
+
+def _require_list(data: dict[str, Any], key: str, path: Path) -> list[Any] | None:
+    if key not in data:
+        return None
+    value = data.get(key)
+    if not isinstance(value, list):
+        raise ExternalSourceEvidenceError(f"{path}: {key} must be a list")
+    return value
+
+
 def _external_records_from_data(data: Any, path: Path) -> list[ExternalSourceEvidenceRecord]:
-    if isinstance(data, dict) and isinstance(data.get("evidence"), list):
-        return [_record_from_plain(item, path) for item in data["evidence"] if isinstance(item, dict)]
-    if isinstance(data, dict) and isinstance(data.get("findings"), list):
-        return [_record_from_finding(item, path) for item in data["findings"] if isinstance(item, dict)]
-    if isinstance(data, dict) and isinstance(data.get("results"), list):
-        if data.get("version") == "2.1.0" or data.get("$schema"):
+    if isinstance(data, dict):
+        evidence = _require_list(data, "evidence", path)
+        if evidence is not None:
+            return [_record_from_plain(item, path) for item in evidence if isinstance(item, dict)]
+        findings = _require_list(data, "findings", path)
+        if findings is not None:
+            return [_record_from_finding(item, path) for item in findings if isinstance(item, dict)]
+        results = _require_list(data, "results", path)
+        if results is not None:
+            if data.get("version") == "2.1.0" or data.get("$schema"):
+                return _records_from_sarif(data, path)
+            return [_record_from_semgrep(item, path) for item in results if isinstance(item, dict)]
+        runs = _require_list(data, "runs", path)
+        if runs is not None:
             return _records_from_sarif(data, path)
-        return [_record_from_semgrep(item, path) for item in data["results"] if isinstance(item, dict)]
-    if isinstance(data, dict) and isinstance(data.get("runs"), list):
-        return _records_from_sarif(data, path)
     if isinstance(data, list):
         return [_record_from_plain(item, path) for item in data if isinstance(item, dict)]
     if isinstance(data, dict) and ("finding" in data or "osv" in data):

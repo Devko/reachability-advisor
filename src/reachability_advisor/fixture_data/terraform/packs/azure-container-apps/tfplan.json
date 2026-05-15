@@ -1,0 +1,109 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.8.0",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "module.container_apps.azurerm_resource_group.this[0]",
+          "mode": "managed",
+          "type": "azurerm_resource_group",
+          "name": "this",
+          "provider_name": "registry.terraform.io/hashicorp/azurerm",
+          "values": {
+            "name": "rg-orders-prod",
+            "location": "westeurope",
+            "tags": {
+              "environment": "prod",
+              "team": "orders"
+            }
+          }
+        },
+        {
+          "address": "module.container_apps.azurerm_log_analytics_workspace.this[0]",
+          "mode": "managed",
+          "type": "azurerm_log_analytics_workspace",
+          "name": "this",
+          "provider_name": "registry.terraform.io/hashicorp/azurerm",
+          "values": {
+            "name": "law-orders"
+          }
+        },
+        {
+          "address": "module.container_apps.azurerm_container_app_environment.this[0]",
+          "mode": "managed",
+          "type": "azurerm_container_app_environment",
+          "name": "this",
+          "provider_name": "registry.terraform.io/hashicorp/azurerm",
+          "values": {
+            "name": "cae-orders-prod",
+            "tags": {
+              "environment": "prod",
+              "owner": "orders"
+            }
+          }
+        },
+        {
+          "address": "module.container_apps.azurerm_container_app.this[0]",
+          "mode": "managed",
+          "type": "azurerm_container_app",
+          "name": "this",
+          "provider_name": "registry.terraform.io/hashicorp/azurerm",
+          "values": {
+            "name": "orders-api",
+            "template": [
+              {
+                "container": [
+                  {
+                    "name": "orders-api",
+                    "image": "contoso.azurecr.io/orders-api:2.0.0"
+                  }
+                ]
+              }
+            ],
+            "ingress": [
+              {
+                "external_enabled": true,
+                "target_port": 8080
+              }
+            ],
+            "tags": {
+              "environment": "prod",
+              "owner": "orders"
+            }
+          }
+        },
+        {
+          "address": "module.container_apps.azurerm_user_assigned_identity.this[0]",
+          "mode": "managed",
+          "type": "azurerm_user_assigned_identity",
+          "name": "this",
+          "provider_name": "registry.terraform.io/hashicorp/azurerm",
+          "values": {
+            "name": "id-orders"
+          }
+        },
+        {
+          "address": "module.container_apps.azurerm_role_assignment.keyvault[0]",
+          "mode": "managed",
+          "type": "azurerm_role_assignment",
+          "name": "keyvault",
+          "provider_name": "registry.terraform.io/hashicorp/azurerm",
+          "values": {
+            "role_definition_name": "Key Vault Secrets User"
+          }
+        },
+        {
+          "address": "module.container_apps.azurerm_key_vault.this[0]",
+          "mode": "managed",
+          "type": "azurerm_key_vault",
+          "name": "this",
+          "provider_name": "registry.terraform.io/hashicorp/azurerm",
+          "values": {
+            "name": "kv-orders-prod"
+          }
+        }
+      ]
+    }
+  }
+}

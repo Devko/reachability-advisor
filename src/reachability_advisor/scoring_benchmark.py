@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .input_limits import read_text_limited
 from .models import (
     Artifact,
     Component,
@@ -22,7 +23,7 @@ from .scoring import ScorePolicy, score_finding
 
 def run_scoring_benchmark(path: str | Path, policy: ScorePolicy | None = None) -> dict[str, Any]:
     benchmark_path = Path(path)
-    data = json.loads(benchmark_path.read_text(encoding="utf-8"))
+    data = json.loads(read_text_limited(benchmark_path, "scoring benchmark"))
     if not isinstance(data, dict):
         raise ValueError(f"{benchmark_path}: expected a JSON object")
     cases = data.get("cases")

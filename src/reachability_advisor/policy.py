@@ -8,6 +8,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from .input_limits import read_text_limited
 from .models import Finding, Tier
 from .scoring import ScorePolicy
 
@@ -71,7 +72,7 @@ def _exceptions(items: Any) -> list[ExceptionRule]:
 def load_runtime_policy(path: str | Path | None) -> RuntimePolicy:
     if not path:
         return RuntimePolicy(score_policy=ScorePolicy())
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    data = json.loads(read_text_limited(Path(path), "runtime policy"))
     if not isinstance(data, dict):
         return RuntimePolicy(score_policy=ScorePolicy())
     return RuntimePolicy(score_policy=ScorePolicy(), fail_on_tier=_tier(data.get("fail_on_tier"), Tier.HIGH), exceptions=_exceptions(data.get("exceptions")))

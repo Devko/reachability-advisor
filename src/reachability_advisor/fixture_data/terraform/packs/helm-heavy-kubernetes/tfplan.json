@@ -1,0 +1,151 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.8.0",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "helm_release.dashboard",
+          "mode": "managed",
+          "type": "helm_release",
+          "name": "dashboard",
+          "provider_name": "registry.terraform.io/hashicorp/helm",
+          "values": {
+            "name": "helm-dashboard",
+            "chart": "dashboard",
+            "namespace": "apps",
+            "repository": "oci://ghcr.io/acme/charts"
+          }
+        },
+        {
+          "address": "kubernetes_namespace.apps",
+          "mode": "managed",
+          "type": "kubernetes_namespace",
+          "name": "apps",
+          "provider_name": "registry.terraform.io/hashicorp/kubernetes",
+          "values": {
+            "metadata": {
+              "name": "apps"
+            }
+          }
+        },
+        {
+          "address": "kubernetes_deployment.dashboard",
+          "mode": "managed",
+          "type": "kubernetes_deployment",
+          "name": "dashboard",
+          "provider_name": "registry.terraform.io/hashicorp/kubernetes",
+          "values": {
+            "metadata": {
+              "name": "helm-dashboard",
+              "labels": {
+                "app.kubernetes.io/name": "helm-dashboard"
+              }
+            },
+            "spec": [
+              {
+                "template": [
+                  {
+                    "metadata": {
+                      "labels": {
+                        "app.kubernetes.io/name": "helm-dashboard"
+                      }
+                    },
+                    "spec": [
+                      {
+                        "service_account_name": "helm-dashboard",
+                        "container": [
+                          {
+                            "name": "helm-dashboard",
+                            "image": "ghcr.io/acme/helm-dashboard:1.0.0"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "address": "kubernetes_service.dashboard",
+          "mode": "managed",
+          "type": "kubernetes_service",
+          "name": "dashboard",
+          "provider_name": "registry.terraform.io/hashicorp/kubernetes",
+          "values": {
+            "metadata": {
+              "name": "helm-dashboard",
+              "labels": {
+                "app.kubernetes.io/name": "helm-dashboard"
+              }
+            },
+            "spec": [
+              {
+                "type": "ClusterIP",
+                "selector": {
+                  "app.kubernetes.io/name": "helm-dashboard"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "address": "kubernetes_ingress_v1.dashboard",
+          "mode": "managed",
+          "type": "kubernetes_ingress_v1",
+          "name": "dashboard",
+          "provider_name": "registry.terraform.io/hashicorp/kubernetes",
+          "values": {
+            "metadata": {
+              "name": "helm-dashboard"
+            },
+            "rule": [
+              {
+                "host": "dashboard.example.com",
+                "http": [
+                  {
+                    "path": [
+                      {
+                        "backend": [
+                          {
+                            "service": [
+                              {
+                                "name": "helm-dashboard"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "address": "kubernetes_cluster_role_binding.dashboard",
+          "mode": "managed",
+          "type": "kubernetes_cluster_role_binding",
+          "name": "dashboard",
+          "provider_name": "registry.terraform.io/hashicorp/kubernetes",
+          "values": {
+            "role_ref": {
+              "kind": "ClusterRole",
+              "name": "cluster-admin"
+            },
+            "subject": [
+              {
+                "kind": "ServiceAccount",
+                "name": "helm-dashboard",
+                "namespace": "apps"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

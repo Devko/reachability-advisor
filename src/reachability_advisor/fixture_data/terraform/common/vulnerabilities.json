@@ -1,0 +1,74 @@
+{
+  "schema_version": "3.0",
+  "vulnerabilities": [
+    {
+      "id": "CVE-2021-44228",
+      "package": {
+        "name": "log4j-core",
+        "purl": "pkg:maven/org.apache.logging.log4j/log4j-core"
+      },
+      "affected_versions": [
+        "2.14.1"
+      ],
+      "severity": "critical",
+      "cvss": 10.0,
+      "epss": 0.95,
+      "known_exploited": true,
+      "fixed_versions": [
+        "2.17.1"
+      ],
+      "summary": "Apache Log4j JNDI injection vulnerability used as a known-exploited fixture."
+    },
+    {
+      "id": "CVE-2019-10744",
+      "package": {
+        "name": "lodash",
+        "purl": "pkg:npm/lodash"
+      },
+      "affected_versions": [
+        "4.17.20"
+      ],
+      "severity": "high",
+      "cvss": 9.1,
+      "epss": 0.72,
+      "fixed_versions": [
+        "4.17.21"
+      ],
+      "summary": "Prototype pollution fixture for Lodash."
+    },
+    {
+      "id": "CVE-2023-32681",
+      "package": {
+        "name": "requests",
+        "purl": "pkg:pypi/requests"
+      },
+      "affected_versions": [
+        "2.30.0"
+      ],
+      "severity": "medium",
+      "cvss": 6.1,
+      "epss": 0.22,
+      "fixed_versions": [
+        "2.31.0"
+      ],
+      "summary": "Requests proxy credential leakage fixture."
+    },
+    {
+      "id": "CVE-2021-44906",
+      "package": {
+        "name": "minimist",
+        "purl": "pkg:npm/minimist"
+      },
+      "affected_versions": [
+        "1.2.5"
+      ],
+      "severity": "high",
+      "cvss": 7.5,
+      "epss": 0.33,
+      "fixed_versions": [
+        "1.2.6"
+      ],
+      "summary": "Minimist prototype pollution fixture."
+    }
+  ]
+}

@@ -203,6 +203,43 @@ runs:
     - id: scan
       name: Run Reachability Advisor
       shell: bash
+      env:
+        RA_INPUT_SBOM: ${{ inputs.sbom }}
+        RA_INPUT_VULN_IN: ${{ inputs.vuln-in }}
+        RA_INPUT_SOURCE_ROOT: ${{ inputs.source-root }}
+        RA_INPUT_ARTIFACT_ALIAS: ${{ inputs.artifact-alias }}
+        RA_INPUT_ARTIFACT_MANIFEST: ${{ inputs.artifact-manifest }}
+        RA_INPUT_REQUIRE_ARTIFACT_PROVENANCE: ${{ inputs.require-artifact-provenance }}
+        RA_INPUT_CONTEXT: ${{ inputs.context }}
+        RA_INPUT_TERRAFORM_PLAN: ${{ inputs.terraform-plan }}
+        RA_INPUT_TERRAFORM_SOURCE: ${{ inputs.terraform-source }}
+        RA_INPUT_KUBERNETES_MANIFEST: ${{ inputs.kubernetes-manifest }}
+        RA_INPUT_KUBERNETES_INFER_LATERAL: ${{ inputs.kubernetes-infer-lateral }}
+        RA_INPUT_REACHABILITY_RULES: ${{ inputs.reachability-rules }}
+        RA_INPUT_SOURCE_EVIDENCE_IN: ${{ inputs.source-evidence-in }}
+        RA_INPUT_SECURITY_EVIDENCE_IN: ${{ inputs.security-evidence-in }}
+        RA_INPUT_SAST_IN: ${{ inputs.sast-in }}
+        RA_INPUT_DAST_IN: ${{ inputs.dast-in }}
+        RA_INPUT_CSPM_IN: ${{ inputs.cspm-in }}
+        RA_INPUT_ANALYSIS_PROFILE: ${{ inputs.analysis-profile }}
+        RA_INPUT_MIN_ARTIFACT_MATCH_COVERAGE: ${{ inputs.min-artifact-match-coverage }}
+        RA_INPUT_MIN_STRONG_ARTIFACT_IDENTITY_COVERAGE: ${{ inputs.min-strong-artifact-identity-coverage }}
+        RA_INPUT_FAIL_ON_MAPPING_WARNINGS: ${{ inputs.fail-on-mapping-warnings }}
+        RA_INPUT_MIN_SOURCE_RULE_COVERAGE: ${{ inputs.min-source-rule-coverage }}
+        RA_INPUT_REQUIRE_EXTERNAL_SOURCE_EVIDENCE: ${{ inputs.require-external-source-evidence }}
+        RA_INPUT_REQUIRE_STRONG_SOURCE_FOR_CRITICAL: ${{ inputs.require-strong-source-for-critical }}
+        RA_INPUT_MIN_EXTERNAL_EVIDENCE_USABLE_RATIO: ${{ inputs.min-external-evidence-usable-ratio }}
+        RA_INPUT_MIN_CRITICAL_EXTERNAL_SOURCE_COVERAGE: ${{ inputs.min-critical-external-source-coverage }}
+        RA_INPUT_MIN_CRITICAL_QUERY_FAMILY_COVERAGE: ${{ inputs.min-critical-query-family-coverage }}
+        RA_INPUT_MIN_CRITICAL_PROVEN_QUERY_FAMILY_COVERAGE: ${{ inputs.min-critical-proven-query-family-coverage }}
+        RA_INPUT_MIN_CRITICAL_SECURITY_PROFILE_COVERAGE: ${{ inputs.min-critical-security-profile-coverage }}
+        RA_INPUT_REQUIRE_RELEASE_READY: ${{ inputs.require-release-ready }}
+        RA_INPUT_FAIL_ON_READINESS_WARNINGS: ${{ inputs.fail-on-readiness-warnings }}
+        RA_INPUT_POLICY: ${{ inputs.policy }}
+        RA_INPUT_OUTPUT_DIR: ${{ inputs.output-dir }}
+        RA_INPUT_BASELINE: ${{ inputs.baseline }}
+        RA_INPUT_FAIL_ON_TIER: ${{ inputs.fail-on-tier }}
+        RA_INPUT_FAIL_ON_NEW_TIER: ${{ inputs.fail-on-new-tier }}
       run: |
         set -euo pipefail
 
@@ -225,7 +262,11 @@ runs:
           done <<< "$raw"
         }
 
-        output_dir="${{ inputs.output-dir }}"
+        output_dir="$RA_INPUT_OUTPUT_DIR"
+        if [[ "$output_dir" == *$'\n'* || "$output_dir" == *$'\r'* ]]; then
+          echo "::error::output-dir must not contain newline characters"
+          exit 2
+        fi
         mkdir -p "$output_dir"
 
         findings="$output_dir/reachability-findings.json"
@@ -246,41 +287,41 @@ runs:
 
         args=(scan --out "$findings" --baseline-out "$baseline_out" --sarif-out "$sarif" --diagnostics-out "$diagnostics" --markdown-out "$markdown" --html-out "$html" --evidence-graph-out "$evidence_graph" --annotations-out "$annotations" --mapping-out "$mapping" --source-coverage-out "$source_coverage" --readiness-out "$readiness" --no-table)
 
-        add_repeated_args "--sbom" "${{ inputs.sbom }}"
-        add_repeated_args "--vuln-in" "${{ inputs.vuln-in }}"
-        add_repeated_args "--source-root" "${{ inputs.source-root }}"
-        add_repeated_args "--artifact-alias" "${{ inputs.artifact-alias }}"
-        add_repeated_args "--artifact-manifest" "${{ inputs.artifact-manifest }}"
-        add_repeated_args "--source-evidence-in" "${{ inputs.source-evidence-in }}"
-        add_repeated_args "--security-evidence-in" "${{ inputs.security-evidence-in }}"
-        add_repeated_args "--sast-in" "${{ inputs.sast-in }}"
-        add_repeated_args "--dast-in" "${{ inputs.dast-in }}"
-        add_repeated_args "--cspm-in" "${{ inputs.cspm-in }}"
-        add_repeated_args "--kubernetes-manifest" "${{ inputs.kubernetes-manifest }}"
+        add_repeated_args "--sbom" "$RA_INPUT_SBOM"
+        add_repeated_args "--vuln-in" "$RA_INPUT_VULN_IN"
+        add_repeated_args "--source-root" "$RA_INPUT_SOURCE_ROOT"
+        add_repeated_args "--artifact-alias" "$RA_INPUT_ARTIFACT_ALIAS"
+        add_repeated_args "--artifact-manifest" "$RA_INPUT_ARTIFACT_MANIFEST"
+        add_repeated_args "--source-evidence-in" "$RA_INPUT_SOURCE_EVIDENCE_IN"
+        add_repeated_args "--security-evidence-in" "$RA_INPUT_SECURITY_EVIDENCE_IN"
+        add_repeated_args "--sast-in" "$RA_INPUT_SAST_IN"
+        add_repeated_args "--dast-in" "$RA_INPUT_DAST_IN"
+        add_repeated_args "--cspm-in" "$RA_INPUT_CSPM_IN"
+        add_repeated_args "--kubernetes-manifest" "$RA_INPUT_KUBERNETES_MANIFEST"
 
-        args+=(--analysis-profile "${{ inputs.analysis-profile }}")
-        if [[ -n "${{ inputs.context }}" ]]; then args+=(--context "${{ inputs.context }}"); fi
-        if [[ -n "${{ inputs.reachability-rules }}" ]]; then args+=(--reachability-rules "${{ inputs.reachability-rules }}"); fi
-        if [[ -n "${{ inputs.policy }}" ]]; then args+=(--policy "${{ inputs.policy }}"); fi
-        if [[ -n "${{ inputs.terraform-plan }}" ]]; then args+=(--terraform-plan "${{ inputs.terraform-plan }}" --terraform-coverage-out "$terraform_coverage"); fi
-        if [[ -n "${{ inputs.terraform-source }}" ]]; then args+=(--terraform-source "${{ inputs.terraform-source }}" --terraform-coverage-out "$terraform_coverage"); fi
-        if [[ -n "${{ inputs.kubernetes-manifest }}" ]]; then args+=(--kubernetes-coverage-out "$kubernetes_coverage"); fi
-        if [[ "${{ inputs.kubernetes-infer-lateral }}" == "true" ]]; then args+=(--kubernetes-infer-lateral); fi
-        if [[ "${{ inputs.require-artifact-provenance }}" == "true" ]]; then args+=(--require-artifact-provenance); fi
-        if [[ -n "${{ inputs.min-artifact-match-coverage }}" ]]; then args+=(--min-artifact-match-coverage "${{ inputs.min-artifact-match-coverage }}"); fi
-        if [[ -n "${{ inputs.min-strong-artifact-identity-coverage }}" ]]; then args+=(--min-strong-artifact-identity-coverage "${{ inputs.min-strong-artifact-identity-coverage }}"); fi
-        if [[ "${{ inputs.fail-on-mapping-warnings }}" == "true" ]]; then args+=(--fail-on-mapping-warnings); fi
-        if [[ -n "${{ inputs.min-source-rule-coverage }}" ]]; then args+=(--min-source-rule-coverage "${{ inputs.min-source-rule-coverage }}"); fi
-        if [[ "${{ inputs.require-external-source-evidence }}" == "true" ]]; then args+=(--require-external-source-evidence); fi
-        if [[ "${{ inputs.require-strong-source-for-critical }}" == "true" ]]; then args+=(--require-strong-source-for-critical); fi
-        if [[ -n "${{ inputs.min-external-evidence-usable-ratio }}" ]]; then args+=(--min-external-evidence-usable-ratio "${{ inputs.min-external-evidence-usable-ratio }}"); fi
-        if [[ -n "${{ inputs.min-critical-external-source-coverage }}" ]]; then args+=(--min-critical-external-source-coverage "${{ inputs.min-critical-external-source-coverage }}"); fi
-        if [[ -n "${{ inputs.min-critical-query-family-coverage }}" ]]; then args+=(--min-critical-query-family-coverage "${{ inputs.min-critical-query-family-coverage }}"); fi
-        if [[ -n "${{ inputs.min-critical-proven-query-family-coverage }}" ]]; then args+=(--min-critical-proven-query-family-coverage "${{ inputs.min-critical-proven-query-family-coverage }}"); fi
-        if [[ -n "${{ inputs.min-critical-security-profile-coverage }}" ]]; then args+=(--min-critical-security-profile-coverage "${{ inputs.min-critical-security-profile-coverage }}"); fi
-        if [[ "${{ inputs.require-release-ready }}" == "true" ]]; then args+=(--require-release-ready); fi
-        if [[ "${{ inputs.fail-on-readiness-warnings }}" == "true" ]]; then args+=(--fail-on-readiness-warnings); fi
-        if [[ -n "${{ inputs.fail-on-tier }}" ]]; then args+=(--fail-on-tier "${{ inputs.fail-on-tier }}"); fi
+        args+=(--analysis-profile "$RA_INPUT_ANALYSIS_PROFILE")
+        if [[ -n "$RA_INPUT_CONTEXT" ]]; then args+=(--context "$RA_INPUT_CONTEXT"); fi
+        if [[ -n "$RA_INPUT_REACHABILITY_RULES" ]]; then args+=(--reachability-rules "$RA_INPUT_REACHABILITY_RULES"); fi
+        if [[ -n "$RA_INPUT_POLICY" ]]; then args+=(--policy "$RA_INPUT_POLICY"); fi
+        if [[ -n "$RA_INPUT_TERRAFORM_PLAN" ]]; then args+=(--terraform-plan "$RA_INPUT_TERRAFORM_PLAN" --terraform-coverage-out "$terraform_coverage"); fi
+        if [[ -n "$RA_INPUT_TERRAFORM_SOURCE" ]]; then args+=(--terraform-source "$RA_INPUT_TERRAFORM_SOURCE" --terraform-coverage-out "$terraform_coverage"); fi
+        if [[ -n "$RA_INPUT_KUBERNETES_MANIFEST" ]]; then args+=(--kubernetes-coverage-out "$kubernetes_coverage"); fi
+        if [[ "$RA_INPUT_KUBERNETES_INFER_LATERAL" == "true" ]]; then args+=(--kubernetes-infer-lateral); fi
+        if [[ "$RA_INPUT_REQUIRE_ARTIFACT_PROVENANCE" == "true" ]]; then args+=(--require-artifact-provenance); fi
+        if [[ -n "$RA_INPUT_MIN_ARTIFACT_MATCH_COVERAGE" ]]; then args+=(--min-artifact-match-coverage "$RA_INPUT_MIN_ARTIFACT_MATCH_COVERAGE"); fi
+        if [[ -n "$RA_INPUT_MIN_STRONG_ARTIFACT_IDENTITY_COVERAGE" ]]; then args+=(--min-strong-artifact-identity-coverage "$RA_INPUT_MIN_STRONG_ARTIFACT_IDENTITY_COVERAGE"); fi
+        if [[ "$RA_INPUT_FAIL_ON_MAPPING_WARNINGS" == "true" ]]; then args+=(--fail-on-mapping-warnings); fi
+        if [[ -n "$RA_INPUT_MIN_SOURCE_RULE_COVERAGE" ]]; then args+=(--min-source-rule-coverage "$RA_INPUT_MIN_SOURCE_RULE_COVERAGE"); fi
+        if [[ "$RA_INPUT_REQUIRE_EXTERNAL_SOURCE_EVIDENCE" == "true" ]]; then args+=(--require-external-source-evidence); fi
+        if [[ "$RA_INPUT_REQUIRE_STRONG_SOURCE_FOR_CRITICAL" == "true" ]]; then args+=(--require-strong-source-for-critical); fi
+        if [[ -n "$RA_INPUT_MIN_EXTERNAL_EVIDENCE_USABLE_RATIO" ]]; then args+=(--min-external-evidence-usable-ratio "$RA_INPUT_MIN_EXTERNAL_EVIDENCE_USABLE_RATIO"); fi
+        if [[ -n "$RA_INPUT_MIN_CRITICAL_EXTERNAL_SOURCE_COVERAGE" ]]; then args+=(--min-critical-external-source-coverage "$RA_INPUT_MIN_CRITICAL_EXTERNAL_SOURCE_COVERAGE"); fi
+        if [[ -n "$RA_INPUT_MIN_CRITICAL_QUERY_FAMILY_COVERAGE" ]]; then args+=(--min-critical-query-family-coverage "$RA_INPUT_MIN_CRITICAL_QUERY_FAMILY_COVERAGE"); fi
+        if [[ -n "$RA_INPUT_MIN_CRITICAL_PROVEN_QUERY_FAMILY_COVERAGE" ]]; then args+=(--min-critical-proven-query-family-coverage "$RA_INPUT_MIN_CRITICAL_PROVEN_QUERY_FAMILY_COVERAGE"); fi
+        if [[ -n "$RA_INPUT_MIN_CRITICAL_SECURITY_PROFILE_COVERAGE" ]]; then args+=(--min-critical-security-profile-coverage "$RA_INPUT_MIN_CRITICAL_SECURITY_PROFILE_COVERAGE"); fi
+        if [[ "$RA_INPUT_REQUIRE_RELEASE_READY" == "true" ]]; then args+=(--require-release-ready); fi
+        if [[ "$RA_INPUT_FAIL_ON_READINESS_WARNINGS" == "true" ]]; then args+=(--fail-on-readiness-warnings); fi
+        if [[ -n "$RA_INPUT_FAIL_ON_TIER" ]]; then args+=(--fail-on-tier "$RA_INPUT_FAIL_ON_TIER"); fi
 
         set +e
         reachability-advisor "${args[@]}"
@@ -288,9 +329,9 @@ runs:
         set -e
 
         delta_code=0
-        if [[ -n "${{ inputs.baseline }}" ]]; then
-          delta_args=(compare --baseline "${{ inputs.baseline }}" --head-findings "$findings" --out "$delta" --markdown-out "$delta_markdown")
-          if [[ -n "${{ inputs.fail-on-new-tier }}" ]]; then delta_args+=(--fail-on-new-tier "${{ inputs.fail-on-new-tier }}"); fi
+        if [[ -n "$RA_INPUT_BASELINE" ]]; then
+          delta_args=(compare --baseline "$RA_INPUT_BASELINE" --head-findings "$findings" --out "$delta" --markdown-out "$delta_markdown")
+          if [[ -n "$RA_INPUT_FAIL_ON_NEW_TIER" ]]; then delta_args+=(--fail-on-new-tier "$RA_INPUT_FAIL_ON_NEW_TIER"); fi
           set +e
           reachability-advisor "${delta_args[@]}"
           delta_code=$?
@@ -310,21 +351,21 @@ runs:
 
         if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
           {
-            echo "findings=$findings"
-            echo "sarif=$sarif"
-            echo "diagnostics=$diagnostics"
-            echo "markdown=$markdown"
-            echo "html=$html"
-            echo "evidence_graph=$evidence_graph"
-            echo "annotations=$annotations"
-            echo "mapping=$mapping"
-            echo "terraform_coverage=$terraform_coverage"
-            echo "kubernetes_coverage=$kubernetes_coverage"
-            echo "source_coverage=$source_coverage"
-            echo "readiness=$readiness"
-            echo "baseline=$baseline_out"
-            echo "delta=$delta"
-            echo "delta_markdown=$delta_markdown"
+            printf 'findings=%s\n' "$findings"
+            printf 'sarif=%s\n' "$sarif"
+            printf 'diagnostics=%s\n' "$diagnostics"
+            printf 'markdown=%s\n' "$markdown"
+            printf 'html=%s\n' "$html"
+            printf 'evidence_graph=%s\n' "$evidence_graph"
+            printf 'annotations=%s\n' "$annotations"
+            printf 'mapping=%s\n' "$mapping"
+            printf 'terraform_coverage=%s\n' "$terraform_coverage"
+            printf 'kubernetes_coverage=%s\n' "$kubernetes_coverage"
+            printf 'source_coverage=%s\n' "$source_coverage"
+            printf 'readiness=%s\n' "$readiness"
+            printf 'baseline=%s\n' "$baseline_out"
+            printf 'delta=%s\n' "$delta"
+            printf 'delta_markdown=%s\n' "$delta_markdown"
           } >> "$GITHUB_OUTPUT"
         fi
 

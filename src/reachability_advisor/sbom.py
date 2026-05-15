@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .input_limits import InputSizeError, read_text_limited
 from .models import Artifact, Component, SbomDocument
 
 
@@ -132,7 +133,9 @@ def _dependencies(data: dict[str, Any]) -> dict[str, list[str]]:
 def load_sbom(path: str | Path) -> SbomDocument:
     sbom_path = Path(path)
     try:
-        data = json.loads(sbom_path.read_text(encoding="utf-8"))
+        data = json.loads(read_text_limited(sbom_path, "SBOM"))
+    except InputSizeError as exc:
+        raise SbomError(str(exc)) from exc
     except json.JSONDecodeError as exc:
         raise SbomError(f"{sbom_path}: invalid JSON: {exc}") from exc
     if not isinstance(data, dict):

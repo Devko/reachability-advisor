@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
+from reachability_advisor.baseline import load_baseline
 from reachability_advisor.models import (
     Artifact,
     Component,
@@ -16,7 +18,10 @@ from reachability_advisor.models import (
     Tier,
     VulnerabilityRecord,
 )
+from reachability_advisor.outputs import load_findings_json
 from reachability_advisor.sbom import SbomError, load_sbom
+from reachability_advisor.security_evidence import load_security_evidence
+from reachability_advisor.security_evidence_model import SecurityEvidenceError
 from reachability_advisor.source_external import (
     ExternalSourceEvidenceError,
     load_external_source_evidence,
@@ -67,6 +72,64 @@ class InputHardeningTests(unittest.TestCase):
             path = Path(tmp) / "evidence.jsonl"
             path.write_text('{"finding":{"osv":"GO-2024-0001"}}\n{"finding":\n', encoding="utf-8")
             with self.assertRaisesRegex(ExternalSourceEvidenceError, "line 2"):
+                load_external_source_evidence([path])
+
+    def test_loaders_reject_oversized_inputs_before_parsing(self) -> None:
+        old_limit = os.environ.get("REACHABILITY_ADVISOR_MAX_INPUT_BYTES")
+        os.environ["REACHABILITY_ADVISOR_MAX_INPUT_BYTES"] = "8"
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "sbom.json"
+                path.write_text('{"bomFormat":"CycloneDX","components":[]}', encoding="utf-8")
+                with self.assertRaisesRegex(SbomError, "above the configured limit"):
+                    load_sbom(path)
+        finally:
+            if old_limit is None:
+                os.environ.pop("REACHABILITY_ADVISOR_MAX_INPUT_BYTES", None)
+            else:
+                os.environ["REACHABILITY_ADVISOR_MAX_INPUT_BYTES"] = old_limit
+
+    def test_security_evidence_rejects_malformed_normalized_schema_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "security.json"
+            path.write_text(json.dumps({"security_evidence": {"not": "a-list"}}), encoding="utf-8")
+
+            with self.assertRaisesRegex(SecurityEvidenceError, "security_evidence must be a list"):
+                load_security_evidence([path])
+
+    def test_compare_inputs_reject_oversized_inputs_before_parsing(self) -> None:
+        old_limit = os.environ.get("REACHABILITY_ADVISOR_MAX_INPUT_BYTES")
+        os.environ["REACHABILITY_ADVISOR_MAX_INPUT_BYTES"] = "8"
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                findings = Path(tmp) / "findings.json"
+                findings.write_text(json.dumps({"findings": []}), encoding="utf-8")
+                baseline = Path(tmp) / "baseline.json"
+                baseline.write_text(
+                    json.dumps({
+                        "kind": "reachability-advisor-baseline",
+                        "schema_version": "1.0",
+                        "findings": [],
+                    }),
+                    encoding="utf-8",
+                )
+
+                with self.assertRaisesRegex(ValueError, "above the configured limit"):
+                    load_findings_json(findings)
+                with self.assertRaisesRegex(ValueError, "above the configured limit"):
+                    load_baseline(baseline)
+        finally:
+            if old_limit is None:
+                os.environ.pop("REACHABILITY_ADVISOR_MAX_INPUT_BYTES", None)
+            else:
+                os.environ["REACHABILITY_ADVISOR_MAX_INPUT_BYTES"] = old_limit
+
+    def test_external_source_evidence_rejects_malformed_normalized_schema_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "source.json"
+            path.write_text(json.dumps({"evidence": {"not": "a-list"}}), encoding="utf-8")
+
+            with self.assertRaisesRegex(ExternalSourceEvidenceError, "evidence must be a list"):
                 load_external_source_evidence([path])
 
     def test_visual_html_escapes_script_breakout_payloads(self) -> None:

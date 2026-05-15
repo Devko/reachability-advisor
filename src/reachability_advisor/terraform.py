@@ -23,7 +23,9 @@ from typing import Any
 from .artifacts import artifact_identity_proof, artifact_match_evidence
 from .effective_exposure import evaluate_effective_exposure
 from .iam_capabilities import dedupe_iam_capabilities
+from .input_limits import InputSizeError, read_text_limited
 from .models import Artifact, Confidence, ContextEvidence
+from .terraform_coverage import coverage_report, empty_coverage_report
 from .terraform_exposure import (
     INTERNAL_TOKEN_VALUES,
     PUBLIC_TOKEN_VALUES,
@@ -66,6 +68,7 @@ from .terraform_network_model import (
     NetworkPathAnalysis,
     NetworkPathEdge,
 )
+from .terraform_resources import TerraformResource, extract_resources
 from .terraform_values import (
     listify as _listify,
 )
@@ -76,26 +79,6 @@ from .terraform_values import (
 
 class TerraformContextError(ValueError):
     """Raised when Terraform JSON cannot be parsed."""
-
-
-@dataclass(frozen=True)
-class TerraformResource:
-    address: str
-    type: str
-    name: str
-    values: dict[str, Any]
-
-    @property
-    def provider(self) -> str:
-        return classification_for_resource(self.type, self.values)[0]
-
-    @property
-    def category(self) -> str:
-        return classification_for_resource(self.type, self.values)[1]
-
-    @property
-    def supported(self) -> bool:
-        return resource_type_supported(self.type, self.values)
 
 
 @dataclass
@@ -1037,7 +1020,9 @@ class TerraformAnalyzer:
 def load_terraform_plan(path: str | Path) -> dict[str, Any]:
     plan_path = Path(path)
     try:
-        data = json.loads(plan_path.read_text(encoding="utf-8"))
+        data = json.loads(read_text_limited(plan_path, "Terraform plan"))
+    except InputSizeError as exc:
+        raise TerraformContextError(str(exc)) from exc
     except json.JSONDecodeError as exc:
         raise TerraformContextError(f"{plan_path}: invalid JSON: {exc}") from exc
     if not isinstance(data, dict):
@@ -1051,42 +1036,6 @@ def analyze_terraform_plan(path: str | Path | None, artifacts: list[Artifact]) -
     plan_path = Path(path)
     plan = load_terraform_plan(plan_path)
     return TerraformAnalyzer(plan, artifacts, source_name=plan_path.name).analyze()
-
-
-def extract_resources(plan: dict[str, Any]) -> list[TerraformResource]:
-    resources: dict[str, TerraformResource] = {}
-
-    def add(raw: dict[str, Any]) -> None:
-        if not isinstance(raw, dict):
-            return
-        rtype = str(raw.get("type") or "")
-        if not rtype:
-            return
-        address = str(raw.get("address") or f"{rtype}.{raw.get('name') or len(resources)}")
-        raw_values = raw.get("values")
-        values: dict[str, Any] = raw_values if isinstance(raw_values, dict) else {}
-        resources[address] = TerraformResource(address=address, type=rtype, name=str(raw.get("name") or ""), values=values)
-
-    root = plan.get("planned_values", {}).get("root_module", {}) if isinstance(plan.get("planned_values"), dict) else {}
-
-    def walk_module(module: dict[str, Any]) -> None:
-        for raw_resource in module.get("resources", []) or []:
-            add(raw_resource)
-        for child in module.get("child_modules", []) or []:
-            if isinstance(child, dict):
-                walk_module(child)
-
-    if isinstance(root, dict):
-        walk_module(root)
-
-    for change in plan.get("resource_changes", []) or []:
-        if not isinstance(change, dict):
-            continue
-        after = change.get("change", {}).get("after") if isinstance(change.get("change"), dict) else None
-        if isinstance(after, dict):
-            add({"address": change.get("address"), "type": change.get("type"), "name": change.get("name"), "values": after})
-
-    return list(resources.values())
 
 
 def exposure_for_matched_workload(
@@ -2106,123 +2055,6 @@ def tag_or_label(values: dict[str, Any], key: str, fallback: str | None = None) 
     return fallback
 
 
-def coverage_report(
-    resources: list[TerraformResource],
-    artifacts: list[Artifact],
-    matches: list[dict[str, Any]],
-    network_analysis: NetworkPathAnalysis | None = None,
-) -> dict[str, Any]:
-    total = len(resources)
-    classified = sum(1 for resource in resources if resource.supported)
-    provider_counts: dict[str, int] = {}
-    category_counts: dict[str, int] = {}
-    visibility_gaps: list[dict[str, str]] = []
-    unsupported: list[dict[str, str]] = []
-    resource_rows: list[dict[str, Any]] = []
-    for resource in resources:
-        provider_counts[resource.provider] = provider_counts.get(resource.provider, 0) + 1
-        category_counts[resource.category] = category_counts.get(resource.category, 0) + 1
-        row = {
-            "address": resource.address,
-            "type": resource.type,
-            "provider": resource.provider,
-            "category": resource.category,
-            "supported": resource.supported,
-        }
-        adapter_signals = network_adapter_signals(resource.type, resource.values)
-        if adapter_signals:
-            row["network_adapter_signals"] = [signal.to_json() for signal in adapter_signals]
-        if network_analysis:
-            if resource.address in network_analysis.network_paths_by_address:
-                row["network_paths"] = network_analysis.network_paths_by_address[resource.address]
-            if resource.address in network_analysis.effective_access_by_address:
-                row["effective_access"] = network_analysis.effective_access_by_address[resource.address]
-        resource_rows.append(row)
-        if not resource.supported:
-            gap = {
-                "address": resource.address,
-                "type": resource.type,
-                "provider": resource.provider,
-                "gap_type": "unclassified_resource",
-                "reason": "resource type is accounted for but not semantically classified",
-            }
-            unsupported.append(gap)
-            visibility_gaps.append(gap)
-        elif resource.type in OPAQUE_MANIFEST_WRAPPER_TYPES:
-            visibility_gaps.append(
-                {
-                    "address": resource.address,
-                    "type": resource.type,
-                    "provider": resource.provider,
-                    "gap_type": "opaque_manifest_wrapper",
-                    "reason": "resource is a Helm/Kubectl manifest wrapper; rendered Kubernetes child workloads, images, exposure, and RBAC are not inspected",
-                }
-            )
-    matched_artifacts = sorted({row["artifact"] for row in matches})
-    unmatched_artifacts = sorted(artifact.name for artifact in artifacts if artifact.name not in matched_artifacts)
-    manifest = manifest_report()
-    return {
-        "schema_version": "2.0",
-        "summary": {
-            "total_resources": total,
-            "accounted_resources": total,
-            "resource_accounting_coverage": 1.0,
-            "semantically_classified_resources": classified,
-            "semantic_classification_coverage": round(classified / total, 4) if total else 1.0,
-            "unsupported_or_unclassified_resources": len(unsupported),
-            "artifacts_requested": len(artifacts),
-            "artifacts_matched": len(matched_artifacts),
-            "artifact_match_coverage": round(len(matched_artifacts) / len(artifacts), 4) if artifacts else 1.0,
-            "providers_seen": provider_counts,
-            "categories_seen": category_counts,
-            "network_paths_observed": sum(len(paths) for paths in network_analysis.network_paths_by_address.values()) if network_analysis else 0,
-            "effective_access_records": sum(len(records) for records in network_analysis.effective_access_by_address.values()) if network_analysis else 0,
-        },
-        "manifest": manifest,
-        "resource_types_seen": sorted({resource.type for resource in resources}),
-        "artifact_matches": matches,
-        "matched_artifacts": matched_artifacts,
-        "unmatched_artifacts": unmatched_artifacts,
-        "resources": resource_rows,
-        "visibility_gaps": visibility_gaps,
-        "notes": [
-            "100% resource accounting means every Terraform resource in the plan is represented in this report.",
-            "Semantic coverage is limited to the declared manifest; unclassified resources are visibility gaps.",
-            "Opaque manifest wrappers such as Helm releases are classified as Kubernetes support resources but still require rendered manifest evidence for child workloads.",
-            "Use source reachability and explicit context files for evidence that Terraform cannot infer from a static plan.",
-        ],
-    }
-
-
-def empty_coverage_report() -> dict[str, Any]:
-    return {
-        "schema_version": "2.0",
-        "summary": {
-            "total_resources": 0,
-            "accounted_resources": 0,
-            "resource_accounting_coverage": 1.0,
-            "semantically_classified_resources": 0,
-            "semantic_classification_coverage": 1.0,
-            "unsupported_or_unclassified_resources": 0,
-            "artifacts_requested": 0,
-            "artifacts_matched": 0,
-            "artifact_match_coverage": 1.0,
-            "providers_seen": {},
-            "categories_seen": {},
-            "network_paths_observed": 0,
-            "effective_access_records": 0,
-        },
-        "manifest": manifest_report(),
-        "resource_types_seen": [],
-        "artifact_matches": [],
-        "matched_artifacts": [],
-        "unmatched_artifacts": [],
-        "resources": [],
-        "visibility_gaps": [],
-        "notes": [],
-    }
-
-
 __all__ = [
     "TERRAFORM_COVERAGE_MANIFEST",
     "INTERNAL_TOKEN_VALUES",
@@ -2234,6 +2066,7 @@ __all__ = [
     "TerraformAnalysis",
     "TerraformAnalyzer",
     "TerraformContextError",
+    "TerraformResource",
     "analyze_terraform_plan",
     "azapi_arm_category",
     "classify_policy",
