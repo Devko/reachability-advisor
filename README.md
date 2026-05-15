@@ -10,9 +10,7 @@ It does not replace scanners. It consumes their evidence, connects it to deploym
 
 ## Preview
 
-![Reachability Advisor risk table preview](docs/assets/reachability-advisor-risk-table.png)
-
-![Reachability Advisor attack path preview](docs/assets/reachability-advisor-attack-path.png)
+![Reachability Advisor attack graph preview](docs/assets/reachability-advisor-preview.jpg)
 
 ## What It Does
 
