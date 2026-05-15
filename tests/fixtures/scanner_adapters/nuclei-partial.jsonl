@@ -1,0 +1,2 @@
+[]
+{"template-id":"exposed-panel","info":{"name":"Exposed admin panel","severity":"high","classification":{"cwe-id":"CWE-200"},"reference":[{"url":"https://nuclei.projectdiscovery.io"}]},"matched-at":"https://app.example.test/admin","method":"GET","extracted-results":["q=test","token=redacted"],"curl-command":"curl https://app.example.test/admin","matcher-status":true}

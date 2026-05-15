@@ -109,26 +109,32 @@ class UserFacingError(Exception):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="reachability-advisor", description="Security prioritization with dependency, source, Terraform, network, IAM, SAST, and DAST context.")
+    parser = argparse.ArgumentParser(
+        prog="reachability-advisor",
+        description=(
+            "Prioritize security findings with local evidence from SBOMs, source analyzers, "
+            "scanner reports, Terraform plans, Kubernetes manifests, network paths, and IAM/RBAC context."
+        ),
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    scan = sub.add_parser("scan", help="Scan SBOMs and produce CI/IDE-friendly outputs.")
-    scan.add_argument("--sbom", action="append", required=True, help="CycloneDX JSON SBOM path. Repeat for multiple artifacts.")
-    scan.add_argument("--vuln-in", dest="vulns", action="append", required=True, help="Local vulnerability intelligence JSON, Grype JSON, or OSV-Scanner-style JSON. Repeatable.")
-    scan.add_argument("--source-root", action="append", default=[], help="Source mapping: artifact=path. Repeat for multiple artifacts.")
-    scan.add_argument("--context", help="Context JSON keyed by artifact name for overrides or enrichment.")
-    scan.add_argument("--terraform-plan", help="Terraform plan JSON for AWS/Azure/GCP/Kubernetes deployment context.")
-    scan.add_argument("--terraform-source", help="Terraform .tf source directory for conservative static HCL fallback when no plan is available.")
-    scan.add_argument("--terraform-coverage-out", help="Write Terraform coverage/accounting report JSON.")
-    scan.add_argument("--kubernetes-manifest", action="append", default=[], help="Rendered Kubernetes YAML/JSON manifest file or directory. Repeat for multiple paths.")
-    scan.add_argument("--kubernetes-infer-lateral", action="store_true", help="Treat internal services as laterally reachable when a public Kubernetes entrypoint is present.")
-    scan.add_argument("--kubernetes-coverage-out", help="Write Kubernetes manifest coverage/context report JSON.")
-    scan.add_argument("--mapping-out", help="Write SBOM/source/Terraform mapping verification report JSON.")
-    scan.add_argument("--source-coverage-out", help="Write source-analysis coverage and evidence report JSON.")
-    scan.add_argument("--evidence-graph-out", help="Write structured asset/source/network/IAM/finding graph JSON.")
-    scan.add_argument("--artifact-alias", action="append", default=[], help="Add artifact mapping alias: artifact=reference. Repeatable; use when SBOM metadata lacks image refs.")
+    scan = sub.add_parser("scan", help="Analyze local evidence and write prioritized findings for CI, IDEs, and review.")
+    scan.add_argument("--sbom", action="append", required=True, help="CycloneDX JSON SBOM for one deployable artifact. Repeat for multiple artifacts.")
+    scan.add_argument("--vuln-in", dest="vulns", action="append", required=True, help="Vulnerability input: local JSON, Grype JSON, or OSV-Scanner-style JSON. Repeatable.")
+    scan.add_argument("--source-root", action="append", default=[], help="Source mapping in artifact=path form, for example payments-api=src/payments. Repeatable.")
+    scan.add_argument("--context", help="Context JSON keyed by artifact name. Use it for owner, environment, exposure, privilege, or manual evidence overrides.")
+    scan.add_argument("--terraform-plan", help="Rendered Terraform plan JSON from `terraform show -json`. Use this for release-grade Terraform deployment evidence.")
+    scan.add_argument("--terraform-source", help="Terraform .tf source directory for conservative advisory fallback when no rendered plan is available.")
+    scan.add_argument("--terraform-coverage-out", help="Write Terraform resource accounting and visibility-gap report JSON.")
+    scan.add_argument("--kubernetes-manifest", action="append", default=[], help="Rendered Kubernetes YAML/JSON manifest file or directory. Render Helm/Kustomize first. Repeatable.")
+    scan.add_argument("--kubernetes-infer-lateral", action="store_true", help="Treat internal Kubernetes services as laterally reachable when a public Kubernetes entrypoint is present.")
+    scan.add_argument("--kubernetes-coverage-out", help="Write Kubernetes resource accounting and visibility-gap report JSON.")
+    scan.add_argument("--mapping-out", help="Write artifact/source/deployment mapping report JSON, including weak matches and missing identity evidence.")
+    scan.add_argument("--source-coverage-out", help="Write source evidence coverage report JSON, including missing rules and external analyzer coverage.")
+    scan.add_argument("--evidence-graph-out", help="Write machine-readable asset, source, network, IAM/RBAC, finding, and score graph JSON.")
+    scan.add_argument("--artifact-alias", action="append", default=[], help="Add an artifact mapping alias in artifact=reference form. Use when SBOM metadata lacks image references. Repeatable.")
     scan.add_argument("--artifact-manifest", action="append", default=[], help="CI artifact identity manifest JSON with image refs, digests, Git SHA, SBOM path, and renderer metadata. Repeatable.")
-    scan.add_argument("--require-artifact-provenance", action="store_true", help="Exit 10 unless artifact manifests provide digest, SBOM path, Git SHA, and signature/attestation markers.")
+    scan.add_argument("--require-artifact-provenance", action="store_true", help="Exit 10 unless artifact manifests provide digest identity, SBOM path, Git SHA, and signature/attestation markers.")
     scan.add_argument("--reachability-rules", help="Custom source reachability rules JSON.")
     scan.add_argument("--source-evidence-in", action="append", default=[], help="External source evidence JSON, Semgrep JSON, SARIF, or govulncheck JSONL. Repeatable.")
     scan.add_argument("--security-evidence-in", action="append", default=[], help="Generic first-party SAST/DAST/CSPM evidence JSON, Semgrep JSON, SARIF, ZAP JSON, Nuclei JSONL, or posture scanner JSON. Repeatable.")
@@ -139,13 +145,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--analysis-profile",
         choices=["advisory", "production"],
         default="advisory",
-        help="advisory keeps local heuristics permissive; production requires external source evidence and rendered deployment evidence.",
+        help="Use advisory for local triage. Use production for release gates; it requires external source evidence and rendered deployment evidence.",
     )
     scan.add_argument("--min-artifact-match-coverage", type=float, help="Exit 10 when SBOM-to-deployment artifact match coverage is below this 0..1 ratio.")
     scan.add_argument("--min-strong-artifact-identity-coverage", type=float, help="Exit 10 when strong image/digest identity coverage is below this 0..1 ratio.")
     scan.add_argument("--fail-on-mapping-warnings", action="store_true", help="Exit 10 when the mapping report contains artifact identity, source-root, or Terraform match warnings.")
     scan.add_argument("--min-source-rule-coverage", type=float, help="Exit 10 when source package-rule coverage is below this 0..1 ratio.")
-    scan.add_argument("--require-external-source-evidence", action="store_true", help="Exit 10 when no external source analyzer evidence was imported.")
+    scan.add_argument("--require-external-source-evidence", action="store_true", help="Exit 10 when no Semgrep, CodeQL/SARIF, govulncheck, or equivalent external source analyzer evidence was imported.")
     scan.add_argument("--min-external-evidence-usable-ratio", type=float, help="Exit 10 when imported external source evidence selector usability is below this 0..1 ratio.")
     scan.add_argument("--min-critical-external-source-coverage", type=float, help="Exit 10 when critical finding coverage by external source evidence is below this 0..1 ratio. Production defaults to 1.0.")
     scan.add_argument("--min-critical-query-family-coverage", type=float, help="Exit 10 when critical findings lack relevant source query-family evidence. Production defaults to 1.0.")
@@ -158,11 +164,11 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--sarif-out", help="SARIF 2.1.0 output path.")
     scan.add_argument("--diagnostics-out", help="IDE diagnostics JSON output path.")
     scan.add_argument("--markdown-out", help="Developer PR summary Markdown output path.")
-    scan.add_argument("--html-out", help="Self-contained interactive HTML graph report output path.")
+    scan.add_argument("--html-out", help="Self-contained interactive HTML report with risk table, attack paths, evidence paths, and architecture view.")
     scan.add_argument("--annotations-out", help="GitHub Actions workflow-command annotations output path.")
-    scan.add_argument("--readiness-out", help="Write release evidence readiness report JSON.")
-    scan.add_argument("--require-release-ready", action="store_true", help="Exit 10 when release evidence readiness reports blockers.")
-    scan.add_argument("--fail-on-readiness-warnings", action="store_true", help="Exit 10 when release readiness contains warnings as well as blockers.")
+    scan.add_argument("--readiness-out", help="Write release evidence readiness JSON with blockers, warnings, impact, and next steps.")
+    scan.add_argument("--require-release-ready", action="store_true", help="Exit 10 when release evidence is blocked, and print concrete blockers with next steps.")
+    scan.add_argument("--fail-on-readiness-warnings", action="store_true", help="Exit 10 when release evidence has warnings, and print concrete warnings with next steps.")
     scan.add_argument("--limit", type=int, default=20, help="Maximum rows printed to stdout.")
     scan.add_argument("--no-table", action="store_true", help="Do not print stdout table.")
     scan.add_argument("--fail-on-tier", choices=[tier.value for tier in Tier], help="Exit 10 when any non-excepted finding reaches this tier.")
@@ -205,15 +211,15 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--only-new-or-worsened", action="store_true", help="Emit only new and worsened findings in JSON and Markdown output.")
     compare.add_argument("--fail-on-new-tier", choices=[tier.value for tier in Tier])
 
-    readiness = sub.add_parser("evidence-profile", help="Evaluate release-gate evidence profile from scanner reports.")
+    readiness = sub.add_parser("evidence-profile", help="Check whether existing scan outputs are complete enough for a release gate.")
     readiness.add_argument("--mapping", required=True, help="Mapping report JSON from --mapping-out.")
     readiness.add_argument("--source-coverage", required=True, help="Source coverage JSON from --source-coverage-out.")
     readiness.add_argument("--terraform-coverage", help="Terraform coverage JSON from --terraform-coverage-out.")
     readiness.add_argument("--kubernetes-coverage", help="Kubernetes coverage JSON from --kubernetes-coverage-out.")
     readiness.add_argument("--findings", help="Findings JSON from --out.")
     readiness.add_argument("--out", help="Write readiness JSON.")
-    readiness.add_argument("--fail-on-blockers", action="store_true", help="Exit 10 when readiness blockers are present.")
-    readiness.add_argument("--fail-on-warnings", action="store_true", help="Exit 10 when readiness warnings are present.")
+    readiness.add_argument("--fail-on-blockers", action="store_true", help="Exit 10 when release evidence blockers are present, and print concrete next steps.")
+    readiness.add_argument("--fail-on-warnings", action="store_true", help="Exit 10 when release evidence warnings are present, and print concrete next steps.")
 
     init_policy = sub.add_parser("init-policy", help="Write an example runtime policy JSON.")
     init_policy.add_argument("--out", required=True)
@@ -370,12 +376,12 @@ def run_fixtures(args: argparse.Namespace) -> int:
 def _apply_artifact_aliases(sboms: list[Any], aliases: list[str]) -> None:
     for value in aliases:
         if "=" not in value:
-            raise UserFacingError(f"artifact alias must use artifact=reference syntax: {value}", 2)
+            raise UserFacingError(f"Artifact alias must use artifact=reference syntax, for example payments-api=registry.example/payments:1. Got: {value}", 2)
         artifact_name, reference = value.split("=", 1)
         artifact_name = artifact_name.strip()
         reference = reference.strip()
         if not artifact_name or not reference:
-            raise UserFacingError(f"artifact alias must use artifact=reference syntax: {value}", 2)
+            raise UserFacingError(f"Artifact alias must include both sides of artifact=reference. Got: {value}", 2)
         matched = False
         for sbom in sboms:
             if sbom.artifact.name == artifact_name:
@@ -388,7 +394,7 @@ def _apply_artifact_aliases(sboms: list[Any], aliases: list[str]) -> None:
                     sbom.artifact.reference = reference
                 matched = True
         if not matched:
-            raise UserFacingError(f"artifact alias refers to unknown SBOM artifact: {artifact_name}", 2)
+            raise UserFacingError(f"Artifact alias refers to an SBOM artifact that was not loaded: {artifact_name}. Check the artifact name in the SBOM metadata.", 2)
 
 
 def _load_vulnerability_inputs(paths: list[str]) -> list[Any]:
@@ -424,7 +430,7 @@ def run_scan(args: argparse.Namespace) -> int:
         for issue in issues:
             print(f"{issue.severity}: {issue.target}: {issue.message}", file=sys.stderr)
         if has_errors(issues):
-            raise UserFacingError("input validation failed", 2)
+            raise UserFacingError("Input validation failed. Fix the errors above, then rerun the scan.", 2)
     runtime_policy = load_runtime_policy(args.policy)
     sboms = load_sboms(args.sbom)
     artifact_manifest_report = (
@@ -445,7 +451,7 @@ def run_scan(args: argparse.Namespace) -> int:
     terraform_coverage = empty_coverage_report()
     kubernetes_coverage = empty_kubernetes_coverage_report()
     if args.terraform_plan and args.terraform_source:
-        raise UserFacingError("use either --terraform-plan or --terraform-source, not both", 2)
+        raise UserFacingError("Choose one Terraform input: use --terraform-plan for release-grade rendered evidence, or --terraform-source for advisory source fallback.", 2)
     if args.terraform_plan:
         try:
             terraform_analysis = analyze_terraform_plan(args.terraform_plan, [sbom.artifact for sbom in sboms])
@@ -577,16 +583,16 @@ def run_scan(args: argparse.Namespace) -> int:
     if readiness_report is not None:
         readiness_summary = readiness_report.get("summary", {}) if isinstance(readiness_report.get("summary"), dict) else {}
         if args.require_release_ready and int(readiness_summary.get("blockers") or 0) > 0:
-            quality_failures.append(f"release readiness has {readiness_summary.get('blockers')} blocker(s)")
+            quality_failures.append(_readiness_gate_failure("release evidence is blocked", readiness_report, "blockers"))
         if args.fail_on_readiness_warnings and int(readiness_summary.get("warnings") or 0) > 0:
-            quality_failures.append(f"release readiness has {readiness_summary.get('warnings')} warning(s)")
+            quality_failures.append(_readiness_gate_failure("release evidence has warnings", readiness_report, "warnings"))
     for failure in quality_failures:
         print(f"Reachability Advisor quality gate failed: {failure}", file=sys.stderr)
     if quality_failures:
         return 10
     fail_tier = Tier(args.fail_on_tier) if args.fail_on_tier else runtime_policy.fail_on_tier if args.policy else None
     if fail_tier and _findings_fail(findings, fail_tier):
-        print(f"Reachability Advisor threshold failed: finding reached tier {fail_tier.value}.", file=sys.stderr)
+        print(f"Reachability Advisor threshold failed: at least one active finding reached priority {fail_tier.value}.", file=sys.stderr)
         return 10
     return 0
 
@@ -611,14 +617,14 @@ def _quality_gate_failures(
         if minimum is None:
             return
         if not math.isfinite(minimum) or minimum < 0 or minimum > 1:
-            failures.append(f"{label} gate must be between 0 and 1, got {minimum}")
+            failures.append(f"{label} gate must be between 0 and 1. Got {minimum}.")
             return
         observed = float(value or 0.0)
         if not math.isfinite(observed):
-            failures.append(f"{label} observed value is not finite: {observed}")
+            failures.append(f"{label} observed value is not a usable number: {observed}.")
             return
         if observed < minimum:
-            failures.append(f"{label} {observed:.4f} is below required {minimum:.4f}")
+            failures.append(f"{label} is {observed:.4f}, below required {minimum:.4f}. {_quality_gate_next_step(label)}")
 
     ratio_gate("artifact match coverage", mapping_summary.get("artifact_match_coverage"), args.min_artifact_match_coverage)
     ratio_gate("strong artifact identity coverage", mapping_summary.get("strong_artifact_identity_coverage"), args.min_strong_artifact_identity_coverage)
@@ -643,24 +649,40 @@ def _quality_gate_failures(
     )
     ratio_gate("critical security profile coverage", security_summary.get("critical_profile_coverage"), security_profile_minimum)
     if args.fail_on_mapping_warnings and int(mapping_summary.get("mapping_warnings_count") or 0) > 0:
-        failures.append(f"mapping report contains {mapping_summary.get('mapping_warnings_count')} warning(s)")
+        failures.append(f"mapping report contains {mapping_summary.get('mapping_warnings_count')} warning(s). Review --mapping-out for weak artifact identity, missing source roots, or weak deployment matches.")
     if (args.require_external_source_evidence or production) and int(source_summary.get("external_evidence_records") or 0) == 0:
-        failures.append("no external source analyzer evidence was imported")
+        failures.append("No external source analyzer evidence was imported. Run Semgrep, CodeQL/SARIF, govulncheck, or an equivalent analyzer and pass the output with --source-evidence-in, --sast-in, or --security-evidence-in.")
     weak_critical = int(source_summary.get("critical_findings_with_dependency_only_source") or 0)
     if (args.require_strong_source_for_critical or production) and weak_critical > 0:
-        failures.append(f"{weak_critical} critical finding(s) only have dependency-level or weaker source evidence")
+        failures.append(f"{weak_critical} critical finding(s) only have dependency-level or weaker source evidence. Add external analyzer evidence that proves import, vulnerable API use, or request-controlled reachability.")
     if production and not args.terraform_plan and not args.kubernetes_manifest:
-        failures.append("production profile requires rendered deployment evidence: provide --terraform-plan or --kubernetes-manifest")
+        failures.append("Production profile requires rendered deployment evidence. Provide --terraform-plan from `terraform show -json` or --kubernetes-manifest with rendered YAML/JSON.")
     if production and args.terraform_source and not args.terraform_plan:
-        failures.append("production profile treats --terraform-source as advisory; provide --terraform-plan for Terraform-managed resources")
+        failures.append("Production profile treats --terraform-source as advisory only. Provide --terraform-plan for Terraform-managed resources.")
     if getattr(args, "require_artifact_provenance", False):
         if not getattr(args, "artifact_manifest", []):
-            failures.append("strict artifact provenance requires at least one --artifact-manifest")
+            failures.append("Strict artifact provenance requires at least one --artifact-manifest with image identity, SBOM path, Git SHA, and signature or attestation markers.")
         for report in artifact_provenance_reports or []:
             if report.get("status") != "ready":
                 blockers = report.get("summary", {}).get("provenance_blockers", 0)
-                failures.append(f"artifact provenance has {blockers} blocker(s)")
+                failures.append(f"artifact provenance has {blockers} blocker(s). Validate the manifest and add missing digest, SBOM path, Git SHA, or signature/attestation evidence.")
     return failures
+
+
+def _quality_gate_next_step(label: str) -> str:
+    if "artifact match" in label:
+        return "Provide rendered Terraform/Kubernetes evidence and image metadata that matches each SBOM artifact."
+    if "strong artifact identity" in label:
+        return "Add image digests or exact image references through SBOM metadata or --artifact-manifest."
+    if "source rule" in label:
+        return "Add built-in or custom source reachability rules for packages that currently have no rule coverage."
+    if "external source evidence" in label:
+        return "Import Semgrep, CodeQL/SARIF, govulncheck, or equivalent source analyzer output."
+    if "query-family" in label:
+        return "Use a maintained source evidence pack and import records with query_family metadata."
+    if "security profile" in label:
+        return "Run a maintained SAST/DAST evidence profile or include profile metadata in imported scanner records."
+    return "Review the generated coverage report for missing evidence."
 
 
 def _profile_minimum(user_value: float | None, profile_default: float | None) -> float | None:
@@ -685,11 +707,11 @@ def _annotate_analysis_profile(
     blockers: list[str] = []
     if production:
         if int(source_summary.get("external_evidence_records") or 0) == 0:
-            blockers.append("external source evidence is required")
+            blockers.append("External source analyzer evidence is required for production gates.")
         if not args.terraform_plan and not args.kubernetes_manifest:
-            blockers.append("rendered deployment evidence is required")
+            blockers.append("Rendered deployment evidence is required for production gates.")
         if args.terraform_source and not args.terraform_plan:
-            blockers.append("Terraform source mode is advisory")
+            blockers.append("Terraform source mode is advisory only; use a rendered Terraform plan for production gates.")
     source_coverage["production_readiness"] = {
         "status": "blocked" if blockers else "ready" if production else "advisory",
         "blockers": blockers,
@@ -764,13 +786,13 @@ def run_demo(args: argparse.Namespace) -> int:
             finding_type = str(finding.get("finding_type") or "dependency_vulnerability")
             by_type[finding_type] = by_type.get(finding_type, 0) + 1
     highest = str(findings[0].get("tier", "none")) if findings and isinstance(findings[0], dict) else "none"
-    print(f"Demo findings: {len(findings)}")
-    print(f"Findings by type: {json.dumps(by_type, sort_keys=True)}")
-    print(f"Highest tier: {highest}")
+    print(f"Demo complete. Findings found: {len(findings)}")
+    print(f"Findings by evidence type: {json.dumps(by_type, sort_keys=True)}")
+    print(f"Highest priority: {highest}")
     for finding in findings[:3]:
         if isinstance(finding, dict):
-            print(f"- {finding.get('tier')} {finding.get('vulnerability', {}).get('id')}: {finding.get('artifact', {}).get('name')}")
-    print(f"Outputs written to {output_dir}")
+            print(f"- {finding.get('tier')} {finding.get('vulnerability', {}).get('id')}: artifact {finding.get('artifact', {}).get('name')}")
+    print(f"Review artifacts written to {output_dir}")
     return 0
 
 
@@ -789,12 +811,39 @@ def run_evidence_profile(args: argparse.Namespace) -> int:
     else:
         print(json.dumps(report, indent=2))
     if args.fail_on_blockers and report.get("status") == "blocked":
-        print(f"Reachability Advisor evidence profile failed: {report['summary']['blockers']} blocker(s).", file=sys.stderr)
+        print(f"Reachability Advisor evidence profile failed: {_readiness_gate_failure('release evidence is blocked', report, 'blockers')}", file=sys.stderr)
         return 10
     if args.fail_on_warnings and int(report.get("summary", {}).get("warnings") or 0) > 0:
-        print(f"Reachability Advisor evidence profile failed: {report['summary']['warnings']} warning(s).", file=sys.stderr)
+        print(f"Reachability Advisor evidence profile failed: {_readiness_gate_failure('release evidence has warnings', report, 'warnings')}", file=sys.stderr)
         return 10
     return 0
+
+
+def _readiness_gate_failure(label: str, report: dict[str, Any], field: str) -> str:
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), dict) else {}
+    count = int(summary.get(field) or 0)
+    messages = _readiness_messages(report.get(field))
+    if not messages:
+        return f"{label}: {count} {field}"
+    suffix = "; ".join(messages[:3])
+    more = f"; plus {len(messages) - 3} more" if len(messages) > 3 else ""
+    return f"{label}: {count} {field}. {suffix}{more}"
+
+
+def _readiness_messages(items: Any) -> list[str]:
+    if not isinstance(items, list):
+        return []
+    messages: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        message = str(item.get("message") or "").strip()
+        next_step = str(item.get("next_step") or "").strip()
+        if message and next_step:
+            messages.append(f"{message} Next step: {next_step}")
+        elif message:
+            messages.append(message)
+    return messages
 
 
 def run_explain(args: argparse.Namespace) -> int:
@@ -824,7 +873,7 @@ def run_compare(args: argparse.Namespace) -> int:
     if args.markdown_out:
         write_delta_markdown(output_delta, args.markdown_out)
     if args.fail_on_new_tier and delta_fails(output_delta, args.fail_on_new_tier):
-        print(f"Reachability Advisor PR delta failed: new/worsened finding reached {args.fail_on_new_tier}.", file=sys.stderr)
+        print(f"Reachability Advisor PR delta failed: a new or worsened active finding reached priority {args.fail_on_new_tier}.", file=sys.stderr)
         return 10
     return 0
 
@@ -955,7 +1004,7 @@ def run_hcl_audit(args: argparse.Namespace) -> int:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(render_hcl_audit_markdown(report), encoding="utf-8")
     if args.fail_on_gaps and report.get("coverage", {}).get("visibility_gaps"):
-        print("Reachability Advisor HCL audit failed: visibility gaps reported.", file=sys.stderr)
+        print("Reachability Advisor HCL audit failed: Terraform source visibility gaps were reported. Use rendered Terraform plan JSON for release-grade deployment evidence.", file=sys.stderr)
         return 10
     return 0
 

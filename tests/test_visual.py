@@ -696,8 +696,8 @@ class VisualPayloadTests(unittest.TestCase):
         self.assertIn("function renderRiskBoard", html)
         self.assertIn("function renderRiskRow", html)
         self.assertIn("function openScenarioAttackPath", html)
-        self.assertIn("Attack Path", html)
-        self.assertIn("Open path", html)
+        self.assertIn("Attack path", html)
+        self.assertIn("Open attack path", html)
         self.assertIn("risk-path-link", html)
         self.assertIn("function renderAttackPathCard", html)
         self.assertIn("function renderAttackScenarioCard", html)
@@ -716,7 +716,7 @@ class VisualPayloadTests(unittest.TestCase):
         self.assertIn("Issue categories", html)
         self.assertIn("shown on map", html)
         self.assertIn("Why this is prioritized", html)
-        self.assertIn("Unknowns / visibility gaps", html)
+        self.assertIn("Unknown evidence and visibility gaps", html)
         self.assertIn("Recommended next steps", html)
         self.assertIn("Path nodes", html)
         self.assertIn("Raw evidence", html)
@@ -729,7 +729,7 @@ class VisualPayloadTests(unittest.TestCase):
         self.assertIn("function renderEdgeDefs", html)
         self.assertIn("function compactComponent", html)
         self.assertIn("priority ${value || \"unknown\"}", html)
-        self.assertIn("network ${value || \"unknown\"}", html)
+        self.assertIn("network exposure: ${value || \"unknown\"}", html)
         self.assertIn("dataset.edgeSource", html)
         self.assertIn("dataset.edgeTarget", html)
         self.assertIn("dataset.nodeId", html)
@@ -748,7 +748,7 @@ class VisualPayloadTests(unittest.TestCase):
         self.assertIn('id="evidenceLayer"', html)
         self.assertIn("pre.textContent = JSON.stringify", html)
         self.assertIn("card.tabIndex = 0", html)
-        self.assertIn("top per asset", html)
+        self.assertIn("highest risk per asset", html)
 
     def test_attack_path_html_escapes_scanner_controlled_text(self) -> None:
         html = render_html_report([

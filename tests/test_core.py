@@ -430,7 +430,7 @@ class ScoringTests(unittest.TestCase):
 
     def test_render_table(self) -> None:
         table = render_table(self._findings())
-        self.assertIn("Tier", table)
+        self.assertIn("Priority", table)
         self.assertIn("payments-api", table)
 
     def test_output_writers_and_explain_paths(self) -> None:
@@ -459,7 +459,7 @@ class ScoringTests(unittest.TestCase):
             self.assertIn("runs", sarif_path.read_text(encoding="utf-8"))
             self.assertIn("diagnostics", diagnostics_path.read_text(encoding="utf-8"))
             self.assertIn("Remediation queue", markdown_path.read_text(encoding="utf-8"))
-            self.assertIn("No matching vulnerable components", empty_markdown_path.read_text(encoding="utf-8"))
+            self.assertIn("No matching dependency vulnerabilities or imported scanner findings", empty_markdown_path.read_text(encoding="utf-8"))
             self.assertTrue(annotations_path.read_text(encoding="utf-8").startswith("::"))
             self.assertEqual(empty_annotations_path.read_text(encoding="utf-8"), "")
 

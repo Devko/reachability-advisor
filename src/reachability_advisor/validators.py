@@ -39,11 +39,11 @@ def validate_paths(
     for manifest in kubernetes_manifests or []:
         manifest_path = Path(manifest)
         if not manifest_path.exists():
-            issues.append(ValidationIssue("error", "kubernetes-manifest", f"path does not exist: {manifest}"))
+            issues.append(ValidationIssue("error", "kubernetes-manifest", f"Rendered Kubernetes manifest path was not found: {manifest}. Provide a rendered YAML/JSON file or directory."))
         elif manifest_path.is_file() and manifest_path.suffix.lower() not in {".yaml", ".yml", ".json"}:
-            issues.append(ValidationIssue("error", "kubernetes-manifest", f"file is not a YAML or JSON manifest: {manifest}"))
+            issues.append(ValidationIssue("error", "kubernetes-manifest", f"Kubernetes manifest must be YAML or JSON: {manifest}. Render Helm/Kustomize output before scanning."))
         elif manifest_path.is_dir() and not any(item.suffix.lower() in {".yaml", ".yml", ".json"} for item in manifest_path.rglob("*") if item.is_file()):
-            issues.append(ValidationIssue("warning", "kubernetes-manifest", f"directory contains no YAML or JSON manifests: {manifest}"))
+            issues.append(ValidationIssue("warning", "kubernetes-manifest", f"Kubernetes manifest directory contains no YAML or JSON files: {manifest}. No Kubernetes deployment evidence will be added."))
     if policy:
         _validate_file(policy, "policy", issues)
     if reachability_rules:
@@ -57,23 +57,23 @@ def validate_paths(
     if terraform_source:
         source_path = Path(terraform_source)
         if not source_path.exists():
-            issues.append(ValidationIssue("error", "terraform-source", f"path does not exist: {terraform_source}"))
+            issues.append(ValidationIssue("error", "terraform-source", f"Terraform source path was not found: {terraform_source}. Provide a .tf file or directory."))
         elif source_path.is_file() and source_path.suffix != ".tf":
-            issues.append(ValidationIssue("error", "terraform-source", f"file is not a .tf file: {terraform_source}"))
+            issues.append(ValidationIssue("error", "terraform-source", f"Terraform source must be a .tf file or directory: {terraform_source}."))
         elif source_path.is_dir() and not any(source_path.rglob("*.tf")):
-            issues.append(ValidationIssue("warning", "terraform-source", f"directory contains no .tf files: {terraform_source}"))
+            issues.append(ValidationIssue("warning", "terraform-source", f"Terraform source directory contains no .tf files: {terraform_source}. No Terraform source evidence will be added."))
     for source_root in source_roots or []:
         if "=" not in source_root:
-            issues.append(ValidationIssue("error", source_root, "source root must use artifact=path syntax"))
+            issues.append(ValidationIssue("error", source_root, "Source root must use artifact=path syntax, for example payments-api=src/payments-api."))
             continue
         artifact, raw_path = source_root.split("=", 1)
         if not artifact.strip():
-            issues.append(ValidationIssue("error", source_root, "source root artifact name is empty"))
+            issues.append(ValidationIssue("error", source_root, "Source root artifact name is empty. Put the SBOM artifact name before '='."))
         root_path = Path(raw_path)
         if not root_path.exists():
-            issues.append(ValidationIssue("warning", source_root, "source root does not exist; reachability will be package_present only"))
+            issues.append(ValidationIssue("warning", source_root, "Source root path was not found. Source reachability will fall back to SBOM/package evidence only."))
         elif not root_path.is_dir():
-            issues.append(ValidationIssue("error", source_root, "source root is not a directory"))
+            issues.append(ValidationIssue("error", source_root, "Source root must point to a directory containing the artifact source code."))
     return issues
 
 
@@ -88,11 +88,11 @@ def _as_paths(value: str | list[str] | None) -> list[str]:
 def _validate_file(path: str, label: str, issues: list[ValidationIssue]) -> None:
     file_path = Path(path)
     if not file_path.exists():
-        issues.append(ValidationIssue("error", label, f"file does not exist: {path}"))
+        issues.append(ValidationIssue("error", label, f"Required input file was not found: {path}. Check the path or generate the file before scanning."))
     elif not file_path.is_file():
-        issues.append(ValidationIssue("error", label, f"not a file: {path}"))
+        issues.append(ValidationIssue("error", label, f"Expected a file but got a directory or special path: {path}."))
     elif file_path.stat().st_size == 0:
-        issues.append(ValidationIssue("error", label, f"file is empty: {path}"))
+        issues.append(ValidationIssue("error", label, f"Input file is empty: {path}. Generate a valid JSON/YAML report before scanning."))
 
 
 def has_errors(issues: list[ValidationIssue]) -> bool:

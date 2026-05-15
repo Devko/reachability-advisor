@@ -56,6 +56,24 @@ class ProviderPolicyFixtureTests(unittest.TestCase):
                     self.assertEqual(policy["decision"], permission["decision"])
                     self.assertEqual(not str(evaluated["decision"]).startswith("denied"), permission["allowed"])
 
+    def test_provider_policy_examples_cover_stability_dimensions(self) -> None:
+        fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+        case_names = {str(case["name"]) for case in fixture["cases"]}
+
+        required = {
+            "aws-cross-account-trust-with-org-condition",
+            "aws-cross-account-trust-with-external-id",
+            "aws-resource-policy-explicit-deny-overrides-identity-allow",
+            "aws-scoped-identity-policy-tenant-prefix-read",
+            "azure-deny-assignment-overrides-role-assignment",
+            "azure-key-vault-secret-reader-role-assignment",
+            "gcp-cross-project-secret-accessor-scoped-binding",
+            "gcp-principal-access-boundary-blocks-cross-project-secret",
+            "kubernetes-serviceaccount-secret-reader",
+        }
+
+        self.assertTrue(required.issubset(case_names), sorted(required - case_names))
+
     def test_aws_policy_engine_handles_raw_documents_conditions_boundaries_and_trust(self) -> None:
         records = evaluate_aws_policy_records(
             [

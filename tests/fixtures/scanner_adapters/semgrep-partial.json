@@ -1,0 +1,23 @@
+{
+  "results": [
+    "bad-result",
+    {
+      "check_id": "js.express.reflected-xss",
+      "path": "src/server.js",
+      "start": {"line": "not-a-number", "col": "also-bad"},
+      "extra": {
+        "message": "Unsanitized request data reaches response",
+        "severity": "ERROR",
+        "lines": "res.send(req.query.q)",
+        "metadata": {
+          "cwe": ["CWE-79"],
+          "confidence": "HIGH",
+          "artifact": "web-api",
+          "route": "/search",
+          "references": [{"url": "https://semgrep.dev/docs"}]
+        },
+        "dataflow_trace": [{"path": "src/server.js"}]
+      }
+    }
+  ]
+}

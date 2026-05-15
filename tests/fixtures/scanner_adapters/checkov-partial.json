@@ -1,0 +1,15 @@
+{
+  "results": {
+    "failed_checks": [
+      "bad-check",
+      {
+        "check_id": 1001,
+        "check_name": "S3 bucket is public",
+        "resource": "aws_s3_bucket.public",
+        "file_path": "main.tf",
+        "file_line_range": [7, 11],
+        "guideline": "https://docs.bridgecrew.io/docs/s3-public"
+      }
+    ]
+  }
+}

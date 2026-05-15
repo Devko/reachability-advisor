@@ -61,14 +61,15 @@ def release_readiness_report(
                 "artifact_identity_strength": _identity_strength(artifact),
                 "missing": missing,
                 "warnings": artifact_warnings,
+                "next_steps": [_artifact_next_step(item) for item in [*missing, *artifact_warnings]],
             }
         )
         for item in missing:
             severity = "warning" if item == "identity/effective-access evidence" else "blocker"
             target = warnings if severity == "warning" else blockers
-            target.append({"artifact": name, "kind": _message_kind(item), "message": f"{name}: missing {item}"})
+            target.append(_artifact_message(name, item, severity=severity))
         for item in status_warnings:
-            warnings.append({"artifact": name, "kind": _message_kind(item), "message": f"{name}: {item}"})
+            warnings.append(_artifact_message(name, item, severity="warning"))
 
     source_summary = source_coverage.get("summary", {}) if isinstance(source_coverage.get("summary"), dict) else {}
     raw_critical_external = source_summary.get("critical_external_evidence_coverage")
@@ -77,7 +78,12 @@ def release_readiness_report(
         blockers.append(
             {
                 "kind": "critical_source_coverage",
-                "message": f"critical external source evidence coverage is {critical_external:.4f}; expected 1.0",
+                "message": (
+                    "Critical findings are missing external source analyzer evidence. "
+                    f"Coverage is {critical_external:.4f}; release gates require 1.0000."
+                ),
+                "impact": "A release gate cannot tell whether the critical package is actually imported, called, or reachable from request-controlled code.",
+                "next_step": "Run Semgrep, CodeQL/SARIF, or govulncheck for the source tree and pass the output with --source-evidence-in, --sast-in, or --security-evidence-in.",
             }
         )
     raw_query_family = source_summary.get("critical_query_family_coverage")
@@ -86,7 +92,12 @@ def release_readiness_report(
         blockers.append(
             {
                 "kind": "critical_source_query_family_coverage",
-                "message": f"critical source query-family coverage is {critical_query_family:.4f}; expected 1.0",
+                "message": (
+                    "Critical findings are missing source evidence from the required maintained query family. "
+                    f"Coverage is {critical_query_family:.4f}; release gates require 1.0000."
+                ),
+                "impact": "Generic scanner evidence is not enough to prove the maintained source rule family ran for this package class.",
+                "next_step": "Generate the source evidence pack for this language and import evidence that includes query_family or query_families metadata.",
             }
         )
     raw_proven_query_family = source_summary.get("critical_proven_query_family_coverage")
@@ -95,7 +106,12 @@ def release_readiness_report(
         blockers.append(
             {
                 "kind": "critical_source_proven_query_family_coverage",
-                "message": f"critical proven query-family coverage is {critical_proven_query_family:.4f}; expected 1.0",
+                "message": (
+                    "Critical findings are missing proven maintained query-family evidence. "
+                    f"Coverage is {critical_proven_query_family:.4f}; release gates require 1.0000."
+                ),
+                "impact": "The release gate cannot confirm that a maintained rule set covered the package family associated with the critical finding.",
+                "next_step": "Use reachability-advisor source-evidence-pack or an equivalent maintained Semgrep/CodeQL/govulncheck profile, then re-import the evidence.",
             }
         )
     security_summary = {}
@@ -109,18 +125,23 @@ def release_readiness_report(
             blockers.append(
                 {
                     "kind": "critical_security_profile_coverage",
-                    "message": f"critical SAST/DAST profile coverage is {critical_security_profile:.4f}; expected 1.0",
+                    "message": (
+                        "Critical SAST/DAST records are missing a maintained security profile. "
+                        f"Coverage is {critical_security_profile:.4f}; release gates require 1.0000."
+                    ),
+                    "impact": "The gate cannot distinguish an ad hoc scanner record from a vetted release-gate profile.",
+                    "next_step": "Run a maintained security evidence profile or include profile metadata when importing SAST/DAST evidence.",
                 }
             )
 
     for gap in _visibility_gaps(terraform_coverage):
         kind = str(gap.get("type") or gap.get("reason") or "visibility_gap")
         if "opaque" in kind or "module" in kind or "helm" in kind:
-            blockers.append({"kind": "unrendered_or_opaque_iac", "message": f"Terraform visibility gap requires rendered evidence: {gap}"})
+            blockers.append(_rendering_gap_message("Terraform", gap, message_kind="unrendered_or_opaque_iac"))
     for gap in _visibility_gaps(kubernetes_coverage):
         kind = str(gap.get("type") or gap.get("reason") or "visibility_gap")
         if "opaque" in kind or "helm" in kind or "template" in kind:
-            blockers.append({"kind": "unrendered_or_opaque_kubernetes", "message": f"Kubernetes visibility gap requires rendered evidence: {gap}"})
+            blockers.append(_rendering_gap_message("Kubernetes", gap, message_kind="unrendered_or_opaque_kubernetes"))
 
     status = "blocked" if blockers else "warning" if warnings else "ready"
     return {
@@ -243,6 +264,87 @@ def _only_low_confidence_identity(contexts: list[dict[str, Any]]) -> bool:
 
 def _message_kind(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_") or "release_evidence"
+
+
+def _artifact_message(artifact: str, item: str, *, severity: str) -> dict[str, Any]:
+    kind = _message_kind(item)
+    next_step = _artifact_next_step(item)
+    impact = _artifact_impact(item)
+    message = _artifact_message_text(artifact, item, severity=severity)
+    return {
+        "artifact": artifact,
+        "kind": kind,
+        "message": message,
+        "impact": impact,
+        "next_step": next_step,
+    }
+
+
+def _artifact_message_text(artifact: str, item: str, *, severity: str) -> str:
+    label = artifact or "artifact"
+    if item == "image digest or exact image reference":
+        return f"{label}: artifact identity is too weak for a release gate. Add an exact deployed image reference or image digest."
+    if item == "SBOM path":
+        return f"{label}: the release gate cannot trace this artifact back to the SBOM file that was scanned."
+    if item == "deployment workload match":
+        return f"{label}: no rendered deployment workload was matched to this SBOM artifact."
+    if item == "strong deployment workload match":
+        return f"{label}: deployment matching used weak evidence. Provide image or digest metadata so the workload match is release-grade."
+    if item == "network path evidence":
+        return f"{label}: no network path evidence was found for the matched workload."
+    if item == "network path confidence":
+        return f"{label}: only low-confidence network path evidence was found; review before using this as release evidence."
+    if item == "identity/effective-access evidence":
+        return f"{label}: no workload identity or effective-access evidence was found."
+    if item == "identity/effective-access confidence":
+        return f"{label}: only low-confidence identity or effective-access evidence was found; review before using this as release evidence."
+    prefix = "warning" if severity == "warning" else "blocker"
+    return f"{label}: release evidence {prefix}: {item}"
+
+
+def _artifact_impact(item: str) -> str:
+    if item == "image digest or exact image reference":
+        return "Findings may be attached by artifact name instead of the exact release image, which is not precise enough for a release gate."
+    if item == "SBOM path":
+        return "Auditors and CI cannot verify which SBOM produced the finding set."
+    if item in {"deployment workload match", "strong deployment workload match"}:
+        return "The gate cannot prove that the vulnerable SBOM artifact is the workload being deployed."
+    if item in {"network path evidence", "network path confidence"}:
+        return "The gate cannot confidently decide whether an attacker or internal actor can reach the workload."
+    if item in {"identity/effective-access evidence", "identity/effective-access confidence"}:
+        return "The gate cannot confidently estimate blast radius such as secret access, data access, or control-plane privileges."
+    return "The release evidence is incomplete or ambiguous."
+
+
+def _artifact_next_step(item: str) -> str:
+    if item == "image digest or exact image reference":
+        return "Add image, digest, registry_ref, or terraform_module_output_image to --artifact-manifest, or include equivalent CycloneDX artifact metadata."
+    if item == "SBOM path":
+        return "Set sbom_path in --artifact-manifest so the release artifact points to the SBOM used by this scan."
+    if item == "deployment workload match":
+        return "Provide a rendered Terraform plan with --terraform-plan or rendered Kubernetes YAML/JSON with --kubernetes-manifest, and include image metadata that matches the SBOM artifact."
+    if item == "strong deployment workload match":
+        return "Prefer digest or exact image-reference matching over name-only or alias-only matching."
+    if item == "network path evidence":
+        return "Include rendered network evidence from Terraform, Kubernetes, or context JSON so the scanner can link ingress, private, internal, or blocked paths to the workload."
+    if item == "network path confidence":
+        return "Add provider-specific route, firewall, security-group, ingress, NetworkPolicy, or service-mesh evidence to raise confidence."
+    if item == "identity/effective-access evidence":
+        return "Include IAM/RBAC evidence from Terraform, rendered Kubernetes manifests, or context JSON so effective access can be evaluated."
+    if item == "identity/effective-access confidence":
+        return "Add scoped policy documents, role bindings, deny rules, conditions, and target resources so identity evidence is not inferred from weak hints only."
+    return "Review the mapping report, source coverage report, and deployment evidence for this artifact."
+
+
+def _rendering_gap_message(source: str, gap: dict[str, Any], *, message_kind: str) -> dict[str, Any]:
+    address = str(gap.get("address") or gap.get("path") or gap.get("type") or gap.get("reason") or "unrendered IaC wrapper")
+    return {
+        "kind": message_kind,
+        "message": f"{source}: unrendered or opaque IaC wrapper found at {address}. Render child resources before using this as release evidence.",
+        "impact": "The scanner can see the wrapper, but not the workload images, services, ingress rules, network policies, or RBAC created inside it.",
+        "next_step": "Run the render step for Terraform modules, Helm charts, Kustomize overlays, or kubectl manifests and pass the rendered plan/manifests to the scan.",
+        "evidence": gap,
+    }
 
 
 def _has_missing(artifact: dict[str, Any], *items: str) -> bool:

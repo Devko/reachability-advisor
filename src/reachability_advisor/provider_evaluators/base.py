@@ -399,17 +399,22 @@ class ProviderEvaluator:
         return "reachable"
 
 
-def select_network_path(context: ContextEvidence) -> dict[str, Any]:
+def candidate_network_paths(context: ContextEvidence) -> list[dict[str, Any]]:
     paths = [dict(item) for item in context.network_paths if isinstance(item, dict)]
     if paths:
-        return max(
-            paths,
-            key=lambda item: (
-                exposure_rank(str(item.get("exposure") or context.exposure or "unknown")),
-                confidence_rank(str(item.get("confidence") or context.confidence.value)),
-            ),
-        )
-    return network_path_from_evidence(context)
+        return paths
+    return [network_path_from_evidence(context)]
+
+
+def select_network_path(context: ContextEvidence) -> dict[str, Any]:
+    paths = candidate_network_paths(context)
+    return max(
+        paths,
+        key=lambda item: (
+            exposure_rank(str(item.get("exposure") or context.exposure or "unknown")),
+            confidence_rank(str(item.get("confidence") or context.confidence.value)),
+        ),
+    )
 
 
 def network_path_from_evidence(context: ContextEvidence) -> dict[str, Any]:

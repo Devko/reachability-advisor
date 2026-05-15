@@ -885,7 +885,7 @@ HTML_TEMPLATE = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Reachability Advisor Visual Report</title>
+<title>Reachability Advisor Evidence Report</title>
 <style>
 :root {
   --bg: #f5f7fb;
@@ -1941,7 +1941,7 @@ li {
 <body>
 <header>
   <div>
-    <h1>Reachability Advisor Visual Report</h1>
+    <h1>Reachability Advisor Evidence Report</h1>
     <div class="subtitle" id="generated"></div>
   </div>
   <div class="stats" id="stats"></div>
@@ -1953,24 +1953,24 @@ li {
     <button id="evidenceTab" type="button" data-view="evidence">Evidence Paths</button>
     <button id="riskTab" type="button" class="active" data-view="risk">Risk</button>
   </div>
-  <input id="search" type="search" placeholder="Search asset, component, CVE, IAM, network, owner">
+  <input id="search" type="search" placeholder="Search asset, component, CVE, scanner rule, IAM/RBAC, network, owner">
   <select id="tier">
     <option value="informational">All priorities</option>
-    <option value="urgent">C Critical only</option>
-    <option value="high">H High and above</option>
-    <option value="medium">M Medium and above</option>
-    <option value="low">L Low and above</option>
+    <option value="urgent">Urgent only</option>
+    <option value="high">High or urgent</option>
+    <option value="medium">Medium or higher</option>
+    <option value="low">Low or higher</option>
   </select>
   <select id="exposure">
     <option value="">All exposures</option>
   </select>
   <select id="findingType">
     <option value="">All finding types</option>
-    <option value="dependency_vulnerability">Dependency</option>
-    <option value="static_code_weakness">SAST</option>
-    <option value="dynamic_runtime_observation">DAST</option>
-    <option value="cloud_posture_finding">CSPM</option>
-    <option value="correlated_security_finding">Correlated</option>
+    <option value="dependency_vulnerability">Dependency vulnerabilities</option>
+    <option value="static_code_weakness">Static scanner findings (SAST)</option>
+    <option value="dynamic_runtime_observation">Runtime scanner findings (DAST)</option>
+    <option value="cloud_posture_finding">Cloud posture findings (CSPM)</option>
+    <option value="correlated_security_finding">Correlated security findings</option>
   </select>
   <select id="confidence">
     <option value="">All confidence</option>
@@ -1979,17 +1979,17 @@ li {
     <option value="low">Low</option>
   </select>
   <select id="evidenceLayer">
-    <option value="">All evidence</option>
+    <option value="">All evidence layers</option>
   </select>
   <select id="topLimit">
     <option value="50">Top 50</option>
     <option value="100">Top 100</option>
     <option value="">All findings</option>
   </select>
-  <label class="check"><input id="highestPerAsset" type="checkbox" checked> top per asset</label>
-  <label class="check"><input id="activeOnly" type="checkbox" checked> active only</label>
-  <button id="fit" title="Fit graph to viewport">Fit</button>
-  <button id="reset" class="secondary" title="Reset zoom and pan">Reset</button>
+  <label class="check"><input id="highestPerAsset" type="checkbox" checked> highest risk per asset</label>
+  <label class="check"><input id="activeOnly" type="checkbox" checked> hide excepted findings</label>
+  <button id="fit" title="Fit the current graph into the visible area">Fit</button>
+  <button id="reset" class="secondary" title="Reset graph zoom and pan">Reset</button>
 </section>
 <main class="layout">
   <section class="graph-shell">
@@ -2010,7 +2010,7 @@ li {
     </div>
     <section class="details" id="details"></section>
     <section class="finding-list">
-      <h2 id="visibleListTitle">Visible Risk</h2>
+      <h2 id="visibleListTitle">Visible Risk Scenarios</h2>
       <div id="findingList"></div>
     </section>
   </aside>
@@ -2641,7 +2641,7 @@ function renderRiskBoard(scenarios, layout) {
   board.className = "risk-board";
   const header = document.createElement("div");
   header.className = "risk-board-head";
-  for (const label of ["Severity", "Risk", "Finding Categories", "Total", "In Use", "Context", "Attack Path"]) {
+  for (const label of ["Priority", "Risk scenario", "Evidence categories", "Findings", "In-use findings", "Context", "Attack path"]) {
     const cell = document.createElement("div");
     cell.textContent = label;
     header.appendChild(cell);
@@ -2651,7 +2651,7 @@ function renderRiskBoard(scenarios, layout) {
     const empty = document.createElement("div");
     empty.className = "empty";
     empty.style.padding = "18px";
-    empty.textContent = "No risk scenarios match the current filters.";
+    empty.textContent = "No risk scenarios match the current filters. Clear one or more filters to see more results.";
     board.appendChild(empty);
     return board;
   }
@@ -2703,7 +2703,7 @@ function renderRiskRow(scenario, layout) {
   title.textContent = scenario.title || "Risk scenario";
   const meta = document.createElement("div");
   meta.className = "risk-meta";
-  meta.textContent = `${scenario.assetName || "unknown asset"} | ${scenario.entryLabel || "unknown entry"} -> ${scenario.pathLabel || "network path"}`;
+  meta.textContent = `${scenario.assetName || "unknown asset"} | entry: ${scenario.entryLabel || "unknown entry"} -> path: ${scenario.pathLabel || "network path"}`;
   risk.append(title, meta);
 
   const categories = document.createElement("div");
@@ -2727,8 +2727,8 @@ function renderRiskRow(scenario, layout) {
   const attackPathLink = document.createElement("a");
   attackPathLink.className = "risk-path-link";
   attackPathLink.href = `#attack-path-${scenario.attackPathGroupId || scenario.id}`;
-  attackPathLink.textContent = "Open path";
-  attackPathLink.title = `Open attack path for ${scenario.title || "risk scenario"}`;
+  attackPathLink.textContent = "Open attack path";
+  attackPathLink.title = `Show the attack path for ${scenario.title || "risk scenario"}`;
   attackPathLink.addEventListener("click", event => {
     event.preventDefault();
     event.stopPropagation();
@@ -3461,7 +3461,7 @@ function countChip(value, label) {
 }
 
 function exposureChip(value) {
-  return tag(`network ${value || "unknown"}`, value || "unknown");
+  return tag(`network exposure: ${value || "unknown"}`, value || "unknown");
 }
 
 function chipClass(value) {
@@ -3470,10 +3470,10 @@ function chipClass(value) {
 
 function renderScenarioList(scenarios) {
   const title = document.getElementById("visibleListTitle");
-  if (title) title.textContent = "Visible Risk";
+  if (title) title.textContent = "Visible Risk Scenarios";
   const list = document.getElementById("findingList");
   if (!scenarios.length) {
-    list.innerHTML = '<div class="empty">No risk scenarios match the current filters.</div>';
+    list.innerHTML = '<div class="empty">No risk scenarios match the current filters. Clear one or more filters to see more results.</div>';
     return;
   }
   list.replaceChildren(...scenarios.map(scenario => {
@@ -3500,7 +3500,7 @@ function renderScenarioList(scenarios) {
     rowTitle.append(chip);
     const meta = document.createElement("div");
     meta.className = "item-meta";
-    meta.textContent = `${scenario.assetName || "asset"} | ${scenario.provider || "Context"} | ${scenario.exposure || "unknown"} | ${scenario.totalFindings || 0} findings`;
+    meta.textContent = `${scenario.assetName || "asset"} | provider ${scenario.provider || "context"} | network exposure ${scenario.exposure || "unknown"} | ${scenario.totalFindings || 0} findings`;
     item.append(rowTitle, meta);
     return item;
   }));
@@ -3511,7 +3511,7 @@ function renderFindingList(findings) {
   if (title) title.textContent = "Visible Findings";
   const list = document.getElementById("findingList");
   if (!findings.length) {
-    list.innerHTML = '<div class="empty">No findings match the current filters.</div>';
+    list.innerHTML = '<div class="empty">No findings match the current filters. Clear one or more filters to see more results.</div>';
     return;
   }
   list.replaceChildren(...findings.map(finding => {
@@ -3546,7 +3546,7 @@ function renderFindingList(findings) {
     const meta = document.createElement("div");
     meta.className = "item-meta";
     const scanner = isSecurityFinding(finding.finding_type) ? ` | scanner ${(finding.weakness || {}).tool || "unknown"}` : "";
-    meta.textContent = `${finding.artifact.name}${scanner} | code ${codeExposureFromState(finding.source_reachability || {})} | source ${(finding.source_reachability || {}).state} | exposure ${(finding.context || {}).exposure || "unknown"} | privilege ${(finding.context || {}).privilege || "unknown"}`;
+    meta.textContent = `${finding.artifact.name}${scanner} | code evidence ${codeExposureFromState(finding.source_reachability || {})} | source state ${(finding.source_reachability || {}).state} | network exposure ${(finding.context || {}).exposure || "unknown"} | IAM/RBAC privilege ${(finding.context || {}).privilege || "unknown"}`;
     item.append(title, meta);
     return item;
   }));
@@ -3554,7 +3554,7 @@ function renderFindingList(findings) {
 
 function renderDetails(datum) {
   if (!datum) {
-    details.innerHTML = '<h2>Details</h2><div class="empty">Select an asset or finding. Use mouse wheel to zoom and drag the graph background to pan.</div>';
+    details.innerHTML = '<h2>Details</h2><div class="empty">Select a risk scenario, attack path, asset, or finding. Use mouse wheel to zoom and drag the graph background to pan.</div>';
     return;
   }
   const section = document.createElement("section");
@@ -3598,7 +3598,7 @@ function renderDetails(datum) {
     }));
     appendList(section, "Path steps", scenario.pathSteps || []);
     appendList(section, "Evidence summary", scenario.evidenceSummary || []);
-    appendList(section, "Blockers / constraints", (scenario.blockers || []).map(formatBlocker));
+    appendList(section, "Blockers and constraints", (scenario.blockers || []).map(formatBlocker));
   } else if (datum.attackKind === "path") {
     section.append(heading(datum.title || "Attack path"));
     section.append(chips([priorityChip(datum.tier), scoreChip(datum.score), tag(datum.findingTypeLabel || datum.findingType, "count"), exposureChip(datum.exposure), tag(`confidence ${datum.confidence || "low"}`, "count")]));
@@ -3612,8 +3612,8 @@ function renderDetails(datum) {
     }));
     appendList(section, "Why this is prioritized", datum.why || [datum.shortReason].filter(Boolean));
     appendList(section, "Evidence used", datum.evidenceSummary || []);
-    appendList(section, "Unknowns / visibility gaps", datum.unknowns || []);
-    appendList(section, "Blockers / constraints", (datum.blockers || []).map(formatBlocker));
+    appendList(section, "Unknown evidence and visibility gaps", datum.unknowns || []);
+    appendList(section, "Blockers and constraints", (datum.blockers || []).map(formatBlocker));
     appendList(section, "Recommended next steps", datum.remediation || []);
     appendNodeLinks(section, "Path nodes", datum.nodes || [], datum);
     section.append(rawDisclosure("Raw evidence", datum.rawEvidence || datum));
@@ -3634,8 +3634,8 @@ function renderDetails(datum) {
           render();
         },
       }]);
-      appendList(section, "Unknowns / visibility gaps", datum.path.unknowns || []);
-      appendList(section, "Blockers / constraints", (datum.path.blockers || []).map(formatBlocker));
+      appendList(section, "Unknown evidence and visibility gaps", datum.path.unknowns || []);
+      appendList(section, "Blockers and constraints", (datum.path.blockers || []).map(formatBlocker));
     }
   } else if (datum.architectureKind === "zone") {
     const arch = DATA.architecture || {assets: [], hops: []};
@@ -3660,7 +3660,7 @@ function renderDetails(datum) {
       assets: linkedAssets.map(asset => asset.name || asset.id).join(", "),
       summary: datum.summary,
     }));
-    appendList(section, "Blockers and constraints", (datum.blockers || []).map(blocker => typeof blocker === "object" ? `${blocker.kind || "blocker"}: ${blocker.evidence || blocker.reason || ""}` : String(blocker)));
+    appendList(section, "Blockers and constraints", (datum.blockers || []).map(formatBlocker));
     appendList(section, "Network evidence", [datum.evidence || datum.summary].filter(Boolean));
   } else if (datum.attackKind === "risk") {
     const linkedAssets = (datum.assetIds || []).map(assetId => assetById.get(assetId)).filter(Boolean);
@@ -3674,7 +3674,7 @@ function renderDetails(datum) {
     }));
     appendList(section, "Linked findings", linkedFindings.map(finding => `${finding.tier} ${Number(finding.score || 0).toFixed(1)} ${finding.label}`));
     appendList(section, "Identity/data signals", datum.signals || []);
-    appendList(section, "Blockers and gaps", (datum.blockers || []).map(blocker => typeof blocker === "object" ? `${blocker.kind || "blocker"}: ${blocker.evidence || blocker.reason || ""}` : String(blocker)));
+    appendList(section, "Blockers and gaps", (datum.blockers || []).map(formatBlocker));
     appendList(section, "Linked network paths", (datum.networkPathIds || []).map(pathId => (DATA.networkPaths || []).find(path => path.id === pathId)).filter(Boolean).map(path => path.evidence || path.summary).filter(Boolean));
   } else if (datum.networkKind) {
     const linkedAssets = pathAssetIds(datum).map(assetId => assetById.get(assetId)).filter(Boolean);
@@ -3692,7 +3692,7 @@ function renderDetails(datum) {
       owner: datum.owner || linkedAssets.map(asset => asset.owner).filter(Boolean).join(", "),
     }));
     appendList(section, "Path steps", datum.steps || []);
-    appendList(section, "Blockers and constraints", (datum.blockers || []).map(blocker => `${blocker.kind}: ${blocker.evidence}`));
+    appendList(section, "Blockers and constraints", (datum.blockers || []).map(formatBlocker));
     appendList(section, "Network evidence", datum.networkKind === "entry"
       ? (datum.linkedPathIds || []).map(pathId => (DATA.networkPaths || []).find(path => path.id === pathId)).filter(Boolean).map(path => path.evidence || path.summary).filter(Boolean)
       : [datum.evidence || datum.summary].filter(Boolean));
@@ -3708,22 +3708,22 @@ function renderDetails(datum) {
       CWE: isSecurityFinding(datum.findingType) ? (datum.weakness?.cwe || "unknown") : undefined,
       "runtime state": isRuntimeFinding(datum.findingType) ? datum.runtimeEvidence?.state : undefined,
       URL: isRuntimeFinding(datum.findingType) ? datum.runtimeEvidence?.url : undefined,
-      "code exposure": datum.codeExposure,
+      "code evidence": datum.codeExposure,
       "code detail": datum.codeExposureDetail,
       "source state": datum.reachability,
       "network exposure": datum.exposure,
-      "IAM privilege": datum.privilege,
+      "IAM/RBAC privilege": datum.privilege,
       "asset criticality": datum.criticality,
       "IAM impact": datum.iamImpacts,
       policy: datum.policyStatus,
     }));
     appendList(section, "Rationale", datum.rationale || []);
     appendList(section, "Correlated evidence", (datum.correlatedEvidence || []).map(item => `${item.correlation_type} (${item.confidence}): ${item.reason}`));
-    appendList(section, "Unknowns", datum.unknowns || []);
+    appendList(section, "Unknown evidence and visibility gaps", datum.unknowns || []);
     appendList(section, "Evidence summary", datum.evidenceSummary || []);
-    appendList(section, "Effective exposure path", effectivePathLabels(datum.effectivePath));
+    appendList(section, "Effective exposure path used for scoring", effectivePathLabels(datum.effectivePath));
     appendList(section, "Fix commands", datum.fixCommands || []);
-    appendList(section, "Effective access", (datum.effectiveAccess || []).map(access => `${access.identity || "identity"} ${access.action || "action"} ${access.decision || "allowed"} (${access.confidence || "unknown"})`));
+    appendList(section, "Effective IAM/RBAC access", (datum.effectiveAccess || []).map(access => `${access.identity || "identity"} ${access.action || "action"} ${access.decision || "allowed"} (${access.confidence || "unknown"} confidence)`));
     appendList(section, "Context evidence", datum.contextEvidence || []);
     appendList(section, "Source evidence", datum.sourceReason ? [datum.sourceReason] : []);
     appendList(section, "Source locations", (datum.sourceLocations || []).map(location => `${location.path}:${location.line}`));
@@ -3770,9 +3770,41 @@ function effectivePathLabels(path) {
 function formatBlocker(blocker) {
   if (!blocker) return "";
   if (typeof blocker === "object") {
-    return `${blocker.kind || blocker.type || "blocker"}: ${blocker.evidence || blocker.reason || blocker.detail || ""}`;
+    const label = humanizeEvidenceKind(blocker.kind || blocker.type || "blocker");
+    const detail = blocker.message || blocker.evidence || blocker.reason || blocker.detail || "";
+    const next = blocker.next_step ? ` Next step: ${blocker.next_step}` : "";
+    return `${label}: ${detail}${next}`;
   }
   return String(blocker);
+}
+
+function humanizeEvidenceKind(value) {
+  const known = {
+    image_digest_or_exact_image_reference: "Weak artifact identity",
+    sbom_path: "Missing SBOM path",
+    deployment_workload_match: "Missing deployment workload match",
+    strong_deployment_workload_match: "Weak deployment workload match",
+    network_path_evidence: "Missing network path evidence",
+    network_path_confidence: "Low-confidence network path",
+    identity_effective_access_evidence: "Missing identity evidence",
+    identity_effective_access_confidence: "Low-confidence identity evidence",
+    critical_source_coverage: "Missing external source evidence",
+    critical_source_query_family_coverage: "Missing query-family source evidence",
+    critical_source_proven_query_family_coverage: "Missing proven query-family evidence",
+    critical_security_profile_coverage: "Missing maintained security profile",
+    unrendered_or_opaque_iac: "Unrendered IaC wrapper",
+    unrendered_or_opaque_kubernetes: "Unrendered Kubernetes wrapper",
+    auth_required: "Authentication required",
+    api_key_required: "API key required",
+    waf_or_firewall_policy: "WAF or firewall policy",
+    private_endpoint: "Private endpoint",
+    explicit_deny: "Explicit deny",
+    explicit_deny_precedence: "Explicit deny precedence",
+    scoped_resource: "Scoped resource",
+    condition: "Conditional access",
+  };
+  const key = String(value || "").toLowerCase();
+  return known[key] || key.replace(/[_-]+/g, " ").replace(/\b\w/g, letter => letter.toUpperCase());
 }
 
 function rawDisclosure(title, value) {

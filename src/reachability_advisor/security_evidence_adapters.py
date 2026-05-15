@@ -127,8 +127,8 @@ def _record_from_semgrep(item: dict[str, Any], path: Path) -> SecurityEvidenceRe
     start = _as_object(item.get("start"))
     source = SourceLocation(
         path=Path(str(item.get("path") or path)),
-        line=max(1, int(start.get("line") or 1)),
-        column=max(1, int(start.get("col") or start.get("column") or 1)),
+        line=_positive_int(start.get("line"), default=1),
+        column=_positive_int(start.get("col") or start.get("column"), default=1),
         snippet=str(extra.get("lines") or ""),
     )
     rule_id = str(item.get("check_id") or "semgrep-finding")
@@ -148,7 +148,7 @@ def _record_from_semgrep(item: dict[str, Any], path: Path) -> SecurityEvidenceRe
         route=_first_string(metadata, ("route", "endpoint")),
         source=source,
         sink=_first_string(metadata, ("sink", "sink_function")),
-        dataflow=json.dumps(dataflow, sort_keys=True, default=str) if isinstance(dataflow, dict) else None,
+        dataflow=json.dumps(dataflow, sort_keys=True, default=str) if isinstance(dataflow, dict | list) else None,
         remediation=_first_string(metadata, ("remediation", "fix")),
         references=_string_list(metadata.get("references")),
         raw=item,
@@ -168,6 +168,8 @@ def _records_from_zap(data: dict[str, Any], path: Path, *, default_scanner_type:
                 continue
             instances = alert.get("instances") if isinstance(alert.get("instances"), list) else [{}]
             for instance in instances or [{}]:
+                if not isinstance(instance, dict):
+                    continue
                 instance_obj = _as_object(instance)
                 url = _first_string(instance_obj, ("uri", "url")) or site_base
                 records.append(
@@ -396,7 +398,7 @@ def _records_from_sarif(data: dict[str, Any], path: Path, *, default_scanner_typ
                     confidence=_confidence(metadata.get("confidence") or "medium"),
                     artifact=_first_string(metadata, ("artifact", "service", "application")),
                     component=_first_string(metadata, ("component", "route", "handler")),
-                    message=str(_as_object(result.get("message")).get("text") or rule_id),
+                    message=_sarif_message(result.get("message")) or rule_id,
                     url=_first_string(metadata, ("url", "uri", "endpoint")),
                     method=_first_string(metadata, ("method", "http_method")),
                     route=_first_string(metadata, ("route", "endpoint_path")),
@@ -497,7 +499,7 @@ def _trivy_source(item: dict[str, Any], target: str) -> dict[str, Any]:
     start = _as_object(cause.get("StartLine"))
     return {
         "path": _first_string(cause, ("Filename", "Resource")) or target,
-        "line": cause.get("StartLine") or start.get("Line") or 1,
+        "line": start.get("Line") or cause.get("StartLine") or 1,
     }
 
 
@@ -523,8 +525,8 @@ def _source_location(value: dict[str, Any]) -> SourceLocation | None:
         return None
     return SourceLocation(
         path=Path(path),
-        line=max(1, int(_optional_float(value.get("line") or value.get("startLine")) or 1)),
-        column=max(1, int(_optional_float(value.get("column") or value.get("col") or value.get("startColumn")) or 1)),
+        line=_positive_int(value.get("line") or value.get("startLine"), default=1),
+        column=_positive_int(value.get("column") or value.get("col") or value.get("startColumn"), default=1),
         snippet=str(value.get("snippet") or value.get("content") or ""),
     )
 
@@ -554,16 +556,16 @@ def _sarif_location(result: dict[str, Any], path: Path) -> SourceLocation | None
     uri = artifact.get("uri") or str(path)
     return SourceLocation(
         path=Path(str(uri)),
-        line=max(1, int(region.get("startLine") or 1)),
-        column=max(1, int(region.get("startColumn") or 1)),
+        line=_positive_int(region.get("startLine"), default=1),
+        column=_positive_int(region.get("startColumn"), default=1),
     )
 
 
 def _first_string(data: dict[str, Any], keys: tuple[str, ...]) -> str | None:
     for key in keys:
-        value = data.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+        value = _scalar_string(data.get(key))
+        if value:
+            return value
     return None
 
 
@@ -586,7 +588,15 @@ def _string_list(value: Any) -> list[str]:
         return [item.strip() for item in re.split(r"[\n,]+", value) if item.strip()]
     if not isinstance(value, list):
         return []
-    return [str(item).strip() for item in value if str(item).strip()]
+    values: list[str] = []
+    for item in value:
+        if isinstance(item, dict):
+            candidate = _first_string(item, ("url", "href", "uri", "reference"))
+        else:
+            candidate = _scalar_string(item)
+        if candidate:
+            values.append(candidate)
+    return values
 
 
 def _optional_float(value: Any) -> float | None:
@@ -600,6 +610,36 @@ def _optional_float(value: Any) -> float | None:
 
 def _normalize_label(value: str) -> str:
     return "_".join(part for part in "".join(char.lower() if char.isalnum() else " " for char in value).split() if part)
+
+
+def _scalar_string(value: Any) -> str | None:
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int | float):
+        return str(value)
+    if isinstance(value, list):
+        for item in value:
+            candidate = _scalar_string(item)
+            if candidate:
+                return candidate
+    return None
+
+
+def _positive_int(value: Any, *, default: int) -> int:
+    number = _optional_float(value)
+    if number is None:
+        return default
+    return max(1, int(number))
+
+
+def _sarif_message(value: Any) -> str | None:
+    if isinstance(value, str):
+        return value.strip() or None
+    message = _as_object(value)
+    return _first_string(message, ("text", "markdown"))
 
 
 def _stable_token(value: str) -> str:

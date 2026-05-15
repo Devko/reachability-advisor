@@ -178,6 +178,128 @@
       }
     },
     {
+      "id": "aws-network-acl-deny-precedes-public-security-group",
+      "provider": "aws",
+      "exposure": "public",
+      "network": {
+        "source_cidr": "203.0.113.50/32",
+        "target": "aws_instance.api",
+        "routes": [
+          {
+            "id": "aws_route.default",
+            "destination_cidr_block": "0.0.0.0/0",
+            "gateway_id": "igw-123"
+          }
+        ],
+        "network_acl_rules": [
+          {
+            "id": "aws_network_acl_rule.allow_public",
+            "rule_number": 200,
+            "rule_action": "allow",
+            "cidr_block": "0.0.0.0/0"
+          },
+          {
+            "id": "aws_network_acl_rule.deny_partner",
+            "rule_number": 100,
+            "rule_action": "deny",
+            "cidr_block": "203.0.113.0/24"
+          }
+        ],
+        "security_groups": [
+          {
+            "id": "aws_security_group.api",
+            "ingress": [
+              {
+                "id": "aws_security_group_rule.public_https",
+                "type": "ingress",
+                "cidr_blocks": ["0.0.0.0/0"]
+              }
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "decision": "blocked",
+        "blockers": ["network_acl_deny"],
+        "selected_resources": ["aws_network_acl_rule.deny_partner"]
+      }
+    },
+    {
+      "id": "azure-app-service-auth-constrains-public-gateway",
+      "provider": "azure",
+      "exposure": "public",
+      "network": {
+        "target": "azurerm_linux_web_app.api",
+        "application_gateways": [
+          {
+            "id": "azurerm_application_gateway.public"
+          }
+        ],
+        "auth_settings": [
+          {
+            "id": "azurerm_app_service_auth_settings.auth",
+            "enabled": true
+          }
+        ]
+      },
+      "expected": {
+        "decision": "constrained",
+        "blockers": ["app_service_auth"],
+        "selected_resources": ["azurerm_app_service_auth_settings.auth"]
+      }
+    },
+    {
+      "id": "gcp-cloud-armor-constrains-public-route",
+      "provider": "gcp",
+      "exposure": "public",
+      "network": {
+        "target": "google_cloud_run_v2_service.api",
+        "routes": [
+          {
+            "id": "google_compute_route.default",
+            "dest_range": "0.0.0.0/0",
+            "next_hop_gateway": "default-internet-gateway",
+            "priority": 1000
+          }
+        ],
+        "cloud_armor": [
+          {
+            "id": "google_compute_security_policy.edge"
+          }
+        ]
+      },
+      "expected": {
+        "decision": "constrained",
+        "blockers": ["cloud_armor_policy"],
+        "selected_resources": ["google_compute_security_policy.edge"]
+      }
+    },
+    {
+      "id": "aws-private-endpoint-egress-does-not-block-public-load-balancer",
+      "provider": "aws",
+      "exposure": "public",
+      "network": {
+        "target": "aws_ecs_service.api",
+        "load_balancers": [
+          {
+            "id": "aws_lb.public"
+          }
+        ],
+        "vpc_endpoints": [
+          {
+            "id": "aws_vpc_endpoint.s3",
+            "direction": "egress",
+            "target_role": "dependency"
+          }
+        ]
+      },
+      "expected": {
+        "decision": "constrained",
+        "blockers": ["private_endpoint_egress_only"],
+        "selected_resources": ["aws_vpc_endpoint.s3"]
+      }
+    },
+    {
       "id": "azure-private-endpoint-egress-does-not-block-public-ingress",
       "provider": "azure",
       "exposure": "public",
@@ -222,6 +344,25 @@
       }
     },
     {
+      "id": "gcp-private-service-connect-ingress-blocks-public-ingress",
+      "provider": "gcp",
+      "exposure": "public",
+      "network": {
+        "target": "google_cloud_run_v2_service.api",
+        "private_endpoints": [
+          {
+            "id": "google_compute_forwarding_rule.psc",
+            "direction": "ingress"
+          }
+        ]
+      },
+      "expected": {
+        "decision": "blocked",
+        "blockers": ["private_endpoint"],
+        "selected_resources": ["google_compute_forwarding_rule.psc"]
+      }
+    },
+    {
       "id": "kubernetes-service-mesh-deny-before-allow",
       "provider": "kubernetes",
       "exposure": "internal",
@@ -245,6 +386,36 @@
         "decision": "blocked",
         "blockers": ["authorization_policy_deny"],
         "selected_resources": ["authorizationpolicy.deny_legacy"]
+      }
+    },
+    {
+      "id": "kubernetes-service-mesh-allow-source-match",
+      "provider": "kubernetes",
+      "exposure": "internal",
+      "network": {
+        "target": "kubernetes_deployment.api",
+        "source_principal": "cluster.local/ns/frontend/sa/frontend",
+        "services": [{"id": "kubernetes_service.api"}],
+        "authorization_policies": [
+          {
+            "id": "authorizationpolicy.allow_frontend",
+            "action": "ALLOW",
+            "source_principal": "cluster.local/ns/frontend/sa/frontend",
+            "from": [
+              {
+                "source": {
+                  "principals": ["cluster.local/ns/frontend/sa/frontend"],
+                  "namespaces": ["frontend"]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "decision": "constrained",
+        "blockers": ["service_mesh_policy"],
+        "selected_resources": ["authorizationpolicy.allow_frontend"]
       }
     },
     {

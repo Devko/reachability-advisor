@@ -227,6 +227,14 @@ class ReadinessTests(unittest.TestCase):
         self.assertIn("unrendered_or_opaque_iac", blocker_kinds)
         self.assertIn("unrendered_or_opaque_kubernetes", blocker_kinds)
         self.assertEqual(report["warnings"][0]["kind"], "identity_effective_access_evidence")
+        messages = " ".join(item["message"] for item in [*report["blockers"], *report["warnings"]])
+        next_steps = " ".join(item.get("next_step", "") for item in [*report["blockers"], *report["warnings"]])
+        self.assertIn("release gate", messages)
+        self.assertIn("external source analyzer evidence", messages)
+        self.assertIn("unrendered or opaque IaC wrapper", messages)
+        self.assertIn("workload identity or effective-access evidence", messages)
+        self.assertIn("--source-evidence-in", next_steps)
+        self.assertIn("rendered plan/manifests", next_steps)
 
     def test_readiness_blocks_missing_critical_query_family_coverage(self) -> None:
         report = release_readiness_report(
@@ -295,6 +303,9 @@ class ReadinessTests(unittest.TestCase):
         self.assertIn("network_path_confidence", warning_kinds)
         self.assertIn("identity_effective_access_confidence", warning_kinds)
         self.assertIn("no source root supplied for source reachability", report["artifacts"][0]["warnings"])
+        self.assertTrue(any("low-confidence network path evidence" in warning["message"] for warning in report["warnings"]))
+        self.assertTrue(any("low-confidence identity or effective-access evidence" in warning["message"] for warning in report["warnings"]))
+        self.assertTrue(any("digest or exact image-reference" in step for step in report["artifacts"][0]["next_steps"]))
         self.assertEqual(report["summary"]["artifacts_missing_release_identity"], 0)
         self.assertEqual(report["summary"]["artifacts_missing_workload_match"], 1)
         self.assertEqual(report["artifacts"][0]["artifact_identity_strength"], "image_reference")

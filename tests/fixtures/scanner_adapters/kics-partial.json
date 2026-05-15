@@ -1,0 +1,19 @@
+{
+  "queries": [
+    "bad-query",
+    {
+      "query_id": 991,
+      "query_name": "Privileged container",
+      "severity": "HIGH",
+      "platform": "Kubernetes",
+      "files": [
+        {
+          "file_name": "pod.yaml",
+          "line": "not-a-number",
+          "resource_name": "Pod/web",
+          "search_value": "privileged: true"
+        }
+      ]
+    }
+  ]
+}

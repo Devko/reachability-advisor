@@ -468,6 +468,14 @@ reachability-advisor evidence-profile \
 
 The report names the missing release evidence: weak artifact identity, missing workload match, no network path, no identity path, external source coverage gaps, query-family coverage gaps, or unrendered Terraform/Kubernetes wrappers.
 
+Readiness failures are written for release owners, not only tool maintainers. Each blocker should be read as:
+
+- what evidence is missing or weak;
+- why that makes a release gate unsafe;
+- which input to generate or pass on the next run.
+
+For example, weak artifact identity means the scan could not tie the finding to the exact release artifact. Add an image digest or exact image reference through SBOM metadata or `--artifact-manifest`. Missing rendered deployment evidence means Terraform source or Helm/Kustomize templates were not enough for a release gate; pass `--terraform-plan` from `terraform show -json` or rendered Kubernetes YAML/JSON through `--kubernetes-manifest`.
+
 To enforce the same report during `scan`, add:
 
 ```bash

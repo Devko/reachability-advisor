@@ -164,12 +164,12 @@ def write_sarif(findings: list[Finding], path: str | Path) -> None:
 
 def _sarif_rule_help(finding: Finding) -> str:
     if _is_dependency(finding):
-        return "Reachability-aware dependency vulnerability finding."
+        return "Dependency vulnerability prioritized with SBOM, source, deployment, network, IAM/RBAC, and policy evidence."
     if _is_dynamic(finding):
-        return "Runtime scanner observation. Source reachability is reported only when source evidence exists."
+        return "Runtime scanner observation from DAST or similar evidence. Source reachability is reported only when source evidence exists."
     if _is_posture(finding):
-        return "Cloud posture finding from imported CSPM evidence or native local IaC checks. It is configuration context, not exploit proof."
-    return "Static scanner finding with source evidence when a real source location or data flow is available."
+        return "Cloud posture finding from imported CSPM evidence or native local IaC checks. This is configuration context, not proof of exploitability."
+    return "Static scanner finding from SAST or source evidence. Data flow and source locations are reported when the scanner supplied them."
 
 
 def write_diagnostics(findings: list[Finding], path: str | Path) -> None:
@@ -236,14 +236,14 @@ def _finding_message(finding: Finding) -> str:
         evidence = f"runtime={finding.runtime_evidence.state.value}; " if _is_dynamic(finding) else ""
         return (
             f"{finding.vulnerability.id} ({weakness}) reported by {tool}{location} "
-            f"is {finding.tier.value} (score {finding.score:.1f}); "
-            f"{evidence}source={reachability_label(finding.source.reachability)}; exposure={finding.context.exposure}; "
+            f"has priority {finding.tier.value} (score {finding.score:.1f}); "
+            f"{evidence}source evidence={reachability_label(finding.source.reachability)}; network exposure={finding.context.exposure}; "
             f"owner={finding.context.owner or 'unknown'}"
         )
     return (
         f"{finding.vulnerability.id} in {finding.component.name}@{finding.component.version or 'unknown'} "
-        f"is {finding.tier.value} (score {finding.score:.1f}); "
-        f"source={reachability_label(finding.source.reachability)}; exposure={finding.context.exposure}; "
+        f"has priority {finding.tier.value} (score {finding.score:.1f}); "
+        f"source evidence={reachability_label(finding.source.reachability)}; network exposure={finding.context.exposure}; "
         f"owner={finding.context.owner or 'unknown'}"
     )
 
@@ -257,13 +257,13 @@ def write_markdown_report(findings: list[Finding], path: str | Path, max_finding
         "",
         f"Generated at: {datetime.now(timezone.utc).isoformat()}",
         "",
-        "This report prioritizes dependency vulnerabilities, static findings, and runtime observations using SBOM, scanner, source, Terraform, Kubernetes, network, IAM, and policy evidence. It does not prove exploitability and must not be used for automatic suppression without review.",
+        "This report prioritizes dependency vulnerabilities, static scanner findings, runtime scanner observations, and cloud posture findings using SBOM, source, Terraform, Kubernetes, network, IAM/RBAC, and policy evidence. It does not prove exploitability and must not be used for automatic suppression without review.",
         "",
         "## Remediation queue",
         "",
     ]
     if not findings:
-        lines.append("No matching vulnerable components or scanner findings were found.")
+        lines.append("No matching dependency vulnerabilities or imported scanner findings were found for the supplied evidence.")
     for index, remediation in enumerate(remediations[:max_findings], start=1):
         lines.extend(_remediation_markdown(index, remediation))
     if len(remediations) > max_findings:
@@ -282,8 +282,8 @@ def _typed_markdown_sections(findings: list[Finding], max_findings: int = 15) ->
     sections: list[tuple[str, list[Finding]]] = [
         ("Fix now", [finding for finding in findings if finding.tier in {Tier.URGENT, Tier.HIGH}]),
         ("Investigate", [finding for finding in findings if finding.tier == Tier.MEDIUM]),
-        ("Runtime-observed findings", [finding for finding in findings if _is_dynamic(finding)]),
-        ("Static findings", [finding for finding in findings if _is_static(finding)]),
+        ("Runtime scanner findings", [finding for finding in findings if _is_dynamic(finding)]),
+        ("Static scanner findings", [finding for finding in findings if _is_static(finding)]),
         ("Cloud posture findings", [finding for finding in findings if _is_posture(finding)]),
         ("Dependency findings", [finding for finding in findings if _is_dependency(finding)]),
         ("Correlated findings", [finding for finding in findings if finding.correlated_evidence]),
@@ -306,13 +306,13 @@ def _markdown_summary(finding: Finding) -> str:
     if _is_dynamic(finding):
         state = finding.runtime_evidence.state.value
         unknowns = f"; unknown: {', '.join(finding.unknowns[:2])}" if finding.unknowns else ""
-        return f"runtime evidence `{state}`, source `{finding.source.reachability.value}`{unknowns}"
+        return f"runtime evidence `{state}`, source evidence `{finding.source.reachability.value}`{unknowns}"
     if _is_static(finding):
-        return f"static evidence `{finding.source.evidence_source}`, source `{finding.source.reachability.value}`"
+        return f"static scanner evidence `{finding.source.evidence_source}`, source evidence `{finding.source.reachability.value}`"
     if _is_posture(finding):
         posture = finding.posture_evidence
         return f"posture `{posture.rule_id}`, resource `{posture.resource_id or finding.component.name}`, expected `{posture.expected or 'unknown'}`, actual `{posture.actual or 'unknown'}`"
-    return f"dependency `{finding.component.display_name}`, source `{finding.source.reachability.value}`"
+    return f"dependency `{finding.component.display_name}`, source evidence `{finding.source.reachability.value}`"
 
 
 def _remediation_markdown(index: int, remediation: dict[str, Any]) -> list[str]:
@@ -327,8 +327,8 @@ def _remediation_markdown(index: int, remediation: dict[str, Any]) -> list[str]:
         f"- Vulnerabilities grouped: `{remediation['vulnerability_count']}`",
         f"- Max score: `{float(remediation['max_score']):.1f}`; confidence: `{remediation['confidence']}`",
         f"- Owner: `{owner}`",
-        f"- Source signal: `{remediation.get('reachability_label', remediation['reachability'])}` (`{remediation['reachability']}`)",
-        f"- Context: exposure=`{context['exposure']}`, environment=`{context['environment']}`, privilege=`{context['privilege']}`, criticality=`{context.get('criticality', 'unknown')}`",
+        f"- Source evidence: `{remediation.get('reachability_label', remediation['reachability'])}` (`{remediation['reachability']}`)",
+        f"- Runtime/deployment context: network exposure=`{context['exposure']}`, environment=`{context['environment']}`, IAM/RBAC privilege=`{context['privilege']}`, asset criticality=`{context.get('criticality', 'unknown')}`",
     ]
     if context.get("iam_impacts"):
         lines.append(f"- IAM impacts: `{', '.join(context['iam_impacts'])}`")
@@ -370,8 +370,8 @@ def _finding_markdown(index: int, finding: Finding) -> list[str]:
         f"- Finding type: `{finding.finding_type}`",
         f"- Score: `{finding.score:.1f}`; confidence: `{finding.confidence.value}`",
         f"- Owner: `{owner}`",
-        f"- Source signal: `{reachability_label(finding.source.reachability)}` (`{finding.source.reachability.value}`) - {finding.source.reason}",
-        f"- Context: exposure=`{finding.context.exposure}`, environment=`{finding.context.environment}`, privilege=`{finding.context.privilege}`, criticality=`{finding.context.criticality}`",
+        f"- Source evidence: `{reachability_label(finding.source.reachability)}` (`{finding.source.reachability.value}`) - {finding.source.reason}",
+        f"- Runtime/deployment context: network exposure=`{finding.context.exposure}`, environment=`{finding.context.environment}`, IAM/RBAC privilege=`{finding.context.privilege}`, asset criticality=`{finding.context.criticality}`",
     ]
     if _is_security_finding(finding):
         lines.append(f"- Scanner: `{finding.weakness.get('tool', 'unknown')}`; type=`{finding.weakness.get('scanner_type', 'unknown')}`; CWE=`{finding.weakness.get('cwe') or 'unknown'}`")
@@ -387,7 +387,7 @@ def _finding_markdown(index: int, finding: Finding) -> list[str]:
         for item in finding.correlated_evidence[:3]:
             lines.append(f"  - `{item.correlation_type}` confidence=`{item.confidence.value}`: {item.reason}")
     if finding.unknowns:
-        lines.append("- Unknowns:")
+        lines.append("- Unknown evidence and visibility gaps:")
         for unknown in finding.unknowns[:5]:
             lines.append(f"  - {unknown}")
     if finding.context.iam_impacts:
@@ -430,7 +430,7 @@ def _escape_annotation(message: str) -> str:
 
 
 def render_table(findings: list[Finding], limit: int = 20) -> str:
-    rows = [("Tier", "Score", "Artifact", "Component", "Finding", "Reachability", "Owner")]
+    rows = [("Priority", "Score", "Artifact", "Component", "Finding", "Source evidence", "Owner")]
     for finding in findings[:limit]:
         rows.append(
             (
@@ -476,11 +476,11 @@ def explain_finding(data: dict[str, Any], key: str | None = None, artifact: str 
         f"# Explanation: {title}",
         "",
         f"Artifact: `{selected['artifact']['name']}`",
-        f"Tier: `{selected['tier']}`; score: `{selected['score']}`; confidence: `{selected['confidence']}`",
+        f"Priority: `{selected['tier']}`; score: `{selected['score']}`; confidence: `{selected['confidence']}`",
         "",
         "## Evidence",
-        f"- Source reachability: `{selected['source_reachability'].get('label', selected['source_reachability']['state'])}` (`{selected['source_reachability']['state']}`) - {selected['source_reachability']['reason']}",
-        f"- Context: exposure=`{selected['context']['exposure']}`, environment=`{selected['context']['environment']}`, privilege=`{selected['context']['privilege']}`, criticality=`{selected['context'].get('criticality', 'unknown')}`",
+        f"- Source evidence: `{selected['source_reachability'].get('label', selected['source_reachability']['state'])}` (`{selected['source_reachability']['state']}`) - {selected['source_reachability']['reason']}",
+        f"- Runtime/deployment context: network exposure=`{selected['context']['exposure']}`, environment=`{selected['context']['environment']}`, IAM/RBAC privilege=`{selected['context']['privilege']}`, asset criticality=`{selected['context'].get('criticality', 'unknown')}`",
     ]
     if selected["context"].get("iam_impacts"):
         lines.append(f"- IAM impacts: `{', '.join(selected['context']['iam_impacts'])}`")
@@ -494,7 +494,7 @@ def explain_finding(data: dict[str, Any], key: str | None = None, artifact: str 
         lines.append(f"- Posture evidence: resource=`{posture.get('resource_id') or 'unknown'}`, provider=`{posture.get('provider') or 'unknown'}`, expected=`{posture.get('expected') or 'unknown'}`, actual=`{posture.get('actual') or 'unknown'}`")
     unknowns = selected.get("unknowns", [])
     if isinstance(unknowns, list) and unknowns:
-        lines.extend(["", "## Unknowns"])
+        lines.extend(["", "## Unknown Evidence And Visibility Gaps"])
         for unknown in unknowns:
             lines.append(f"- {unknown}")
     lines.extend(["", "## Rationale"])

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import io
 import json
 import re
+import runpy
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from reachability_advisor.cli import main
 from reachability_advisor.compare import compare_findings, delta_fails
@@ -18,6 +21,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class CliTests(unittest.TestCase):
+    def test_module_entrypoint_delegates_to_cli_main(self) -> None:
+        with (
+            patch("reachability_advisor.cli.main", return_value=0) as cli_main,
+            self.assertRaises(SystemExit) as raised,
+        ):
+            runpy.run_module("reachability_advisor.__main__", run_name="__main__")
+
+        self.assertEqual(raised.exception.code, 0)
+        cli_main.assert_called_once_with()
+
     def test_version_command(self) -> None:
         self.assertEqual(main(["version"]), 0)
 
@@ -79,7 +92,7 @@ class CliTests(unittest.TestCase):
             self.assertTrue(diagnostics["diagnostics"])
             self.assertIn("Reachability Advisor PR Summary", (out / "summary.md").read_text(encoding="utf-8"))
             html = (out / "graph.html").read_text(encoding="utf-8")
-            self.assertIn("Reachability Advisor Visual Report", html)
+            self.assertIn("Reachability Advisor Evidence Report", html)
             self.assertIn('id="graph"', html)
             self.assertIn("report-data", html)
             self.assertIn("asset-card", html)
@@ -361,7 +374,7 @@ class CliTests(unittest.TestCase):
             self.assertTrue(diagnostics["diagnostics"])
             self.assertTrue(all(not diagnostic["uri"].startswith("security-evidence://") for diagnostic in diagnostics["diagnostics"]))
             markdown = markdown_path.read_text(encoding="utf-8")
-            self.assertIn("## Runtime-observed findings", markdown)
+            self.assertIn("## Runtime scanner findings", markdown)
             self.assertIn("## Correlated findings", markdown)
             html = html_path.read_text(encoding="utf-8")
             self.assertIn("dynamic_runtime_observation", html)
@@ -1075,6 +1088,30 @@ class CliTests(unittest.TestCase):
             self.assertEqual(code, 10)
             readiness = json.loads((out / "readiness.json").read_text(encoding="utf-8"))
             self.assertEqual(readiness["status"], "blocked")
+            self.assertTrue(any("Next step:" in blocker.get("next_step", "") or blocker.get("next_step") for blocker in readiness["blockers"]))
+
+    def test_release_readiness_cli_error_names_blocker_and_next_step(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            err = io.StringIO()
+            with patch("sys.stderr", err):
+                code = main([
+                    "scan",
+                    "--sbom", str(ROOT / "samples/sboms/payments-api.cdx.json"),
+                    "--vuln-in", str(ROOT / "samples/vulnerabilities.json"),
+                    "--source-root", f"payments-api={ROOT / 'samples/source/payments-api'}",
+                    "--mapping-out", str(out / "mapping.json"),
+                    "--source-coverage-out", str(out / "source-coverage.json"),
+                    "--readiness-out", str(out / "readiness.json"),
+                    "--require-release-ready",
+                    "--no-table",
+                ])
+
+            self.assertEqual(code, 10)
+            text = err.getvalue()
+            self.assertIn("release evidence is blocked", text)
+            self.assertIn("Next step:", text)
+            self.assertIn("no rendered deployment workload", text)
 
     def test_explain_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

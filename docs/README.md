@@ -24,12 +24,14 @@ Use this page as the entry point for project documentation. The README stays foc
 - [Pipeline integration](pipeline.md) - GitHub Actions, composite action, release gates, baselines, and quality gates.
 - [Policy playbooks](policy_playbooks.md) - strict release, advisory PR, backlog migration, and review rule examples.
 - [IDE integration](ide.md) - VS Code wrapper behavior, settings, diagnostics, and evidence explorer.
+- [User-facing messages](user_facing_messages.md) - wording rules for CLI errors, readiness blockers, reports, and web labels.
 - [Community Terraform fixture packs](community_fixtures.md) - fixture-pack purpose, commands, anatomy, and contribution checklist.
 
 ## Project Health
 
 - [Roadmap](roadmap.md) - stabilization roadmap and release-readiness priorities.
 - [Maturity targets](maturity_targets.md) - detailed target state and implemented controls by domain.
+- [Production readiness review](production_readiness.md) - feature-by-feature readiness grades and next stabilization focus.
 - [Code quality](code_quality.md) - active gates, commands, and behavior coverage.
 - [Logic verification checklist](logic_verification.md) - manual review checklist for logic changes.
 - [Real-world validation](real_world_validation.md) - HCL/static validation corpus and complex app benchmarks.
@@ -44,6 +46,7 @@ Use this page as the entry point for project documentation. The README stays foc
 ## Documentation Maintenance
 
 - Update docs in the same change that changes CLI behavior, output schema, scoring, release gates, or supported evidence.
+- Keep user-facing wording self-explanatory: name the missing evidence, explain the impact, and give a concrete next step.
 - Keep command examples runnable from a fresh checkout. Prefer checked-in samples and local-only workflows.
 - Keep release gates and matrix references aligned with `Makefile`, `.github/workflows/ci.yml`, `.github/workflows/release.yml`, and `pyproject.toml`.
 - Put strategic work in [Roadmap](roadmap.md), detailed domain targets in [Maturity targets](maturity_targets.md), and implementation mechanics in the domain-specific docs above.

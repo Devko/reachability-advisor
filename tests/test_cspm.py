@@ -149,7 +149,7 @@ class CspmAdapterTests(unittest.TestCase):
 
             self.assertEqual(len(records), 4)
             self.assertEqual(records[0].source.line, 7)
-            self.assertEqual(records[1].source.line, 1)
+            self.assertEqual(records[1].source.line, 5)
             self.assertEqual(records[2].tool, "kics")
             self.assertEqual(records[3].tool, "tfsec")
 

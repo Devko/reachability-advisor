@@ -1,0 +1,27 @@
+{
+  "site": [
+    {
+      "@name": "https://app.example.test",
+      "alerts": [
+        "bad-alert",
+        {
+          "pluginid": 40012,
+          "alert": "Cross Site Scripting (Reflected)",
+          "riskdesc": "High (Medium)",
+          "cweid": 79,
+          "reference": [{"url": "https://www.zaproxy.org/docs/alerts/40012/"}],
+          "instances": [
+            "bad-instance",
+            {
+              "uri": "https://app.example.test/search?q=test",
+              "method": "GET",
+              "param": "q",
+              "attack": "<script>alert(1)</script>",
+              "evidence": "alert(1)"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

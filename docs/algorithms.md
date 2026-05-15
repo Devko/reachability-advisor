@@ -226,7 +226,7 @@ Route tables, AWS/Azure/GCP route resources, private endpoints, VPC access conne
 
 Network blockers carry semantics. `blocks` means the observed path should not contribute exposure points unless stronger evidence proves reachability. `constrains` means the path still exists, but auth, WAF, firewall, or API-key evidence reduces exposure weight and keeps non-exploited findings below `urgent`. Missing blocker semantics are treated as uncertainty.
 
-The effective exposure engine normalizes provider signals into one asset-level decision before scoring. It selects the strongest linked network path, routes the record through the AWS, Azure, GCP, Kubernetes, or fallback evaluator, joins the strongest effective-access or IAM capability record, and emits:
+The effective exposure engine normalizes provider signals into one asset-level decision before scoring. It evaluates each linked network path through the AWS, Azure, GCP, Kubernetes, or fallback evaluator, keeps provider-specific blocker semantics attached to each candidate, selects the strongest effective path after blocker normalization, joins the strongest effective-access or IAM capability record, and emits:
 
 - `decision`: `reachable`, `constrained`, `blocked`, `isolated`, `unknown`, or `reachable_without_effective_identity`;
 - `decision_basis`: the network or identity reason that drove the combined decision;

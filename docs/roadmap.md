@@ -18,7 +18,7 @@ Make every high-value workflow deterministic from checked-in or CI-produced arti
 - Python support target: 3.10, 3.11, 3.12, and 3.13.
 - Active gate set: compile, lint, strict type-checking, unit/workflow tests, coverage, sample, demo, Terraform fixture packs, release validation, package build, and wheel smoke test.
 - Coverage threshold: 93% branch-aware coverage.
-- Test inventory: 592 unit and workflow tests.
+- Test inventory: 610 unit and workflow tests.
 - Local-first boundary: no live cloud API calls, telemetry, automatic suppression, or automatic `not_affected` claims.
 
 ## Near-Term Stabilization
@@ -46,12 +46,13 @@ Acceptance criteria:
 - First-run commands work from a clean checkout after `python -m pip install -e ".[dev]"`.
 - Advisory workflows remain useful with partial evidence, while production profile failures identify missing release evidence directly.
 - Windows, Linux, and GitHub Actions examples describe equivalent paths where shell behavior differs.
+- CLI, report, and web messages name the missing evidence in plain language and include concrete next steps for release-gate blockers.
 
 Work items:
 
 - Add a Windows-native sample command path alongside Bash wrappers where needed.
 - Keep `demo`, `sample`, `fixtures`, and `release-check` documented as the preferred local sanity checks.
-- Improve user-facing errors for malformed inputs, missing source roots, missing deployment evidence, and unusable external evidence selectors.
+- Keep user-facing errors sharp for malformed inputs, missing source roots, missing deployment evidence, weak artifact identity, and unusable external evidence selectors.
 - Keep `analysis-profile=production` strict about external analyzer evidence and rendered deployment evidence.
 
 ### 3. Output Contract Stability

@@ -114,6 +114,141 @@ class EffectiveExposureEngineTests(unittest.TestCase):
         self.assertEqual(record["network"]["decision"], "blocked")
         self.assertEqual(record["blockers"][0]["effect"], "blocks")
 
+    def test_effective_exposure_uses_reachable_path_when_first_candidate_is_blocked(self) -> None:
+        context = ContextEvidence(
+            exposure="public",
+            confidence=Confidence.HIGH,
+            network_paths=[
+                {
+                    "provider": "aws",
+                    "exposure": "public",
+                    "path_type": "public_load_balancer",
+                    "entry": "internet",
+                    "steps": ["internet", "aws_vpc_endpoint.api", "aws_ecs_service.api"],
+                    "confidence": "high",
+                    "blockers": [{"kind": "vpc_endpoint_only", "effect": "blocks", "evidence": "endpoint only"}],
+                    "source": "terraform-plan",
+                },
+                {
+                    "provider": "aws",
+                    "exposure": "public",
+                    "path_type": "public_load_balancer",
+                    "entry": "internet",
+                    "steps": ["internet", "aws_lb.public", "aws_ecs_service.api"],
+                    "confidence": "high",
+                    "source": "terraform-plan",
+                },
+            ],
+        )
+
+        record = evaluate_effective_exposure("api", context)[0]
+
+        self.assertEqual(record["decision"], "reachable")
+        self.assertEqual(record["network"]["decision"], "reachable")
+        self.assertEqual(record["network"]["steps"], ["internet", "aws_lb.public", "aws_ecs_service.api"])
+
+    def test_effective_exposure_prefers_constrained_path_over_blocked_path(self) -> None:
+        context = ContextEvidence(
+            exposure="public",
+            confidence=Confidence.HIGH,
+            network_paths=[
+                {
+                    "provider": "aws",
+                    "exposure": "public",
+                    "path_type": "public_load_balancer",
+                    "entry": "internet",
+                    "steps": ["internet", "aws_vpc_endpoint.api", "aws_ecs_service.api"],
+                    "confidence": "high",
+                    "blockers": [{"kind": "vpc_endpoint_only", "effect": "blocks", "evidence": "endpoint only"}],
+                    "source": "terraform-plan",
+                },
+                {
+                    "provider": "aws",
+                    "exposure": "public",
+                    "path_type": "public_load_balancer",
+                    "entry": "internet",
+                    "steps": ["internet", "aws_lb.public", "aws_wafv2_web_acl.edge", "aws_ecs_service.api"],
+                    "confidence": "high",
+                    "blockers": [{"kind": "waf_or_firewall_policy", "effect": "constrains", "evidence": "WAF attached"}],
+                    "source": "terraform-plan",
+                },
+            ],
+        )
+
+        record = evaluate_effective_exposure("api", context)[0]
+
+        self.assertEqual(record["decision"], "constrained")
+        self.assertEqual(record["network"]["decision"], "constrained")
+        self.assertIn("waf_or_firewall_policy", {blocker["kind"] for blocker in record["network"]["blockers"]})
+        self.assertNotIn("vpc_endpoint_only", {blocker["kind"] for blocker in record["network"]["blockers"]})
+
+    def test_effective_exposure_keeps_blocked_decision_when_all_paths_are_blocked(self) -> None:
+        context = ContextEvidence(
+            exposure="public",
+            confidence=Confidence.HIGH,
+            network_paths=[
+                {
+                    "provider": "aws",
+                    "exposure": "public",
+                    "path_type": "public_load_balancer",
+                    "entry": "internet",
+                    "steps": ["internet", "aws_vpc_endpoint.api", "aws_ecs_service.api"],
+                    "confidence": "high",
+                    "blockers": [{"kind": "vpc_endpoint_only", "effect": "blocks", "evidence": "endpoint only"}],
+                    "source": "terraform-plan",
+                },
+                {
+                    "provider": "aws",
+                    "exposure": "internal",
+                    "path_type": "internal_ingress",
+                    "entry": "private_network",
+                    "steps": ["private_network", "aws_security_group.closed", "aws_ecs_service.api"],
+                    "confidence": "high",
+                    "blockers": [{"kind": "security_group_no_ingress", "effect": "blocks", "evidence": "no ingress"}],
+                    "source": "terraform-plan",
+                },
+            ],
+        )
+
+        record = evaluate_effective_exposure("api", context)[0]
+
+        self.assertEqual(record["decision"], "blocked")
+        self.assertEqual(record["network"]["decision"], "blocked")
+        self.assertIn("vpc_endpoint_only", {blocker["kind"] for blocker in record["network"]["blockers"]})
+
+    def test_effective_exposure_prefers_reachable_internal_path_over_blocked_public_path(self) -> None:
+        context = ContextEvidence(
+            exposure="public",
+            confidence=Confidence.HIGH,
+            network_paths=[
+                {
+                    "provider": "aws",
+                    "exposure": "public",
+                    "path_type": "public_load_balancer",
+                    "entry": "internet",
+                    "steps": ["internet", "aws_vpc_endpoint.api", "aws_ecs_service.api"],
+                    "confidence": "high",
+                    "blockers": [{"kind": "vpc_endpoint_only", "effect": "blocks", "evidence": "endpoint only"}],
+                    "source": "terraform-plan",
+                },
+                {
+                    "provider": "aws",
+                    "exposure": "internal",
+                    "path_type": "internal_ingress",
+                    "entry": "private_network",
+                    "steps": ["private_network", "aws_lb.internal", "aws_ecs_service.api"],
+                    "confidence": "high",
+                    "source": "terraform-plan",
+                },
+            ],
+        )
+
+        record = evaluate_effective_exposure("api", context)[0]
+
+        self.assertEqual(record["decision"], "reachable")
+        self.assertEqual(record["exposure"], "internal")
+        self.assertEqual(record["network"]["steps"], ["private_network", "aws_lb.internal", "aws_ecs_service.api"])
+
     def test_provider_layer_selects_identity_provider_when_network_provider_is_unknown(self) -> None:
         context = ContextEvidence(
             exposure="internal",

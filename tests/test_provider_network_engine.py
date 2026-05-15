@@ -136,6 +136,24 @@ class ProviderNetworkEngineTests(unittest.TestCase):
                 self.assertTrue(set(expected["blockers"]).issubset(_blocker_kinds(record)))
                 self.assertTrue(set(expected["selected_resources"]).issubset(_selected_resources(record)))
 
+    def test_provider_network_golden_fixtures_cover_stability_dimensions(self) -> None:
+        fixtures = json.loads((ROOT / "fixtures" / "network" / "provider-network-golden.json").read_text(encoding="utf-8"))
+        case_ids = {str(case["id"]) for case in fixtures["cases"]}
+
+        required = {
+            "aws-route-precedence-specific-blackhole",
+            "aws-network-acl-deny-precedes-public-security-group",
+            "azure-app-service-auth-constrains-public-gateway",
+            "gcp-cloud-armor-constrains-public-route",
+            "aws-private-endpoint-egress-does-not-block-public-load-balancer",
+            "azure-private-endpoint-inbound-blocks-public-ingress",
+            "gcp-private-service-connect-ingress-blocks-public-ingress",
+            "kubernetes-service-mesh-deny-before-allow",
+            "kubernetes-service-mesh-allow-source-match",
+        }
+
+        self.assertTrue(required.issubset(case_ids), sorted(required - case_ids))
+
     def test_provider_route_precedence_allows_selected_public_routes(self) -> None:
         cases = [
             (

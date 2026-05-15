@@ -4,13 +4,13 @@ These fixtures exercise the structured policy evaluator without requiring a clou
 
 `provider-policy-examples.json` contains sanitized examples based on common production policy shapes:
 
-- AWS cross-account role trust with an organization condition;
+- AWS cross-account role trust with organization and external-id conditions;
 - AWS trust principal mismatch;
-- AWS permissions boundary, service control policy, resource-policy explicit deny, and cross-account resource-policy allow;
+- AWS scoped identity-policy access, permissions boundary, service control policy, resource-policy explicit deny, and cross-account resource-policy allow;
 - Azure Key Vault reader role assignment;
 - Azure role assignment principal mismatch;
 - Azure deny assignment overriding a role assignment;
-- GCP Secret Manager conditional IAM binding;
+- GCP Secret Manager conditional IAM binding and cross-project scoped binding;
 - GCP principal access boundary and GKE Workload Identity cases;
 - Kubernetes service account RBAC for a named secret;
 - Kubernetes service account impersonation as privilege-escalation evidence.

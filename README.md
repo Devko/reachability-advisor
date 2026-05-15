@@ -78,7 +78,9 @@ Reachability Advisor is intentionally conservative. It does not make live cloud 
 - [Input adapters](docs/input_adapters.md) - scanner and context inputs accepted by the CLI.
 - [Evidence model](docs/evidence_model.md) and [scoring model](docs/scoring.md) - how evidence becomes prioritized findings.
 - [Pipeline integration](docs/pipeline.md) - CI, GitHub Actions, baselines, release gates, and generated artifacts.
+- [User-facing messages](docs/user_facing_messages.md) - wording rules for CLI errors, readiness blockers, reports, and web labels.
 - [Roadmap](docs/roadmap.md) - stabilization priorities and release-readiness acceptance criteria.
+- [Production readiness review](docs/production_readiness.md) - feature grades and next stabilization focus.
 
 ## Quality Snapshot
 

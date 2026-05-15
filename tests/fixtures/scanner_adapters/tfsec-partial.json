@@ -1,0 +1,16 @@
+{
+  "results": [
+    "bad-result",
+    {
+      "long_id": "aws-s3-enable-bucket-encryption",
+      "description": "Bucket encryption disabled",
+      "severity": "MEDIUM",
+      "resource": "aws_s3_bucket.logs",
+      "location": {
+        "filename": "main.tf",
+        "start_line": "not-a-number"
+      },
+      "links": [{"url": "https://aquasecurity.github.io/tfsec/"}]
+    }
+  ]
+}

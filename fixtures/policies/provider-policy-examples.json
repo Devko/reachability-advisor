@@ -42,6 +42,45 @@
       }
     },
     {
+      "name": "aws-cross-account-trust-with-external-id",
+      "provider": "aws",
+      "record": {
+        "provider": "aws",
+        "identity": "arn:aws:iam::111111111111:role/vendor",
+        "action": "sts:AssumeRole",
+        "impact": "iam_escalation",
+        "resource": "arn:aws:iam::222222222222:role/prod-readonly",
+        "trust_policy": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": "arn:aws:iam::111111111111:role/vendor"
+              },
+              "Action": "sts:AssumeRole",
+              "Resource": "arn:aws:iam::222222222222:role/prod-readonly",
+              "Condition": {
+                "StringEquals": {
+                  "sts:ExternalId": "vendor-123"
+                }
+              }
+            }
+          ]
+        },
+        "condition_context": {
+          "sts:ExternalId": "vendor-123"
+        }
+      },
+      "expected": {
+        "decision": "constrained_allow",
+        "policy_layer": "trust_policy",
+        "required_blocker": "condition",
+        "matched_statements": 1,
+        "principal_matched": true
+      }
+    },
+    {
       "name": "aws-trust-principal-mismatch-denies-assume-role",
       "provider": "aws",
       "record": {
@@ -226,6 +265,41 @@
       }
     },
     {
+      "name": "aws-scoped-identity-policy-tenant-prefix-read",
+      "provider": "aws",
+      "record": {
+        "provider": "aws",
+        "identity": "arn:aws:iam::111111111111:role/api",
+        "action": "s3:GetObject",
+        "impact": "data_access",
+        "resource": "arn:aws:s3:::tenant-data/tenant-a/report.csv",
+        "identity_policy": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": "s3:GetObject",
+              "Resource": "arn:aws:s3:::tenant-data/tenant-a/*",
+              "Condition": {
+                "StringEquals": {
+                  "aws:PrincipalTag/tenant": "tenant-a"
+                }
+              }
+            }
+          ]
+        },
+        "condition_context": {
+          "aws:PrincipalTag/tenant": "tenant-a"
+        }
+      },
+      "expected": {
+        "decision": "constrained_allow",
+        "policy_layer": "identity_policy",
+        "required_blocker": "condition",
+        "matched_statements": 1
+      }
+    },
+    {
       "name": "aws-resource-policy-explicit-deny-overrides-identity-allow",
       "provider": "aws",
       "record": {
@@ -293,6 +367,41 @@
         "policy_layer": "resource_policy",
         "matched_statements": 1,
         "principal_matched": true
+      }
+    },
+    {
+      "name": "gcp-cross-project-secret-accessor-scoped-binding",
+      "provider": "gcp",
+      "record": {
+        "provider": "gcp",
+        "identity": "serviceAccount:reporting@analytics.iam.gserviceaccount.com",
+        "action": "secretmanager.versions.access",
+        "impact": "data_access",
+        "resource": "projects/prod/secrets/customer-export",
+        "iam_policy": {
+          "bindings": [
+            {
+              "role": "roles/secretmanager.secretAccessor",
+              "members": [
+                "serviceAccount:reporting@analytics.iam.gserviceaccount.com"
+              ],
+              "resources": [
+                "projects/prod/secrets/customer-export"
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "constrained_allow",
+        "policy_layer": "iam_policy",
+        "required_blocker": "project_scope",
+        "matched_statements": 1,
+        "principal_matched": true,
+        "effective_permission": {
+          "allowed": true,
+          "decision": "constrained_allow"
+        }
       }
     },
     {

@@ -1,0 +1,41 @@
+{
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "CodeQL",
+          "rules": [
+            {
+              "id": "js/sql-injection",
+              "properties": {
+                "scanner_type": "sast",
+                "cwe": "CWE-89",
+                "security-severity": "8.8",
+                "artifact": "web-api",
+                "references": [{"url": "https://codeql.github.com"}]
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        "bad-result",
+        {
+          "ruleId": "js/sql-injection",
+          "level": "error",
+          "message": "String SARIF messages appear in some tools",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {"uri": "src/db.js"},
+                "region": {"startLine": "bad", "startColumn": "bad"}
+              }
+            }
+          ],
+          "codeFlows": [{"threadFlows": []}]
+        }
+      ]
+    }
+  ]
+}

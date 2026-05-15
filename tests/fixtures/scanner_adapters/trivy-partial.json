@@ -1,0 +1,22 @@
+{
+  "Results": [
+    "bad-result",
+    {
+      "Target": "deployment.yaml",
+      "Misconfigurations": [
+        "bad-misconfiguration",
+        {
+          "ID": "AVD-KSV-0012",
+          "Title": "Container runs as root",
+          "Severity": "HIGH",
+          "Resource": "Deployment/web",
+          "CauseMetadata": {
+            "Filename": "deployment.yaml",
+            "StartLine": {"Line": 9}
+          },
+          "References": [{"url": "https://avd.aquasec.com"}]
+        }
+      ]
+    }
+  ]
+}
