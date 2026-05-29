@@ -6,8 +6,8 @@
       "ecosystem": "npm",
       "path": "npm-express-ssrf",
       "components": [
-        {"name": "axios", "purl": "pkg:npm/axios@0.21.1", "expected_query_families": ["http-client"]},
-        {"name": "express", "purl": "pkg:npm/express@4.18.2", "expected_query_families": ["web-handler"]}
+        {"name": "axios", "purl": "pkg:npm/axios@1.16.1", "expected_query_families": ["http-client"]},
+        {"name": "express", "purl": "pkg:npm/express@5.2.1", "expected_query_families": ["web-handler"]}
       ]
     },
     {
@@ -57,8 +57,8 @@
       "ecosystem": "npm",
       "path": "npm-template-injection",
       "components": [
-        {"name": "ejs", "purl": "pkg:npm/ejs@3.1.6", "expected_query_families": ["template-engine"]},
-        {"name": "express", "purl": "pkg:npm/express@4.18.2", "expected_query_families": ["web-handler"]}
+        {"name": "ejs", "purl": "pkg:npm/ejs@6.0.1", "expected_query_families": ["template-engine"]},
+        {"name": "express", "purl": "pkg:npm/express@5.2.1", "expected_query_families": ["web-handler"]}
       ]
     },
     {
@@ -75,8 +75,8 @@
       "ecosystem": "npm",
       "path": "npm-upload-path",
       "components": [
-        {"name": "multer", "purl": "pkg:npm/multer@1.4.4", "expected_query_families": ["archive-file-io"]},
-        {"name": "express", "purl": "pkg:npm/express@4.18.2", "expected_query_families": ["web-handler"]}
+        {"name": "multer", "purl": "pkg:npm/multer@2.1.1", "expected_query_families": ["archive-file-io"]},
+        {"name": "express", "purl": "pkg:npm/express@5.2.1", "expected_query_families": ["web-handler"]}
       ]
     },
     {
