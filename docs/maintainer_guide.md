@@ -34,7 +34,7 @@ A release must meet these gates:
 
 ## Project governance
 
-The repository uses GNU GPL v3.0 or later for code and DCO sign-off for contributions. Releases must be documented and reproducible through the local quality gates.
+The repository uses the Apache License 2.0 for code and documentation, plus DCO sign-off for contributions. Releases must be documented and reproducible through the local quality gates.
 
 ## Documentation maintenance
 

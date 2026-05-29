@@ -165,13 +165,13 @@ def check_release_metadata() -> None:
         raise ReleaseCheckError("pyproject.toml must use the Production/Stable classifier")
     if "Development Status :: 4 - Beta" in pyproject or "Development Status :: 3 - Alpha" in pyproject:
         raise ReleaseCheckError("pyproject.toml still contains alpha/beta development status")
-    if 'license = "GPL-3.0-or-later"' not in pyproject:
-        raise ReleaseCheckError("pyproject.toml must declare GPL-3.0-or-later")
-    if "Apache-2.0" in pyproject or "Apache License" in pyproject:
-        raise ReleaseCheckError("pyproject.toml still contains Apache license metadata")
+    if 'license = "Apache-2.0"' not in pyproject:
+        raise ReleaseCheckError("pyproject.toml must declare Apache-2.0")
+    if "GPL-3.0" in pyproject or "GNU General Public License" in pyproject:
+        raise ReleaseCheckError("pyproject.toml still contains GPL license metadata")
     license_text = (ROOT / "LICENSE").read_text(encoding="utf-8").lstrip()
-    if not license_text.startswith("GNU GENERAL PUBLIC LICENSE"):
-        raise ReleaseCheckError("LICENSE must contain the GNU General Public License text")
+    if not license_text.startswith("Apache License\nVersion 2.0"):
+        raise ReleaseCheckError("LICENSE must contain the Apache License 2.0 text")
     _check_no_former_project_positioning()
 
 

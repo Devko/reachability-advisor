@@ -4,7 +4,7 @@
   "description": "Runs Reachability Advisor and displays prioritized dependency, SAST, DAST, and evidence diagnostics.",
   "version": "1.0.0",
   "publisher": "reachability-advisor-contributors",
-  "license": "GPL-3.0-or-later",
+  "license": "Apache-2.0",
   "engines": {
     "vscode": "^1.90.0"
   },
