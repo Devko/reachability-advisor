@@ -966,6 +966,26 @@ class ScanUsesConfigTests(unittest.TestCase):
         implicit = Namespace(fail_on_tier=None, sbom=[], _explicit=set())
         self.assertEqual(apply_config_defaults(implicit, loaded).fail_on_tier, "medium")
 
+    def test_equals_form_flags_count_as_explicit(self) -> None:
+        # `--flag=value` must be detected as explicitly passed. If it is not, config
+        # silently overrides a gate the user set on the command line.
+        from reachability_advisor.cli import explicit_dests
+        from reachability_advisor.cli_parser import build_parser
+
+        parser = build_parser()
+        for argv in (
+            ["scan", "--fail-on-tier", "urgent"],
+            ["scan", "--fail-on-tier=urgent"],
+        ):
+            with self.subTest(argv=argv):
+                self.assertIn("fail_on_tier", explicit_dests(parser, argv))
+
+    def test_unpassed_flags_are_not_reported_as_explicit(self) -> None:
+        from reachability_advisor.cli import explicit_dests
+        from reachability_advisor.cli_parser import build_parser
+
+        self.assertNotIn("fail_on_tier", explicit_dests(build_parser(), ["scan", "--no-table"]))
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -1030,14 +1050,31 @@ def apply_config_defaults(args: argparse.Namespace, loaded: LoadedConfig) -> arg
     return args
 ```
 
-Record which flags were passed explicitly. In `main`, immediately after parsing:
+Record which flags were passed explicitly. Add to `cli.py`:
 
 ```python
-    args._explicit = {
+def explicit_dests(parser: argparse.ArgumentParser, argv: list[str]) -> set[str]:
+    """Return the dests of options actually present in argv.
+
+    Both `--flag value` and `--flag=value` must be detected. Missing the second form
+    would let configuration silently override an explicitly passed gate value, which is
+    the same class of silent weakening this project refuses everywhere else.
+
+    ``parser._actions`` is private but stable across every supported CPython; argparse
+    exposes no public way to map argv tokens back to destinations.
+    """
+    passed = {token.split("=", 1)[0] for token in argv if token.startswith("-")}
+    return {
         action.dest
         for action in parser._actions
-        if action.dest != "help" and any(option in argv for option in action.option_strings)
+        if action.dest != "help" and passed.intersection(action.option_strings)
     }
+```
+
+In `main`, immediately after parsing:
+
+```python
+    args._explicit = explicit_dests(parser, list(argv))
 ```
 
 Then, in the `scan` branch before the scan runs:
