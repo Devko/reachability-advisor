@@ -2,7 +2,7 @@
 
 ## Current gates
 
-- Unit and workflow tests: 968.
+- Unit and workflow tests: 974.
 - Coverage threshold: 93%.
 - Current measured coverage: passes the 93% line/branch-aware coverage gate.
 - Test runner: `scripts/run_tests.py`.
@@ -64,7 +64,7 @@ python -m build --no-isolation
 
 ## Engineering choices
 
-- Standard library only in the Python scanner.
+- Standard library plus PyYAML (the only runtime dependency, used exclusively through `yaml.safe_load`) in the Python scanner.
 - Dataclass model for reviewability.
 - Explicit parser errors for malformed inputs.
 - Output renderers separated from scoring.

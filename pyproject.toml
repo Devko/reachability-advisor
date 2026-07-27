@@ -10,6 +10,12 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
+dependencies = [
+  # First runtime dependency. Config and Kubernetes manifests are YAML, and a hand-written
+  # parser for a security tool's untrusted input is a liability -- an audit found a stack
+  # overflow in the previous one. Only `yaml.safe_load` is ever used.
+  "PyYAML>=6",
+]
 authors = [{name = "Reachability Advisor Contributors"}]
 keywords = [
   "application-security",
@@ -55,6 +61,9 @@ dev = [
   # `make package` runs `python -m build --no-isolation`, so the build backend declared in
   # [build-system] requires must already be importable. Keep this floor identical to that pin.
   "setuptools>=77",
+  # Type stubs for the PyYAML runtime dependency, needed for `mypy --strict`. Dev-only; not
+  # shipped to end users.
+  "types-PyYAML>=6",
 ]
 
 [tool.setuptools.packages.find]
