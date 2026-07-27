@@ -336,5 +336,344 @@ class FindingTypeLabelTests(unittest.TestCase):
         self.assertIsNone(node["weakness"]["cwe"])
 
 
+class EvidenceStateInvariantTests(unittest.TestCase):
+    """The product invariant: absence of evidence may never render as a positive claim.
+
+    The redesign introduced a positive vocabulary ("proven", "confirmed by evidence",
+    "N of M links proven") and defaulted every step that was not explicitly flagged to
+    it, so a finding with ``exposure="unknown"``, no network path and a populated
+    ``unknowns`` list rendered three links as proven in the confirmed hue. Measured in
+    the page before the fix: 88 proven / 21 unknown across the 12 default-visible rows;
+    after: 73 / 36, and the audited finding's verdict moved from "7 of 10 links proven"
+    to "4 of 10".
+    """
+
+    def test_a_chain_node_is_only_proven_when_it_names_an_evidence_layer(self) -> None:
+        body = re.search(r"function chainNodeState\(node\) \{(.*?)\n\}", HTML_TEMPLATE, re.DOTALL)
+        self.assertIsNotNone(body)
+        source = body.group(1) if body else ""
+
+        self.assertIn("hasCollectedEvidence(node) ? \"proven\" : \"unknown\"", source)
+        # The old default: everything not explicitly flagged claimed proof.
+        self.assertNotIn('  return "proven";', source)
+
+    def test_a_chain_edge_is_only_proven_when_it_names_an_evidence_layer(self) -> None:
+        body = re.search(r"function chainEdgeState\(edge\) \{(.*?)\n\}", HTML_TEMPLATE, re.DOTALL)
+        self.assertIsNotNone(body)
+        source = body.group(1) if body else ""
+
+        self.assertIn("hasCollectedEvidence(edge) ? \"proven\" : \"unknown\"", source)
+        self.assertNotIn('edge.unknown ? "unknown" : "proven"', source)
+
+    def test_the_context_fallback_layer_is_not_an_evidence_claim(self) -> None:
+        # "Context" is what the builder writes when nothing was collected for a step.
+        body = re.search(r"function hasCollectedEvidence\(item\) \{(.*?)\n\}", HTML_TEMPLATE, re.DOTALL)
+        self.assertIsNotNone(body)
+        source = body.group(1) if body else ""
+
+        self.assertIn("CONTEXT_EVIDENCE_LAYER", source)
+        self.assertIn('const CONTEXT_EVIDENCE_LAYER = "context";', HTML_TEMPLATE)
+
+    def test_an_edge_name_never_starts_from_a_positive_state(self) -> None:
+        body = re.search(r"function edgeMarkState\(edge\) \{(.*?)\n\}", HTML_TEMPLATE, re.DOTALL)
+        self.assertIsNotNone(body)
+        source = body.group(1) if body else ""
+
+        self.assertTrue(source.rstrip().endswith('return "unknown";'), source)
+        self.assertNotIn('let state = "confirmed by evidence";', HTML_TEMPLATE)
+
+    def test_the_state_line_never_falls_back_to_the_word_proven(self) -> None:
+        self.assertIn('stateEl.textContent = state === "proven" ? node.evidenceLayer : state;', HTML_TEMPLATE)
+        self.assertNotIn('node.evidenceLayer || "proven"', HTML_TEMPLATE)
+
+    def test_only_links_with_a_proven_node_and_edge_count_toward_the_verdict(self) -> None:
+        self.assertIn('if (nodeState === "proven" && edgeState === "proven") provenLinks += 1;', HTML_TEMPLATE)
+
+    def test_an_unmapped_artifact_does_not_claim_the_sbom_layer(self) -> None:
+        finding = audit_finding(asset="unmapped:posture:aws_s3_bucket_public", finding_type="cloud_posture_finding")
+        path = build_attack_paths([finding], [], [], [])[0]
+        artifact = next(node for node in path["nodes"] if node["type"] == "artifact")
+        edge = next(edge for edge in path["edges"] if edge["type"] == "workload_artifact")
+
+        self.assertEqual(artifact["evidenceLayer"], "Context")
+        self.assertEqual(artifact["state"], "unknown")
+        self.assertTrue(edge["unknown"])
+
+    def test_a_mapped_artifact_still_claims_the_sbom_layer(self) -> None:
+        path = build_attack_paths([audit_finding(asset="payments-api")], [], [], [])[0]
+        artifact = next(node for node in path["nodes"] if node["type"] == "artifact")
+        edge = next(edge for edge in path["edges"] if edge["type"] == "workload_artifact")
+
+        self.assertEqual(artifact["evidenceLayer"], "SBOM")
+        self.assertEqual(artifact["state"], "normal")
+        self.assertFalse(edge["unknown"])
+
+
+class GraphMarkEncodingTests(unittest.TestCase):
+    """Hue encodes evidence state. Severity is a width and a labelled chip, never a hue.
+
+    Three audits found this independently. Measured in the page before the fix, light
+    theme: Attack Paths 6 of 24 edges on --sev-medium-ink; Architecture 27 of 27 edges
+    on --sev-urgent/high/medium-ink; Evidence Paths 24 of 32. Those hues appear nowhere
+    in the five-state legend rendered directly above them, and --sev-high-ink vs
+    --sev-medium-ink measures CIE dE 2.7 under deuteranopia against a stated bar of 12.
+    After: every edge in every view strokes from one of the five legend tokens, and the
+    worst hue-bearing pair measures dE 25.7 under deuteranopia.
+    """
+
+    CSS = HTML_TEMPLATE.split("<style>", 1)[1].split("</style>", 1)[0]
+
+    def test_no_edge_rule_strokes_from_a_severity_token(self) -> None:
+        offenders = [
+            line.strip()
+            for line in self.CSS.splitlines()
+            if line.lstrip().startswith(".edge") and "--sev-" in line
+        ]
+
+        self.assertEqual(offenders, [])
+
+    def test_no_graph_node_plate_is_filled_from_a_severity_token(self) -> None:
+        offenders = [
+            line.strip()
+            for line in self.CSS.splitlines()
+            if ".attack-graph-circle" in line and "--sev-" in line
+        ]
+
+        self.assertEqual(offenders, [])
+
+    def test_every_state_the_legend_names_has_a_stroke_rule(self) -> None:
+        for state in ("confirmed", "blocked", "internal", "structural", "unknown"):
+            self.assertIn(f".edge.state-{state} {{", self.CSS)
+
+    def test_the_two_neutral_states_are_separated_by_texture_not_by_hue(self) -> None:
+        # --mark-unknown is deliberately near-neutral, so its dash is what carries it.
+        self.assertIn("stroke-dasharray", css_declaration(self.CSS, ".edge.state-unknown"))
+        self.assertNotIn("stroke-dasharray", css_declaration(self.CSS, ".edge.state-structural"))
+        self.assertIn("stroke-dasharray", css_declaration(self.CSS, ".edge.state-blocked"))
+
+    def test_the_entry_edge_no_longer_borrows_the_unknown_dash(self) -> None:
+        # A known public entry rendered dashed grey, which the legend maps to
+        # "unknown, evidence missing".
+        self.assertNotIn(".edge.entry { stroke-dasharray", self.CSS)
+
+    def test_the_spoken_states_and_the_legend_describe_the_same_five_things(self) -> None:
+        legend = dict(re.findall(r'<i class="swatch swatch-(\w+)" aria-hidden="true"></i>([^<]+)</span>', HTML_TEMPLATE))
+        spoken = dict(re.findall(r'(\w+): "([^"]+)"', HTML_TEMPLATE.split("MARK_STATE_TEXT = {", 1)[1].split("};", 1)[0]))
+
+        self.assertEqual(set(legend), set(spoken))
+        self.assertEqual(set(legend), {"confirmed", "blocked", "internal", "structural", "unknown"})
+        # The caption is a label and the accessible name is a sentence, so they
+        # share the word that distinguishes the state rather than the phrasing.
+        for state, keyword in (
+            ("confirmed", "confirmed"),
+            ("blocked", "blocked by a control"),
+            ("internal", "internal pivot"),
+            ("structural", "structural step"),
+            ("unknown", "unknown, evidence missing"),
+        ):
+            self.assertIn(keyword, legend[state])
+            self.assertIn(keyword, spoken[state])
+
+
+class GraphEdgeAccessibilityTests(unittest.TestCase):
+    """Architecture and Evidence Paths drew 27 and 32 edges with no name and no tab stop."""
+
+    def test_every_edge_builder_takes_and_applies_an_accessible_name(self) -> None:
+        for builder in ("architectureEdgePath", "edgePath", "fanEdgePath"):
+            signature = re.search(rf"function {builder}\(([^)]*)\)", HTML_TEMPLATE)
+            self.assertIsNotNone(signature, builder)
+            self.assertIn("accessibleName", signature.group(1) if signature else "")
+
+    def test_the_named_edge_helper_makes_the_path_reachable_and_announced(self) -> None:
+        body = re.search(r"function namedEdge\((.*?)\n\}", HTML_TEMPLATE, re.DOTALL)
+        self.assertIsNotNone(body)
+        source = body.group(1) if body else ""
+
+        self.assertIn('path.setAttribute("tabindex", "0")', source)
+        self.assertIn('path.setAttribute("aria-label", accessibleName)', source)
+
+
+class RiskBoardSemanticsTests(unittest.TestCase):
+    """Spec section 6 makes this list the graph's text equivalent, so its roles matter.
+
+    Measured before: 0 table/row/columnheader/cell elements, 12 role=button rows each
+    containing a focusable link, and both numeric columns announced as bare digits
+    inside one 281-character run-on name. After: 1 table, 13 rows, 7 identified column
+    headers, 84 described cells, 0 nested interactive controls.
+    """
+
+    def test_the_board_is_a_table_with_identified_column_headers(self) -> None:
+        self.assertIn('board.setAttribute("role", "table")', HTML_TEMPLATE)
+        self.assertIn('cell.setAttribute("role", "columnheader")', HTML_TEMPLATE)
+        self.assertIn('cell.id = `riskCol${index}`;', HTML_TEMPLATE)
+
+    def test_every_body_cell_points_at_its_column_header(self) -> None:
+        body = re.search(r"function riskCell\(columnIndex, className\) \{(.*?)\n\}", HTML_TEMPLATE, re.DOTALL)
+        self.assertIsNotNone(body)
+        source = body.group(1) if body else ""
+
+        self.assertIn('cell.setAttribute("role", "cell")', source)
+        self.assertIn('cell.setAttribute("aria-describedby", `riskCol${columnIndex}`)', source)
+
+    def test_the_numeric_cells_carry_their_column_name_in_the_accessible_name(self) -> None:
+        self.assertIn('visuallyHidden("findings: ")', HTML_TEMPLATE)
+        self.assertIn('visuallyHidden("in-use finding', HTML_TEMPLATE)
+
+    def test_the_row_is_not_a_button_wrapping_a_link(self) -> None:
+        row = re.search(r"function renderRiskRow\(scenario, layout\) \{(.*?)\n  const severity", HTML_TEMPLATE, re.DOTALL)
+        self.assertIsNotNone(row)
+        source = row.group(1) if row else ""
+
+        self.assertIn('row.setAttribute("role", "row")', source)
+        self.assertNotIn('row.setAttribute("role", "button")', HTML_TEMPLATE)
+
+    def test_the_selected_row_exposes_its_selection(self) -> None:
+        self.assertIn('row.setAttribute("aria-current", "true")', HTML_TEMPLATE)
+        self.assertIn('.risk-row[aria-current="true"]', HTML_TEMPLATE)
+
+    def test_each_attack_path_link_is_named_for_its_own_scenario(self) -> None:
+        self.assertIn('`Open attack path for ${scenario.title || "risk scenario"}`', HTML_TEMPLATE)
+
+
+class RightRailLayoutTests(unittest.TestCase):
+    """#riskListRegion measured 0 visible pixels at 1366x768 and 1280x800, in every view.
+
+    It is the only text equivalent of the SVG in the Architecture and Evidence views,
+    and the document skip link points at it. After the fix it measures 140 visible
+    pixels at 1366x768 with all 12 items reachable by scrolling.
+    """
+
+    CSS = HTML_TEMPLATE.split("<style>", 1)[1].split("</style>", 1)[0]
+
+    def test_neither_content_row_of_the_rail_is_sized_from_the_viewport(self) -> None:
+        rows = re.search(r"grid-template-rows: (auto minmax[^;]*);", css_declaration(self.CSS, ".right-panel"))
+        self.assertIsNotNone(rows)
+        declaration = rows.group(1) if rows else ""
+
+        self.assertNotIn("vh", declaration)
+        # Both tracks are proportional with a floor, so neither can starve the other.
+        self.assertEqual(declaration.count("minmax"), 2)
+        self.assertIn("fr", declaration)
+
+    def test_the_risk_list_can_take_focus_from_the_skip_link(self) -> None:
+        self.assertIn('id="riskListRegion" tabindex="-1"', HTML_TEMPLATE)
+
+    def test_the_skip_link_follows_the_list_that_is_actually_rendered(self) -> None:
+        # In the Attack view the rail list is display:none and the strip is the list.
+        body = re.search(r"function updateSkipLinkTarget\(\) \{(.*?)\n\}", HTML_TEMPLATE, re.DOTALL)
+        self.assertIsNotNone(body)
+        source = body.group(1) if body else ""
+
+        self.assertIn('link.setAttribute("href", "#attackRiskSidebar")', source)
+        self.assertIn('link.setAttribute("href", "#riskListRegion")', source)
+        self.assertIn("sidebar.tabIndex = -1", source)
+
+
+class IdentifierTypographyTests(unittest.TestCase):
+    """The mono rule reached 1 of 32 rendered identifiers; it now reaches 40 of 40.
+
+    isIdentifierText() rejects any string containing whitespace, so the rule only ever
+    fired when an identifier was the entire string -- which is almost never true in the
+    detail rail, the risk-list subtitles or the evidence category lists.
+    """
+
+    def test_a_text_run_splitter_exists_and_wraps_tokens_in_mono(self) -> None:
+        body = re.search(r"function identifierRuns\(value\) \{(.*?)\n\}", HTML_TEMPLATE, re.DOTALL)
+        self.assertIsNotNone(body)
+        source = body.group(1) if body else ""
+
+        self.assertIn('span.className = "mono"', source)
+        self.assertIn("isIdentifierText(token)", source)
+
+    def test_the_surfaces_the_audit_measured_all_route_through_it(self) -> None:
+        for call in (
+            "title.appendChild(identifierRuns(item.label",
+            "detail.appendChild(identifierRuns([item.detail",
+            "button.appendChild(identifierRuns(item.label",
+            "meta.appendChild(identifierRuns(",
+            "item.appendChild(identifierRuns(value))",
+        ):
+            self.assertIn(call, HTML_TEMPLATE)
+
+    def test_two_prose_words_joined_by_a_slash_are_not_an_identifier(self) -> None:
+        self.assertIn("if (/^[A-Za-z]+\\/[A-Za-z]+$/.test(raw)) return false;", HTML_TEMPLATE)
+
+
+class LabelTruncationTests(unittest.TestCase):
+    """Distinct evidence rendered as byte-identical chips: 6 ambiguous groups, now 3."""
+
+    def test_an_identifier_keeps_its_last_segment_when_it_is_shortened(self) -> None:
+        # "aws_ecs_task_definition…" was four different task definitions.
+        self.assertIn("const tail = last > 0 ? raw.slice(last) : \"\";", HTML_TEMPLATE)
+        self.assertIn('return `${raw.slice(0, budget - tail.length - 1).replace(/[._:-]+$/, "")}…${tail}`;', HTML_TEMPLATE)
+
+    def test_a_prose_string_keeps_a_trailing_identifier(self) -> None:
+        self.assertIn("if (words.length > 2 && isIdentifierText(tail) && tail.length + 4 <= budget) {", HTML_TEMPLATE)
+
+
+class PrintPaginationTests(unittest.TestCase):
+    """A width-only print fit let a 1802px shell span 2.5 sheets, sliced through nodes."""
+
+    def test_the_print_fit_is_computed_on_both_axes(self) -> None:
+        self.assertIn("const PRINT_CONTENT_HEIGHT_PX = 680;", HTML_TEMPLATE)
+        self.assertIn(
+            "const scale = Math.min(1, PRINT_CONTENT_PX / width, PRINT_CONTENT_HEIGHT_PX / height);",
+            HTML_TEMPLATE,
+        )
+
+    def test_the_withdrawal_note_names_the_axis_that_did_not_fit(self) -> None:
+        self.assertIn("points tall", HTML_TEMPLATE)
+        self.assertIn("points wide", HTML_TEMPLATE)
+
+
+class ChainOverflowTests(unittest.TestCase):
+    """The break scrolled off screen on a resize and the fade cue never updated."""
+
+    def test_the_chain_is_observed_for_resize_alongside_the_graph(self) -> None:
+        body = re.search(r"function setupViewportRefit\(\) \{(.*?)\n\}", HTML_TEMPLATE, re.DOTALL)
+        self.assertIsNotNone(body)
+        source = body.group(1) if body else ""
+
+        self.assertIn("scrollChainToBreak()", source)
+        self.assertIn("observer.observe(chainTrack)", source)
+
+    def test_the_track_opens_at_the_entry_link_and_scrolls_only_to_the_break(self) -> None:
+        self.assertIn("chainTrack.scrollLeft = 0;\nscrollChainToBreak();", HTML_TEMPLATE.replace("  ", ""))
+
+
+class ShellMinificationTests(unittest.TestCase):
+    """The shell's authoring prose shipped to every reader: ~42 KB per report."""
+
+    def test_the_rendered_shell_drops_comments_without_dropping_declarations(self) -> None:
+        from reachability_advisor.visual import _report_shell
+
+        shell = _report_shell()
+
+        self.assertLess(len(shell), len(HTML_TEMPLATE))
+        # Nothing load bearing may go with them.
+        for token in ("__REPORT_DATA__", ".edge.state-unknown", "function chainNodeState(node)", "</style>"):
+            self.assertIn(token, shell)
+
+    def test_no_line_of_the_rendered_shell_is_a_comment(self) -> None:
+        from reachability_advisor.visual import _report_shell
+
+        stray = [line for line in _report_shell().splitlines() if line.startswith(("//", "/*"))]
+
+        self.assertEqual(stray, [])
+
+    def test_the_report_still_parses_as_one_html_document_with_its_payload(self) -> None:
+        html = render_html_report([audit_finding()])
+
+        self.assertTrue(html.startswith("<!doctype html>"))
+        self.assertEqual(html.count('<script id="report-data"'), 1)
+        self.assertIn("</html>", html)
+        strict_report_payload(html)
+
+
+def css_declaration(css: str, selector: str) -> str:
+    match = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", css)
+    return match.group(1) if match else ""
+
+
 if __name__ == "__main__":
     unittest.main()

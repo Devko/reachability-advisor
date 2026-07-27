@@ -10,7 +10,7 @@ EXPOSURE_RANK = {"unknown": 0, "isolated": 1, "private": 1, "internal": 2, "exte
 CARD_LAYOUT = {
     "entry_width": 210.0,
     "entry_height": 96.0,
-    "path_width": 290.0,
+    "path_width": 340.0,
     "path_height": 152.0,
     "asset_width": 410.0,
     "asset_height": 292.0,
@@ -20,8 +20,8 @@ CARD_LAYOUT = {
     "vulnerability_gap": 16.0,
     "entry_x": 56.0,
     "path_x": 318.0,
-    "asset_x": 660.0,
-    "vulnerability_x": 1130.0,
+    "asset_x": 712.0,
+    "vulnerability_x": 1182.0,
 }
 
 _EMPTY_VALUES: tuple[Any, ...] = (None, "", [], {})

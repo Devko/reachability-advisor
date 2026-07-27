@@ -204,15 +204,28 @@ def _path_nodes_and_edges(
     add_edge(previous, workload, edge_type="ingress_workload", label="routes to workload", confidence=_path_confidence(network_path), evidence_layer=_network_layer(network_path))
     previous = workload
 
+    # An artifact the mapper could not resolve is a placeholder, not an SBOM
+    # record. Claiming the SBOM layer for it would let the chain report the one
+    # thing the finding's own unknowns say is missing as collected evidence.
+    mapped = not finding.artifact.name.startswith("unmapped:")
     artifact = add_node(
         "artifact",
         finding.artifact.name,
-        subtitle=finding.artifact.reference or "SBOM artifact",
-        confidence="high",
-        evidence_layer="SBOM",
+        subtitle=finding.artifact.reference or ("SBOM artifact" if mapped else "no SBOM artifact was matched"),
+        confidence="high" if mapped else "low",
+        evidence_layer="SBOM" if mapped else "Context",
         raw_ref=finding.artifact.bom_ref or finding.artifact.name,
+        state="normal" if mapped else "unknown",
     )
-    add_edge(previous, artifact, edge_type="workload_artifact", label="mapped artifact", evidence_layer="SBOM")
+    add_edge(
+        previous,
+        artifact,
+        edge_type="workload_artifact",
+        label="mapped artifact" if mapped else "artifact mapping unavailable",
+        evidence_layer="SBOM" if mapped else "Context",
+        confidence=None if mapped else "low",
+        unknown=not mapped,
+    )
     previous = artifact
 
     if finding_type == DYNAMIC_RUNTIME_OBSERVATION:

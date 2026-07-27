@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -32,7 +33,47 @@ def write_html_report(findings: list[Finding], path: str | Path, metadata: dict[
 
 def render_html_report(findings: list[Finding], metadata: dict[str, Any] | None = None, evidence_graph: dict[str, Any] | None = None) -> str:
     payload = _visual_payload(findings, metadata=metadata, evidence_graph=evidence_graph)
-    return HTML_TEMPLATE.replace("__REPORT_DATA__", _report_data_json(payload))
+    return _report_shell().replace("__REPORT_DATA__", _report_data_json(payload))
+
+
+_SHELL_CACHE: list[str] = []
+
+
+def _report_shell() -> str:
+    """Return the static shell with its authoring comments and indentation removed.
+
+    The template is a teaching document: roughly a fifth of it is prose explaining why
+    each rule is the way it is, and every byte of that prose shipped to the reader on
+    every report. Stripping it at render time keeps the source readable and takes ~42 KB
+    off the wire without touching a single declaration.
+
+    Deliberately conservative. Only whole-line comments go, lines are never joined, and
+    nothing between ``<script id="report-data">`` and the end of the payload is examined,
+    so JavaScript semantics -- automatic semicolon insertion, regex literals, template
+    literals -- cannot change. The template carries no multi-line template literal, which
+    is the one construct where leading indentation would be significant.
+    """
+
+    if not _SHELL_CACHE:
+        _SHELL_CACHE.append(_strip_shell_comments(HTML_TEMPLATE))
+    return _SHELL_CACHE[0]
+
+
+_LINE_BLOCK_COMMENT = re.compile(r"(?m)^[ \t]*/\*.*?\*/[ \t]*$\n?", re.DOTALL)
+_LINE_SLASH_COMMENT = re.compile(r"(?m)^[ \t]*//.*$\n?")
+_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+_LEADING_INDENT = re.compile(r"(?m)^[ \t]+")
+_BLANK_LINES = re.compile(r"\n{2,}")
+
+
+def _strip_shell_comments(template: str) -> str:
+    style_end = template.index("</style>")
+    data_at = template.index('<script id="report-data"')
+    styles = _LINE_BLOCK_COMMENT.sub("", template[:style_end])
+    markup = _HTML_COMMENT.sub("", template[style_end:data_at])
+    script = _LINE_SLASH_COMMENT.sub("", _LINE_BLOCK_COMMENT.sub("", template[data_at:]))
+    shell = "\n".join(line.rstrip() for line in f"{styles}{markup}{script}".split("\n"))
+    return _BLANK_LINES.sub("\n", _LEADING_INDENT.sub("", shell))
 
 
 def _report_data_json(payload: dict[str, Any]) -> str:
