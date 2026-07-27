@@ -16,6 +16,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from reachability_advisor.models import Component, Reachability
 from reachability_advisor.source import (
@@ -137,12 +138,21 @@ class DeepAttributeChainTests(unittest.TestCase):
         self.assertEqual(evidence.reachability, Reachability.FUNCTION_REACHABLE)
 
     def test_recursion_failure_is_recorded_on_the_index_not_raised(self) -> None:
+        # Whether a given chain depth actually exhausts the parser varies by
+        # interpreter version, so raise the RecursionError directly instead. The unit
+        # under test is the handler in `_file_segments` -- a pathological file must
+        # degrade to a recorded visibility gap, never propagate and abort the scan.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            path = _write(root, "deep.py", "def g():\n    return a" + ".b" * 20000 + "()\n")
-            result = _file_segments(build_source_index(root), path, path.read_text(encoding="utf-8"))
+            path = _write(root, "deep.py", "def g():\n    return a.b()\n")
+            text = path.read_text(encoding="utf-8")
+            with mock.patch(
+                "reachability_advisor.source._function_segments", side_effect=RecursionError
+            ):
+                result = _file_segments(build_source_index(root), path, text)
         self.assertEqual(result.segments, ())
         self.assertEqual(result.error_code, "source_analysis_failed")
+        self.assertIn("recursion", result.error_message)
 
 
 class ParseFailureHonestyTests(unittest.TestCase):

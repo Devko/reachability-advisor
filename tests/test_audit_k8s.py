@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from reachability_advisor.kubernetes import (
+    MAX_MANIFEST_DEPTH,
     KubernetesManifestError,
     analyze_kubernetes_manifests,
     load_kubernetes_resources,
@@ -231,22 +231,41 @@ class ManifestNestingDepthTests(unittest.TestCase):
                 load_kubernetes_resources(manifest)
         self.assertIn("manifest nesting exceeds supported depth", str(error.exception))
 
-    def test_deeply_nested_json_manifest_is_rejected_before_recursive_walks(self) -> None:
-        document: dict[str, object] = {"kind": "Deployment", "metadata": {"name": "z"}, "spec": {}}
-        current: dict[str, object] = document["spec"]  # type: ignore[assignment]
-        for _ in range(1500):
-            child: dict[str, object] = {}
-            current["n"] = child
-            current = child
-        current["image"] = "ghcr.io/acme/x:1"
+    @staticmethod
+    def _nested_json_manifest(depth: int) -> str:
+        # Built as text, not as a Python object graph: an attacker sends bytes, and
+        # `json.dumps` of a deep object is itself recursive, so constructing the input
+        # would blow the stack before the loader under test is ever reached.
+        nested = '{"image": "ghcr.io/acme/x:1"}'
+        for _ in range(depth):
+            nested = '{"n": ' + nested + "}"
+        return '{"kind": "Deployment", "metadata": {"name": "z"}, "spec": ' + nested + "}"
+
+    def test_json_nesting_past_the_supported_depth_is_rejected(self) -> None:
+        # Just past MAX_MANIFEST_DEPTH: shallow enough that `json.loads` succeeds on
+        # every supported interpreter, so this deterministically exercises the tool's
+        # own depth guard rather than CPython's stack limit.
+        document = self._nested_json_manifest(MAX_MANIFEST_DEPTH + 50)
         with tempfile.TemporaryDirectory() as tmp:
             manifest = Path(tmp) / "deep.json"
-            manifest.write_text(json.dumps(document), encoding="utf-8")
+            manifest.write_text(document, encoding="utf-8")
             with self.assertRaises(KubernetesManifestError) as load_error:
+                load_kubernetes_resources(manifest)
+        self.assertIn("manifest nesting exceeds supported depth", str(load_error.exception))
+
+    def test_pathological_json_nesting_never_escapes_as_a_recursion_error(self) -> None:
+        # Deep enough that `json.loads` may hit its own recursion limit first. Which
+        # limit trips varies by interpreter version, so assert the invariant that
+        # actually matters: the caller always sees a controlled KubernetesManifestError,
+        # never an uncaught RecursionError.
+        document = self._nested_json_manifest(1500)
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "deep.json"
+            manifest.write_text(document, encoding="utf-8")
+            with self.assertRaises(KubernetesManifestError):
                 load_kubernetes_resources(manifest)
             with self.assertRaises(KubernetesManifestError):
                 analyze_kubernetes_manifests([manifest], [Artifact(name="x", reference="ghcr.io/acme/x:1")])
-        self.assertIn("manifest nesting exceeds supported depth", str(load_error.exception))
 
     def test_realistic_manifest_nesting_is_still_accepted(self) -> None:
         sample = Path(__file__).resolve().parents[1] / "samples" / "demo" / "kubernetes.yaml"
