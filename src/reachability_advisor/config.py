@@ -100,11 +100,13 @@ def resolve_layers(path: Path) -> list[tuple[str, dict[str, Any]]]:
     layers: list[tuple[str, dict[str, Any]]] = []
     seen: set[Path] = set()
     current: Path | None = path.resolve()
+    iterations = 0
     while current is not None:
+        iterations += 1
+        if iterations > MAX_EXTENDS_DEPTH:
+            raise ConfigError(f"{path}: extends chain exceeds {MAX_EXTENDS_DEPTH} levels")
         if current in seen:
             raise ConfigError(f"{path}: extends cycle detected at {current}")
-        if len(seen) >= MAX_EXTENDS_DEPTH:
-            raise ConfigError(f"{path}: extends chain exceeds {MAX_EXTENDS_DEPTH} levels")
         seen.add(current)
         try:
             raw = load_yaml_mapping(current, "configuration")
