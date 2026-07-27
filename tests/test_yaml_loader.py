@@ -15,9 +15,12 @@ from reachability_advisor.yaml_loader import (
 
 # yaml.safe_load's own recursive-descent parser raises a raw RecursionError on documents
 # this deep, before `_check_bounds` (which only runs on the returned value) ever sees them.
-# 50,000 is well past where CPython's default recursion limit gives out for both flow and
-# block styles; keep it well above that line rather than tuned to the exact threshold.
-RECURSION_DEPTH = 50_000
+# Both styles exhaust CPython's default 1,000-frame limit by depth 600 (measured), so 3,000
+# keeps a wide margin without paying for it: block nesting is O(n^2) in source bytes because
+# each level adds indentation, and 50,000 levels built a 1.25 GB string that took 13 s per
+# test. These tests assert `__cause__` is a RecursionError, so they cannot pass by way of the
+# MAX_YAML_DEPTH check instead -- the depth only has to clear the interpreter's limit.
+RECURSION_DEPTH = 3_000
 
 
 def _deep_flow_sequence(depth: int = RECURSION_DEPTH) -> str:
