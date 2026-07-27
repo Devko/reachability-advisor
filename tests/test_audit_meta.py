@@ -18,7 +18,15 @@ from scripts import run_complex_app_validation, validate_release
 from reachability_advisor.cli_parser import build_parser
 
 ROOT = Path(__file__).resolve().parents[1]
-DOC_FILES = sorted(ROOT.glob("docs/**/*.md")) + [ROOT / "README.md"]
+# `docs/superpowers/` holds design specs and implementation plans, which describe commands
+# that do not exist yet -- that is their purpose. Documentation-drift checks apply to
+# user-facing docs, where a command that fails to parse is a broken instruction.
+DESIGN_DOC_PREFIX = "docs/superpowers/"
+DOC_FILES = [
+    path
+    for path in sorted(ROOT.glob("docs/**/*.md"))
+    if not path.relative_to(ROOT).as_posix().startswith(DESIGN_DOC_PREFIX)
+] + [ROOT / "README.md"]
 SCAN_COMMAND = re.compile(
     r"^(?:PYTHONPATH=\S+\s+)?(?:reachability-advisor|ra|python -m reachability_advisor)\s+(.*)$"
 )
