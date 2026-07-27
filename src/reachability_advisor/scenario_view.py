@@ -16,7 +16,7 @@ from .finding_types import (
 )
 from .models import Finding, Reachability, RuntimeEvidenceState, reachability_label
 from .numeric import safe_float
-from .visual_layout import EXPOSURE_RANK, TIER_RANK
+from .visual_layout import EXPOSURE_RANK, TIER_RANK, UniqueIndex
 
 ISSUE_CATEGORIES: list[dict[str, str]] = [
     {"id": "vulnerabilities", "label": "Vulnerabilities", "shortLabel": "Vuln"},
@@ -38,6 +38,7 @@ def build_scenario_view(
     paths_by_asset = _network_paths_by_asset(network_paths)
     vulnerability_by_key = {str(item.get("findingKey") or ""): item for item in vulnerabilities if isinstance(item, dict)}
     attack_path_by_key = {str(item.get("findingKey") or ""): item for item in attack_paths if isinstance(item, dict)}
+    unique = UniqueIndex()
     scenarios: dict[str, dict[str, Any]] = {}
 
     for finding in findings:
@@ -52,12 +53,13 @@ def build_scenario_view(
             network_path,
             vulnerability_by_key.get(finding.key, {}),
             attack_path_by_key.get(finding.key, {}),
+            unique,
         )
 
     finalized_scenarios = [_finalize_scenario(scenario) for scenario in scenarios.values()]
     finalized_scenarios.sort(key=lambda item: (-TIER_RANK.get(str(item.get("tier") or "informational"), 0), -safe_float(item.get("score")), str(item.get("title") or "")))
-    groups = _attack_path_groups(network_paths, finalized_scenarios)
-    surfaces = _attack_surfaces(groups)
+    groups = _attack_path_groups(network_paths, finalized_scenarios, unique)
+    surfaces = _attack_surfaces(groups, unique)
     return {
         "issueCategories": ISSUE_CATEGORIES,
         "riskScenarios": finalized_scenarios,
@@ -112,45 +114,46 @@ def _add_finding_to_scenario(
     network_path: dict[str, Any] | None,
     vulnerability: dict[str, Any],
     attack_path: dict[str, Any],
+    unique: UniqueIndex,
 ) -> None:
     finding_type = canonical_finding_type(finding.finding_type)
     scenario["tier"] = _stronger_tier(scenario.get("tier"), finding.tier.value)
     scenario["score"] = max(safe_float(scenario.get("score")), safe_float(finding.score))
     scenario["confidence"] = _stronger_confidence(scenario.get("confidence"), finding.confidence.value)
     scenario["owner"] = scenario.get("owner") or finding.context.owner
-    _append_unique(scenario["findingKeys"], finding.key)
-    _append_unique(scenario["findingTypes"], finding_type)
-    _append_unique(scenario["policyStatuses"], finding.policy_status or "active")
-    _append_unique(scenario["sourceStates"], finding.source.reachability.value)
-    _append_unique(scenario["codeExposures"], reachability_label(finding.source.reachability))
-    _append_unique(scenario["vulnerabilitySeverities"], finding.vulnerability.severity or "unknown")
+    unique.append(scenario["findingKeys"], finding.key)
+    unique.append(scenario["findingTypes"], finding_type)
+    unique.append(scenario["policyStatuses"], finding.policy_status or "active")
+    unique.append(scenario["sourceStates"], finding.source.reachability.value)
+    unique.append(scenario["codeExposures"], reachability_label(finding.source.reachability))
+    unique.append(scenario["vulnerabilitySeverities"], finding.vulnerability.severity or "unknown")
     for value in finding.unknowns:
-        _append_unique(scenario["unknowns"], value)
+        unique.append(scenario["unknowns"], value)
     for value in finding.evidence_summary:
-        _append_unique(scenario["evidenceSummary"], value)
+        unique.append(scenario["evidenceSummary"], value)
     for value in finding.context.evidence[:4]:
-        _append_unique(scenario["evidenceSummary"], value)
+        unique.append(scenario["evidenceSummary"], value)
 
     if _is_in_use(finding):
         scenario["inUseCount"] += 1
 
     finding_item = _finding_item(finding, vulnerability, attack_path)
     if finding_type in {DEPENDENCY_VULNERABILITY, STATIC_CODE_WEAKNESS, CORRELATED_SECURITY_FINDING}:
-        _append_category_item(scenario, "vulnerabilities", finding_item)
+        _append_category_item(scenario, "vulnerabilities", finding_item, unique)
     if finding_type == CLOUD_POSTURE_FINDING:
-        _append_category_item(scenario, "insecure_configuration", finding_item)
+        _append_category_item(scenario, "insecure_configuration", finding_item, unique)
     if finding_type == DYNAMIC_RUNTIME_OBSERVATION or finding.runtime_evidence.state != RuntimeEvidenceState.NOT_OBSERVED:
-        _append_category_item(scenario, "events", finding_item)
+        _append_category_item(scenario, "events", finding_item, unique)
 
     for item in _identity_items(finding):
-        _append_category_item(scenario, "identity_data_access", item)
-        _append_unique(scenario["contextSignals"], item["label"])
+        _append_category_item(scenario, "identity_data_access", item, unique)
+        unique.append(scenario["contextSignals"], item["label"])
 
     for item in _visibility_items(finding, network_path):
-        _append_category_item(scenario, "visibility_gaps", item)
+        _append_category_item(scenario, "visibility_gaps", item, unique)
 
     for blocker in _path_blockers(network_path):
-        _append_unique(scenario["blockers"], blocker)
+        unique.append(scenario["blockers"], blocker)
         _append_category_item(
             scenario,
             "insecure_configuration",
@@ -163,6 +166,7 @@ def _add_finding_to_scenario(
                 "findingKey": finding.key,
                 "findingType": "network_control",
             },
+            unique,
         )
 
 
@@ -204,7 +208,7 @@ def _finalize_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
     return scenario
 
 
-def _attack_path_groups(network_paths: list[dict[str, Any]], scenarios: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _attack_path_groups(network_paths: list[dict[str, Any]], scenarios: list[dict[str, Any]], unique: UniqueIndex) -> list[dict[str, Any]]:
     scenarios_by_path: dict[str, list[dict[str, Any]]] = {}
     for scenario in scenarios:
         scenarios_by_path.setdefault(str(scenario.get("networkPathId") or ""), []).append(scenario)
@@ -225,7 +229,7 @@ def _attack_path_groups(network_paths: list[dict[str, Any]], scenarios: list[dic
             for category_id, count in scenario.get("categoryCounts", {}).items():
                 category_counts[category_id] = category_counts.get(category_id, 0) + int(count or 0)
             for key in scenario.get("findingKeys", []):
-                _append_unique(finding_keys, key)
+                unique.append(finding_keys, key)
         tier = "informational"
         score = 0.0
         for scenario in linked:
@@ -273,7 +277,7 @@ def _attack_path_groups(network_paths: list[dict[str, Any]], scenarios: list[dic
     return sorted(groups, key=lambda item: (-TIER_RANK.get(str(item.get("tier") or "informational"), 0), -safe_float(item.get("score")), str(item.get("title") or "")))
 
 
-def _attack_surfaces(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _attack_surfaces(groups: list[dict[str, Any]], unique: UniqueIndex) -> list[dict[str, Any]]:
     surfaces: dict[str, dict[str, Any]] = {}
     for group in groups:
         surface_id = str(group.get("surfaceId") or _surface_id_for_path(group))
@@ -281,16 +285,16 @@ def _attack_surfaces(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
         surface["tier"] = _stronger_tier(surface.get("tier"), group.get("tier"))
         surface["score"] = max(safe_float(surface.get("score")), safe_float(group.get("score")))
         surface["confidence"] = _stronger_confidence(surface.get("confidence"), group.get("confidence"))
-        _append_unique(surface["groupIds"], group.get("id"))
-        _append_unique(surface["networkPathIds"], group.get("networkPathId"))
+        unique.append(surface["groupIds"], group.get("id"))
+        unique.append(surface["networkPathIds"], group.get("networkPathId"))
         for asset_id in group.get("assetIds") or []:
-            _append_unique(surface["assetIds"], asset_id)
+            unique.append(surface["assetIds"], asset_id)
         for asset_name in group.get("assetNames") or []:
-            _append_unique(surface["assetNames"], asset_name)
+            unique.append(surface["assetNames"], asset_name)
         for finding_key in group.get("findingKeys") or []:
-            _append_unique(surface["findingKeys"], finding_key)
+            unique.append(surface["findingKeys"], finding_key)
         for scenario_id in group.get("scenarioIds") or []:
-            _append_unique(surface["scenarioIds"], scenario_id)
+            unique.append(surface["scenarioIds"], scenario_id)
         for category_id, count in (group.get("categoryCounts") or {}).items():
             surface["categoryCounts"][category_id] = surface["categoryCounts"].get(category_id, 0) + int(count or 0)
         surface["routes"].append(_surface_route_summary(group))
@@ -461,14 +465,22 @@ def _empty_categories() -> dict[str, dict[str, Any]]:
     }
 
 
-def _append_category_item(scenario: dict[str, Any], category_id: str, item: dict[str, Any]) -> None:
+def _append_category_item(scenario: dict[str, Any], category_id: str, item: dict[str, Any], unique: UniqueIndex) -> None:
+    """Add ``item`` to a scenario category, de-duplicating on its identity key in O(1).
+
+    A monorepo collapses every finding into a single scenario, so the category item
+    list grows to the full finding count. Re-deriving the identity key of every entry
+    already in the list on each append made report assembly quadratic; the key is
+    recorded once at insertion time instead. Items are never mutated afterwards, so
+    the recorded key stays identical to the one a rescan would compute.
+    """
+
     category = scenario["categories"][category_id]
     key = str(item.get("key") or item.get("findingKey") or item.get("label") or "")
-    if key and any(str(existing.get("key") or existing.get("findingKey") or existing.get("label") or "") == key for existing in category["items"]):
-        return
-    category["items"].append(item)
-    if item.get("findingKey"):
-        _append_unique(category["findingKeys"], item["findingKey"])
+    appended_at = len(category["items"])
+    unique.append_keyed(category["items"], key, item)
+    if len(category["items"]) > appended_at and item.get("findingKey"):
+        unique.append(category["findingKeys"], item["findingKey"])
 
 
 def _finding_item(finding: Finding, vulnerability: dict[str, Any], attack_path: dict[str, Any]) -> dict[str, Any]:
@@ -868,13 +880,6 @@ def _first_nonempty(values: list[Any]) -> str:
         if value:
             return str(value)
     return ""
-
-
-def _append_unique(items: list[Any], value: Any) -> None:
-    if value in (None, "", [], {}):
-        return
-    if value not in items:
-        items.append(value)
 
 
 def _stable_token(value: str) -> str:

@@ -1,0 +1,25 @@
+# The sdist ships the test suite, so it must also ship every data directory that suite reads.
+# Without these grafts the bundled tests fail wholesale for reasons unrelated to the build, and
+# `make test` / `make release-check` cannot be reproduced from the released tarball.
+graft samples
+graft fixtures
+graft schemas
+graft scripts
+graft configs
+graft docs
+graft tests
+graft ide
+graft external_corpus
+include Makefile
+include action.yml
+include CHANGELOG.md
+include CONTRIBUTING.md
+include CODE_OF_CONDUCT.md
+include GOVERNANCE.md
+include SECURITY.md
+include DCO.md
+
+# Local clones of upstream applications are gitignored and must never be redistributed.
+prune external_corpus/worktrees
+
+global-exclude __pycache__ *.pyc *.pyo

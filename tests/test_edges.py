@@ -26,7 +26,12 @@ from reachability_advisor.models import (
     Tier,
     VulnerabilityRecord,
 )
-from reachability_advisor.policy import ExceptionRule, apply_exceptions, load_runtime_policy
+from reachability_advisor.policy import (
+    ExceptionRule,
+    PolicyError,
+    apply_exceptions,
+    load_runtime_policy,
+)
 from reachability_advisor.purl import parse_purl
 from reachability_advisor.remediation import build_remediation_groups
 from reachability_advisor.sbom import SbomError, load_sbom
@@ -82,12 +87,24 @@ class PolicyEdgeTests(unittest.TestCase):
             self.assertEqual(finding.policy_status, "excepted")
 
     def test_load_policy_invalid_shapes(self) -> None:
+        # Every malformed shape below used to be silently coerced into a weaker
+        # policy: an unreadable tier became HIGH, an unparseable expiry became
+        # "never expires", and a non-object entry was dropped. Each coercion
+        # widens a waiver, so the loader now refuses the document instead.
+        # Exhaustive per-field coverage lives in tests/test_audit_policy.py.
+        invalid_documents = (
+            {"fail_on_tier": "bad"},
+            {"exceptions": [{"vulnerability": "CVE-X", "reason": "test", "expires": "not-a-date"}]},
+            {"exceptions": ["bad"]},
+            {"exceptions": {"vulnerability": "CVE-X"}},
+        )
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "policy.json"
-            path.write_text(json.dumps({"fail_on_tier": "bad", "exceptions": [{"expires": "not-a-date"}, "bad"]}), encoding="utf-8")
-            policy = load_runtime_policy(path)
-            self.assertEqual(policy.fail_on_tier, Tier.HIGH)
-            self.assertEqual(len(policy.exceptions), 1)
+            for document in invalid_documents:
+                with self.subTest(document=document):
+                    path.write_text(json.dumps(document), encoding="utf-8")
+                    with self.assertRaises(PolicyError):
+                        load_runtime_policy(path)
 
 
 class ContextEdgeTests(unittest.TestCase):

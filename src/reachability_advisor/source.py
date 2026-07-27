@@ -43,6 +43,8 @@ from .source_external import (
     merge_source_evidence,
 )
 from .source_index import (
+    FileSegments,
+    FunctionSegment,
     SourceIndex,
     build_source_index,
     parse_source_roots,
@@ -72,6 +74,20 @@ class FileSignal:
     sink_functions: set[str] = field(default_factory=set)
     attacker_functions: set[str] = field(default_factory=set)
     calls_by_function: dict[str, set[str]] = field(default_factory=dict)
+    # Set when semantic (function segmentation) analysis failed for this file.
+    # The raw regex signals above are still valid; the semantic ones are missing,
+    # which is a visibility gap and must never be reported as "no link exists".
+    analysis_error: str | None = None
+    analysis_error_code: str | None = None
+
+
+class SourceAnalysisError(Exception):
+    """Semantic analysis of one source file failed and produced no segments."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
 
 
 @dataclass(frozen=True)
@@ -105,15 +121,6 @@ def _snippet(text: str, index: int) -> str:
     if end == -1:
         end = len(text)
     return text[start:end].strip()[:200]
-
-
-@dataclass(frozen=True)
-class FunctionSegment:
-    name: str
-    start: int
-    end: int
-    text: str
-    calls: frozenset[str]
 
 
 CALL_KEYWORDS = {
@@ -153,22 +160,46 @@ def _include_decorators(text: str, start: int) -> int:
     return cursor
 
 
+# Longest dotted attribute chain kept when deriving call names. Real code uses two
+# to four levels; the cap keeps an attacker-supplied `a.b.b.b...()` chain from
+# producing a quadratic pile of strings (and, before this was iterative, from
+# blowing the interpreter stack and aborting the whole scan).
+MAX_CALL_NAME_SEGMENTS = 32
+
+
 def _python_call_names(node: ast.AST) -> set[str]:
     if isinstance(node, ast.Name):
         return {node.id}
-    if isinstance(node, ast.Attribute):
-        parent = _python_call_names(node.value)
-        full = {f"{item}.{node.attr}" for item in parent}
-        full.add(node.attr)
-        return full
-    return set()
+    if not isinstance(node, ast.Attribute):
+        return set()
+    attributes: list[str] = []
+    truncated = False
+    current: ast.AST = node
+    while isinstance(current, ast.Attribute):
+        if len(attributes) < MAX_CALL_NAME_SEGMENTS:
+            attributes.append(current.attr)
+        else:
+            truncated = True
+        current = current.value
+    chain = list(reversed(attributes))
+    if not truncated and isinstance(current, ast.Name):
+        chain.insert(0, current.id)
+    names: set[str] = set()
+    suffix = ""
+    for item in reversed(chain):
+        suffix = item if not suffix else f"{item}.{suffix}"
+        names.add(suffix)
+    return names
 
 
 def _python_function_segments(text: str) -> list[FunctionSegment]:
     try:
         tree = ast.parse(text)
-    except SyntaxError:
-        return []
+    except (SyntaxError, ValueError) as exc:
+        # Returning [] here would erase every semantic signal for the file and let
+        # the caller report "no link was inferred", i.e. present a failed analysis
+        # as an absence of evidence. Signal the failure instead.
+        raise SourceAnalysisError("source_parse_failed", f"python parse failed: {exc}") from exc
     offsets = _line_offsets(text)
     segments: list[FunctionSegment] = []
     for node in ast.walk(tree):
@@ -225,6 +256,38 @@ def _call_names(text: str) -> set[str]:
     return calls
 
 
+# Source files come straight from the scanned repository, which the threat model
+# treats as untrusted. Every quantifier below is written so that no two adjacent
+# quantifiers can consume the same whitespace: overlapping whitespace quantifiers
+# turn a sub-kilobyte file into hours of backtracking (ReDoS) with no timeout
+# anywhere in the scan path.
+#
+# `_LEADING_WHITESPACE` is the shared idiom. `(?<!\s)` pins the match to the first
+# character of a whitespace run, so only one start offset per run can enter the
+# following `\s*`. That keeps the historical behaviour of anchoring a segment to
+# the whitespace in front of the signature while making the scan linear.
+_LEADING_WHITESPACE = r"(?<!\s)\s*"
+# One level of nesting is enough for `Map<String, List<Integer>>`; `<` and `>` are
+# excluded from the inner classes so the quantifiers stay unambiguous.
+_JAVA_GENERICS = r"<[^<>;{}\n]*(?:<[^<>;{}\n]*>[^<>;{}\n]*)*>"
+_JAVA_FUNCTION_PATTERN = (
+    _LEADING_WHITESPACE
+    + r"(?:(?:public|private|protected|static|final|synchronized|abstract|native|strictfp|default)\s+)*"
+    + rf"(?:{_JAVA_GENERICS}\s*)?"
+    + rf"[\w$.?]+(?:{_JAVA_GENERICS})?(?:\s*\[\s*\])*"
+    # `(?<!new\s)` rejects anonymous-class bodies (`new Foo(...) {`), which are not
+    # method declarations.
+    + r"\s+(?<!new\s)([A-Za-z_]\w*)\s*\([^;{}]*\)\s*(?:throws\s+[^{]+)?\{"
+)
+_JS_METHOD_PATTERN = (
+    _LEADING_WHITESPACE
+    + r"(?:(?:public|private|protected|static|async)\s+)*"
+    # The TypeScript return annotation keeps its own leading whitespace and must end
+    # on a non-space character, so it never competes with the `\s*` before `{`.
+    + r"(?<![@\w$])([A-Za-z_$][\w$]*)\s*\([^{};]*\)(?:\s*:[^({;]*[^({;\s])?\s*\{"
+)
+
+
 def _regex_function_segments(text: str, language: str) -> list[FunctionSegment]:
     patterns: tuple[str, ...]
     if language == "javascript":
@@ -233,10 +296,10 @@ def _regex_function_segments(text: str, language: str) -> list[FunctionSegment]:
             r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\([^{};]*\)\s*=>\s*\{",
             r"exports\.([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?function\s*\([^{};]*\)\s*\{",
             r"module\.exports\.([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?function\s*\([^{};]*\)\s*\{",
-            r"(?:public|private|protected|static|async|\s)*(?<![@\w$])([A-Za-z_$][\w$]*)\s*\([^{};]*\)\s*(?::\s*[^({;]+)?\s*\{",
+            _JS_METHOD_PATTERN,
         )
     elif language == "java":
-        patterns = (r"(?:public|private|protected|static|final|synchronized|\s)+[\w<>\[\], ?]+\s+([A-Za-z_]\w*)\s*\([^;{}]*\)\s*(?:throws\s+[^{]+)?\{",)
+        patterns = (_JAVA_FUNCTION_PATTERN,)
     elif language == "go":
         patterns = (r"func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)\s*\([^)]*\)\s*(?:[^{]*)\{",)
     else:
@@ -262,10 +325,16 @@ def _regex_function_segments(text: str, language: str) -> list[FunctionSegment]:
     return segments
 
 
+# `\s*(?:async\s*)?\(?\s*` had three quantifiers able to consume the same run of
+# spaces. Folding the optional paren and its trailing spaces into one group
+# (`(?:\(\s*)?`) removes the overlap without changing what is accepted.
+_JS_ROUTE_CALLBACK_PREFIX = r"\b(?:app|router)\.(?:get|post|put|patch|delete|all|use)\s*\([^,\n]+,\s*(?:async\s*)?(?:\(\s*)?(?:req|request)\b[^=;{}]*=>"
+
+
 def _javascript_route_callback_segments(text: str) -> list[FunctionSegment]:
     segments: list[FunctionSegment] = []
     for match in re.finditer(
-        r"\b(?:app|router)\.(?:get|post|put|patch|delete|all|use)\s*\([^,\n]+,\s*(?:async\s*)?\(?\s*(?:req|request)\b[^=;{}]*=>\s*\{",
+        _JS_ROUTE_CALLBACK_PREFIX + r"\s*\{",
         text,
         flags=re.MULTILINE,
     ):
@@ -278,7 +347,7 @@ def _javascript_route_callback_segments(text: str) -> list[FunctionSegment]:
         name = f"route_handler_{_line_for_match(text, start)}"
         segments.append(FunctionSegment(name=name, start=start, end=end, text=body, calls=frozenset(_call_names(body))))
     for match in re.finditer(
-        r"\b(?:app|router)\.(?:get|post|put|patch|delete|all|use)\s*\([^,\n]+,\s*(?:async\s*)?\(?\s*(?:req|request)\b[^=;{}]*=>\s*([^;\n]+)",
+        _JS_ROUTE_CALLBACK_PREFIX + r"\s*([^;\n]+)",
         text,
         flags=re.MULTILINE,
     ):
@@ -290,12 +359,22 @@ def _javascript_route_callback_segments(text: str) -> list[FunctionSegment]:
     return segments
 
 
+# `\(?[^=;{}\n]*\)?\s*=>` let the parameter class, the optional paren and the
+# trailing `\s*` all compete for the same spaces (cubic backtracking on
+# `const a = ` followed by a long run of spaces). Spelling the parameter list out
+# as either a parenthesised list or a single identifier keeps it unambiguous.
+_JS_ARROW_PARAMS = r"(?:\([^()=;{}\n]*\)|[A-Za-z_$][\w$]*)"
+# Every optional part starts with a non-whitespace character, so the `\s*` after
+# `=` is the only quantifier that can consume the spaces in front of the params.
+_JS_ARROW_TAIL = rf"\s*=\s*(?:async\s*)?(?:{_JS_ARROW_PARAMS}\s*)?=>\s*([^;\n]+)"
+
+
 def _javascript_expression_segments(text: str) -> list[FunctionSegment]:
     segments: list[FunctionSegment] = []
     patterns = (
-        r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(?[^=;{}\n]*\)?\s*=>\s*([^;\n]+)",
-        r"exports\.([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(?[^=;{}\n]*\)?\s*=>\s*([^;\n]+)",
-        r"module\.exports\.([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(?[^=;{}\n]*\)?\s*=>\s*([^;\n]+)",
+        r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)" + _JS_ARROW_TAIL,
+        r"exports\.([A-Za-z_$][\w$]*)" + _JS_ARROW_TAIL,
+        r"module\.exports\.([A-Za-z_$][\w$]*)" + _JS_ARROW_TAIL,
     )
     for pattern in patterns:
         for match in re.finditer(pattern, text, flags=re.MULTILINE):
@@ -317,6 +396,34 @@ def _function_segments(path: Path, text: str) -> list[FunctionSegment]:
     return segments
 
 
+def _file_segments(index: SourceIndex, path: Path, text: str) -> FileSegments:
+    """Segment a file once per index instead of once per (component, vulnerability).
+
+    Segmentation is a pure function of ``(path, text)``; only the cheap pattern
+    classification in `_add_semantic_signals` is component-specific.
+    """
+    cached = index.segment_cache.get(path)
+    if cached is not None:
+        return cached
+    try:
+        result = FileSegments(segments=tuple(_function_segments(path, text)))
+    except SourceAnalysisError as exc:
+        result = FileSegments(error_code=exc.code, error_message=exc.message)
+    except RecursionError:
+        # One pathological file must degrade that file, not abort the scan.
+        result = FileSegments(
+            error_code="source_analysis_failed",
+            error_message="recursion limit exceeded while analyzing this file",
+        )
+    except MemoryError:
+        result = FileSegments(
+            error_code="source_analysis_failed",
+            error_message="ran out of memory while analyzing this file",
+        )
+    index.segment_cache[path] = result
+    return result
+
+
 def _matches_any(patterns: tuple[str, ...], text: str) -> bool:
     for pattern in patterns:
         try:
@@ -335,8 +442,17 @@ def _route_handler_names(text: str, language: str) -> set[str]:
     return names
 
 
-def _add_semantic_signals(signal: FileSignal, text: str, function_patterns: tuple[str, ...], attacker_patterns: tuple[str, ...]) -> None:
-    segments = _function_segments(signal.path, text)
+def _add_semantic_signals(
+    signal: FileSignal,
+    text: str,
+    function_patterns: tuple[str, ...],
+    attacker_patterns: tuple[str, ...],
+    file_segments: FileSegments,
+) -> None:
+    if file_segments.error_code:
+        signal.analysis_error_code = file_segments.error_code
+        signal.analysis_error = file_segments.error_message
+    segments = file_segments.segments
     route_handlers = _route_handler_names(text, signal.language)
     for segment in segments:
         signal.defined_functions.add(segment.name)
@@ -406,12 +522,32 @@ def _rules_for(component: Component, vulnerability: VulnerabilityRecord | None, 
     return custom or builtin
 
 
+def _npm_specifier(component: Component) -> str:
+    """Full npm package specifier, including the `@scope/` prefix.
+
+    CycloneDX splits scoped packages into `group="@babel"` / `name="traverse"` and
+    the purl carries the scope as a namespace. Matching on the bare name both
+    misses real `require("@babel/traverse")` calls and credits the unrelated
+    registry package `traverse` as evidence for `@babel/traverse`.
+    """
+    name = component.name
+    if name.startswith("@") or "/" in name:
+        return name
+    parsed = parse_purl(component.purl)
+    namespace = ((parsed.namespace if parsed and parsed.namespace else component.group) or "").strip()
+    if not namespace:
+        return name
+    if not namespace.startswith("@"):
+        namespace = f"@{namespace}"
+    return f"{namespace}/{parsed.name if parsed and parsed.name else name}"
+
+
 def _generic_patterns(component: Component) -> tuple[str, ...]:
     name = component.name
     escaped = re.escape(name)
     ecosystem = ecosystem_from_component(component.purl, component.name)
     if ecosystem == "npm":
-        subpath = rf"{escaped}(?:/[^'\"]+)?"
+        subpath = rf"{re.escape(_npm_specifier(component))}(?:/[^'\"]+)?"
         return (
             rf"require\(['\"]{subpath}['\"]\)",
             rf"require\.resolve\(['\"]{subpath}['\"]\)",
@@ -420,8 +556,13 @@ def _generic_patterns(component: Component) -> tuple[str, ...]:
             rf"import\s+[\w\s${{}}*,]+\s+from\s+['\"]{subpath}['\"]",
         )
     if ecosystem == "pypi":
-        module = escaped.replace("-", "[_-]?")
-        return (rf"^\s*import\s+{module}\b", rf"^\s*from\s+{module}\s+import\s+")
+        # `re.escape` already turned `-` into `\-`, so replacing the raw `-` produced
+        # the nonsense class `\[_-]?` that matched nothing. Replace the escaped form,
+        # and accept every PEP 503 separator the module name may use.
+        module = escaped.replace(r"\-", "[-_.]+")
+        # `from pkg.sub import X` is the dominant import form; requiring whitespace
+        # straight after the distribution name never matched it.
+        return (rf"^\s*import\s+{module}\b", rf"^\s*from\s+{module}(?:\.[\w.]+)?\s+import\s+")
     if ecosystem == "maven":
         parsed = parse_purl(component.purl)
         namespace = parsed.namespace.replace(".", r"\.") if parsed and parsed.namespace else escaped
@@ -538,7 +679,14 @@ def _dependency_reachable_evidence(
     )
 
 
-def _scan_file(path: Path, text: str, import_patterns: tuple[str, ...], function_patterns: tuple[str, ...], attacker_patterns: tuple[str, ...]) -> FileSignal:
+def _scan_file(
+    path: Path,
+    text: str,
+    import_patterns: tuple[str, ...],
+    function_patterns: tuple[str, ...],
+    attacker_patterns: tuple[str, ...],
+    file_segments: FileSegments,
+) -> FileSignal:
     signal = FileSignal(path=path, language=_language_for(path))
     for pattern_group, marker in ((import_patterns, "import"), (function_patterns, "function"), (attacker_patterns, "attacker")):
         for pattern in pattern_group:
@@ -562,7 +710,7 @@ def _scan_file(path: Path, text: str, import_patterns: tuple[str, ...], function
                     signal.has_function = True
                 elif marker == "attacker":
                     signal.has_attacker = True
-    _add_semantic_signals(signal, text, function_patterns, attacker_patterns)
+    _add_semantic_signals(signal, text, function_patterns, attacker_patterns, file_segments)
     return signal
 
 
@@ -619,7 +767,14 @@ def analyze_component_source(
 
     signals: list[FileSignal] = []
     for indexed in index.files:
-        signal = _scan_file(indexed.path, indexed.text, import_patterns, function_patterns, attacker_patterns)
+        signal = _scan_file(
+            indexed.path,
+            indexed.text,
+            import_patterns,
+            function_patterns,
+            attacker_patterns,
+            _file_segments(index, indexed.path, indexed.text),
+        )
         if signal.has_import or signal.has_function or signal.has_attacker or signal.defined_functions:
             signals.append(signal)
 
@@ -684,6 +839,11 @@ def analyze_component_source(
     symbols = sorted({symbol for signal in signals for symbol in signal.matched_symbols})
     language = _dominant_language(signals)
     rule_text = _rule_text(rules, vulnerability)
+    # Files that carry evidence for this component but whose semantic analysis
+    # failed. Their missing same-function/call-path signals are a visibility gap,
+    # not proof that no link exists.
+    failed_signals = [signal for signal in signals if signal.analysis_error and (signal.has_import or signal.has_function or signal.has_attacker)]
+    analysis_diagnostics = _analysis_failure_diagnostics(failed_signals)
 
     if call_path:
         call_symbol = f"call_path:{call_path.attacker_function}->{call_path.called_name}->{call_path.sink_function}"
@@ -701,6 +861,7 @@ def analyze_component_source(
             locations=locations,
             matched_symbols=sorted({*symbols, call_symbol}),
             query_families=query_families,
+            diagnostics=list(analysis_diagnostics),
         )
 
     if same_function_attacker:
@@ -712,13 +873,15 @@ def analyze_component_source(
             locations=locations,
             matched_symbols=symbols,
             query_families=query_families,
+            diagnostics=list(analysis_diagnostics),
         )
     if same_file_function:
         reason = f"{rule_text}; same source file contains import and vulnerable-function usage hints"
-        if has_attacker_any:
-            reason += "; attacker entrypoint was observed elsewhere but no same-function or bounded call-path link was inferred"
         diagnostics = []
-        if has_attacker_any:
+        if has_attacker_any and failed_signals:
+            reason += "; attacker entrypoint was observed elsewhere and same-function/call-path analysis is incomplete because source analysis failed for a contributing file"
+        elif has_attacker_any:
+            reason += "; attacker entrypoint was observed elsewhere but no same-function or bounded call-path link was inferred"
             diagnostics.append(
                 source_diagnostic(
                     "unlinked_attacker_input",
@@ -726,6 +889,7 @@ def analyze_component_source(
                     "Attacker/input evidence was observed, but it was not linked to the vulnerable function by same-function or bounded call-path analysis.",
                 )
             )
+        diagnostics.extend(analysis_diagnostics)
         return SourceEvidence(
             reachability=Reachability.FUNCTION_REACHABLE,
             confidence=Confidence.MEDIUM,
@@ -737,21 +901,32 @@ def analyze_component_source(
             diagnostics=diagnostics,
         )
     if has_import_any and has_function_any:
-        return SourceEvidence(
-            reachability=Reachability.FUNCTION_REACHABLE,
-            confidence=Confidence.LOW,
-            language=language,
-            reason=f"{rule_text}; import and vulnerable-function hints were observed in the source root but not the same file",
-            locations=locations,
-            matched_symbols=symbols,
-            query_families=query_families,
-            diagnostics=[
+        cross_file_diagnostics = (
+            list(analysis_diagnostics)
+            if failed_signals
+            else [
                 source_diagnostic(
                     "cross_file_unlinked_function",
                     "info",
                     "Import and vulnerable-function hints were observed, but not in the same file and no bounded call path was inferred.",
                 )
-            ],
+            ]
+        )
+        reason = (
+            f"{rule_text}; import and vulnerable-function hints were observed in the source root but not the same file, "
+            "and call-path analysis is incomplete because source analysis failed for a contributing file"
+            if failed_signals
+            else f"{rule_text}; import and vulnerable-function hints were observed in the source root but not the same file"
+        )
+        return SourceEvidence(
+            reachability=Reachability.FUNCTION_REACHABLE,
+            confidence=Confidence.LOW,
+            language=language,
+            reason=reason,
+            locations=locations,
+            matched_symbols=symbols,
+            query_families=query_families,
+            diagnostics=cross_file_diagnostics,
         )
     if imported_only:
         return SourceEvidence(
@@ -762,6 +937,7 @@ def analyze_component_source(
             locations=locations,
             matched_symbols=symbols,
             query_families=query_families,
+            diagnostics=list(analysis_diagnostics),
         )
     dependency_evidence = _dependency_reachable_evidence(component, sbom, index, custom_rules, language)
     if dependency_evidence:
@@ -783,6 +959,38 @@ def analyze_component_source(
             )
         ],
     )
+
+
+_ANALYSIS_FAILURE_MESSAGES = {
+    "source_parse_failed": (
+        "A source file that matched this component could not be parsed, so same-function and "
+        "call-path analysis is incomplete for it. Absence of a link here is a visibility gap, "
+        "not evidence that no link exists."
+    ),
+    "source_analysis_failed": (
+        "Semantic analysis of a source file that matched this component failed, so same-function "
+        "and call-path analysis is incomplete for it. Absence of a link here is a visibility gap, "
+        "not evidence that no link exists."
+    ),
+}
+
+
+def _analysis_failure_diagnostics(signals: list[FileSignal]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[FileSignal]] = {}
+    for signal in signals:
+        grouped.setdefault(signal.analysis_error_code or "source_analysis_failed", []).append(signal)
+    diagnostics: list[dict[str, Any]] = []
+    for code, failed in sorted(grouped.items()):
+        diagnostics.append(
+            source_diagnostic(
+                code,
+                "warning",
+                _ANALYSIS_FAILURE_MESSAGES.get(code, _ANALYSIS_FAILURE_MESSAGES["source_analysis_failed"]),
+                files=sorted({str(signal.path) for signal in failed})[:5],
+                errors=sorted({str(signal.analysis_error) for signal in failed if signal.analysis_error})[:5],
+            )
+        )
+    return diagnostics
 
 
 def _dominant_language(signals: list[FileSignal]) -> str:

@@ -111,8 +111,6 @@ jobs:
             --source-root app=. \
             --source-evidence-in reachability/semgrep.json \
             --sast-in reachability/semgrep.json \
-            # Add --dast-in reachability/zap.json or --dast-in reachability/nuclei.jsonl when runtime scanner output is available.
-            # Add --cspm-in reachability/checkov.json or --cspm-in reachability/trivy-config.json when posture scanner output is available.
             --terraform-plan reachability/tfplan.json \
             --terraform-coverage-out reachability/terraform-coverage.json \
             "${k8s_args[@]}" \
@@ -157,6 +155,8 @@ jobs:
             reachability/*.html
             reachability/*.txt
 ```
+
+Add `--dast-in reachability/zap.json` (or `--dast-in reachability/nuclei.jsonl`) to the scan step once runtime scanner output exists, and `--cspm-in reachability/checkov.json` (or `--cspm-in reachability/trivy-config.json`) once posture scanner output exists. Add them as real continued arguments: a `#` comment placed between a trailing `\` and its continuation silently truncates the command and drops every flag below it.
 
 For repositories that vendor Reachability Advisor as a development dependency, replace the install command with:
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -11,34 +12,75 @@ from .numeric import safe_float
 ORDER = {"informational": 0, "low": 1, "medium": 2, "high": 3, "urgent": 4}
 
 
-def _finding_map(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    return {str(item.get("key")): item for item in data.get("findings", []) if isinstance(item, dict) and item.get("key")}
+def _finding_buckets(data: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """Group findings by key without dropping duplicates.
+
+    Finding keys are not guaranteed unique: scanner-derived keys omit discriminators such as
+    the source column, and ``--base-findings`` accepts hand-authored reports. A lossy
+    ``{key: finding}`` map would keep only the last entry for a key, silently discarding the
+    others -- including higher-severity ones -- so the delta gate would never see them.
+    """
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    findings = data.get("findings")
+    if not isinstance(findings, list):
+        return buckets
+    for item in findings:
+        if not isinstance(item, dict) or not item.get("key"):
+            continue
+        buckets.setdefault(str(item.get("key")), []).append(item)
+    for bucket in buckets.values():
+        if len(bucket) > 1:
+            bucket.sort(key=_bucket_sort_key)
+    return buckets
+
+
+def _bucket_sort_key(finding: dict[str, Any]) -> tuple[int, float, str]:
+    """Deterministic within-bucket order so base/head pairing is stable across runs."""
+    return (-_tier_rank(finding), -safe_float(finding.get("score")), _content_digest(finding))
+
+
+def _content_digest(finding: dict[str, Any]) -> str:
+    payload = json.dumps(finding, sort_keys=True, default=str)
+    return hashlib.sha1(payload.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _duplicate_key_report(
+    base_buckets: dict[str, list[dict[str, Any]]],
+    head_buckets: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    ambiguous = {key for key, bucket in base_buckets.items() if len(bucket) > 1}
+    ambiguous |= {key for key, bucket in head_buckets.items() if len(bucket) > 1}
+    return [
+        {"key": key, "base_count": len(base_buckets.get(key, [])), "head_count": len(head_buckets.get(key, []))}
+        for key in sorted(ambiguous)
+    ]
 
 
 def compare_findings(base: dict[str, Any], head: dict[str, Any], score_delta: float = 5.0) -> dict[str, Any]:
-    base_map = _finding_map(base)
-    head_map = _finding_map(head)
+    base_buckets = _finding_buckets(base)
+    head_buckets = _finding_buckets(head)
     new: list[dict[str, Any]] = []
     resolved: list[dict[str, Any]] = []
     regressed: list[dict[str, Any]] = []
     improved: list[dict[str, Any]] = []
     unchanged: list[dict[str, Any]] = []
-    for key, finding in head_map.items():
-        if key not in base_map:
-            new.append(finding)
-            continue
-        old = base_map[key]
-        old_score = safe_float(old.get("score"))
-        new_score = safe_float(finding.get("score"))
-        if _is_worsened(old, finding, score_delta):
-            regressed.append({"before": old, "after": finding})
-        elif new_score <= old_score - score_delta or _tier_rank(finding) < _tier_rank(old):
-            improved.append({"before": old, "after": finding})
-        else:
-            unchanged.append(finding)
-    for key, finding in base_map.items():
-        if key not in head_map:
-            resolved.append(finding)
+    for key, head_items in head_buckets.items():
+        base_items = base_buckets.get(key, [])
+        for index, finding in enumerate(head_items):
+            if index >= len(base_items):
+                new.append(finding)
+                continue
+            old = base_items[index]
+            old_score = safe_float(old.get("score"))
+            new_score = safe_float(finding.get("score"))
+            if _is_worsened(old, finding, score_delta):
+                regressed.append({"before": old, "after": finding})
+            elif new_score <= old_score - score_delta or _tier_rank(finding) < _tier_rank(old):
+                improved.append({"before": old, "after": finding})
+            else:
+                unchanged.append(finding)
+    for key, base_items in base_buckets.items():
+        resolved.extend(base_items[len(head_buckets.get(key, [])):])
     new.sort(key=_finding_sort_key)
     resolved.sort(key=_finding_sort_key)
     regressed.sort(key=lambda item: _finding_sort_key(item.get("after", {})))
@@ -54,6 +96,7 @@ def compare_findings(base: dict[str, Any], head: dict[str, Any], score_delta: fl
             "improved": len(improved),
             "unchanged": len(unchanged),
         },
+        "duplicate_keys": _duplicate_key_report(base_buckets, head_buckets),
         "new": new,
         "resolved": resolved,
         "regressed": regressed,
@@ -65,6 +108,7 @@ def compare_findings(base: dict[str, Any], head: dict[str, Any], score_delta: fl
 def pr_delta(delta: dict[str, Any]) -> dict[str, Any]:
     new = list(delta.get("new", []))
     worsened = list(delta.get("regressed", []))
+    duplicate_keys = delta.get("duplicate_keys")
     return {
         "schema_version": "1.0",
         "mode": "new-or-worsened",
@@ -73,6 +117,7 @@ def pr_delta(delta: dict[str, Any]) -> dict[str, Any]:
             "worsened": len(worsened),
             "total": len(new) + len(worsened),
         },
+        "duplicate_keys": list(duplicate_keys) if isinstance(duplicate_keys, list) else [],
         "new": new,
         "worsened": worsened,
     }
@@ -100,6 +145,12 @@ def write_delta_markdown(delta: dict[str, Any], path: str | Path) -> None:
             f"- Regressed findings: `{summary.get('regressed', 0)}`",
             f"- Resolved findings: `{summary.get('resolved', 0)}`",
             f"- Improved findings: `{summary.get('improved', 0)}`",
+            "",
+        ])
+    duplicate_keys = delta.get("duplicate_keys")
+    if isinstance(duplicate_keys, list) and duplicate_keys:
+        lines.extend([
+            f"- Ambiguous finding keys: `{len(duplicate_keys)}` (duplicates are compared position by position, never dropped)",
             "",
         ])
     if delta.get("new"):

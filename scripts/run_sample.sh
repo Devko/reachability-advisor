@@ -25,6 +25,7 @@ PYTHONPATH=src python -m reachability_advisor scan \
   --source-root batch-worker=samples/source/batch-worker \
   --source-root reports-api=samples/source/reports-api \
   --out outputs/findings.json \
+  --evidence-graph-out outputs/evidence-graph.json \
   --baseline-out outputs/reachability-baseline.json \
   --sarif-out outputs/findings.sarif \
   --diagnostics-out outputs/diagnostics.json \

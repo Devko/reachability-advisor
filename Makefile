@@ -33,7 +33,9 @@ fixtures:
 	PYTHONPATH=$(PYTHONPATH) $(PYTHON) -m reachability_advisor fixtures run --out outputs/fixtures-report.json --output-dir outputs/fixtures
 
 external-complex:
-	PYTHONPATH=$(PYTHONPATH) $(PYTHON) scripts/run_complex_app_validation.py --no-clone --strict
+	PYTHONPATH=$(PYTHONPATH) $(PYTHON) scripts/run_complex_app_validation.py --no-clone --strict \
+		--benchmark-expectations fixtures/benchmarks/real-app-tier-snapshots.json \
+		--fail-on-benchmark-regression
 
 release-check:
 	PYTHONPATH=$(PYTHONPATH) $(PYTHON) scripts/validate_release.py
@@ -54,6 +56,10 @@ sample:
 		--vuln-in samples/vulnerabilities.json \
 		--terraform-plan samples/tfplan-multicloud.json \
 		--terraform-coverage-out outputs/terraform-coverage.json \
+		--kubernetes-manifest samples/kubernetes-manifest.yaml \
+		--kubernetes-coverage-out outputs/kubernetes-coverage.json \
+		--source-coverage-out outputs/source-coverage.json \
+		--mapping-out outputs/mapping.json \
 		--source-root payments-api=samples/source/payments-api \
 		--source-root notifier=samples/source/notifier \
 		--source-root orders-api=samples/source/orders-api \
@@ -62,6 +68,7 @@ sample:
 		--source-root batch-worker=samples/source/batch-worker \
 		--source-root reports-api=samples/source/reports-api \
 		--out outputs/findings.json \
+		--evidence-graph-out outputs/evidence-graph.json \
 		--baseline-out outputs/reachability-baseline.json \
 		--sarif-out outputs/findings.sarif \
 		--diagnostics-out outputs/diagnostics.json \

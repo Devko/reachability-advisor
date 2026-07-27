@@ -7,6 +7,7 @@ from typing import Any
 from .models import Artifact
 from .terraform_manifest import OPAQUE_MANIFEST_WRAPPER_TYPES, manifest_report
 from .terraform_network_adapters import network_adapter_signals
+from .terraform_resources import network_attachment_unknown_paths
 
 
 def coverage_report(
@@ -59,6 +60,17 @@ def coverage_report(
                     "provider": resource.provider,
                     "gap_type": "opaque_manifest_wrapper",
                     "reason": "resource is a Helm/Kubectl manifest wrapper; rendered Kubernetes child workloads, images, exposure, and RBAC are not inspected",
+                }
+            )
+        unknown_network_paths = network_attachment_unknown_paths(getattr(resource, "unknown_paths", frozenset()))
+        if unknown_network_paths:
+            visibility_gaps.append(
+                {
+                    "address": resource.address,
+                    "type": resource.type,
+                    "provider": resource.provider,
+                    "gap_type": "unknown_after_apply",
+                    "reason": f"network attachment is unknown at plan time ({', '.join(unknown_network_paths)}); exposure cannot be resolved from this plan",
                 }
             )
     matched_artifacts = sorted({row["artifact"] for row in matches})

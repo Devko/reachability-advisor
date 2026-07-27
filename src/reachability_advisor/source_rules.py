@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -253,7 +254,7 @@ BUILTIN_RULES: tuple[ReachabilityRule, ...] = (
     ReachabilityRule(
         ecosystem="pypi",
         package_name="requests",
-        import_patterns=(r"^\s*import\s+requests\b", r"^\s*from\s+requests\s+import\s+"),
+        import_patterns=(r"^\s*import\s+requests\b", r"^\s*from\s+requests(?:\.[\w.]+)?\s+import\s+"),
         function_patterns=(r"requests\.(get|post|put|delete|patch)\s*\(",),
         attacker_patterns=(r"flask\.request", r"request\.args", r"request\.json", r"FastAPI\(", r"@app\.(get|post|put|delete)"),
         description="requests usage in Python web handlers",
@@ -261,7 +262,7 @@ BUILTIN_RULES: tuple[ReachabilityRule, ...] = (
     ReachabilityRule(
         ecosystem="pypi",
         package_name="pyyaml",
-        import_patterns=(r"^\s*import\s+yaml\b", r"^\s*from\s+yaml\s+import\s+"),
+        import_patterns=(r"^\s*import\s+yaml\b", r"^\s*from\s+yaml(?:\.[\w.]+)?\s+import\s+"),
         function_patterns=(r"yaml\.load\s*\(", r"\bload\s*\("),
         attacker_patterns=(r"flask\.request", r"request\.(args|json|data|form|files|body)", r"FastAPI\(", r"@app\.(get|post|put|delete)"),
         description="PyYAML deserialization of request-controlled YAML",
@@ -269,7 +270,7 @@ BUILTIN_RULES: tuple[ReachabilityRule, ...] = (
     ReachabilityRule(
         ecosystem="pypi",
         package_name="jinja2",
-        import_patterns=(r"^\s*import\s+jinja2\b", r"^\s*from\s+jinja2\s+import\s+"),
+        import_patterns=(r"^\s*import\s+jinja2\b", r"^\s*from\s+jinja2(?:\.[\w.]+)?\s+import\s+"),
         function_patterns=(r"Environment\s*\(", r"Template\s*\(", r"\.from_string\s*\(", r"\.render\s*\("),
         attacker_patterns=(r"flask\.request", r"request\.(args|json|data|form)", r"FastAPI\(", r"@app\.(get|post|put|delete)"),
         description="Jinja2 template construction/rendering near request-controlled input",
@@ -277,7 +278,7 @@ BUILTIN_RULES: tuple[ReachabilityRule, ...] = (
     ReachabilityRule(
         ecosystem="pypi",
         package_name="pyjwt",
-        import_patterns=(r"^\s*import\s+jwt\b", r"^\s*from\s+jwt\s+import\s+"),
+        import_patterns=(r"^\s*import\s+jwt\b", r"^\s*from\s+jwt(?:\.[\w.]+)?\s+import\s+"),
         function_patterns=(r"jwt\.(decode|encode)\s*\(", r"\bdecode\s*\("),
         attacker_patterns=(r"Authorization", r"request\.(headers|cookies|json)", r"flask\.request", r"FastAPI\("),
         description="PyJWT token parsing or verification on request-controlled tokens",
@@ -285,7 +286,7 @@ BUILTIN_RULES: tuple[ReachabilityRule, ...] = (
     ReachabilityRule(
         ecosystem="pypi",
         package_name="lxml",
-        import_patterns=(r"^\s*import\s+lxml\b", r"^\s*from\s+lxml\s+import\s+"),
+        import_patterns=(r"^\s*import\s+lxml\b", r"^\s*from\s+lxml(?:\.[\w.]+)?\s+import\s+"),
         function_patterns=(r"etree\.(fromstring|parse|XMLParser)\s*\(", r"\.xpath\s*\("),
         attacker_patterns=(r"request\.(data|body|files|json|form)", r"flask\.request", r"@app\.(get|post|put|delete)"),
         description="lxml XML parsing near request-controlled input",
@@ -301,7 +302,7 @@ BUILTIN_RULES: tuple[ReachabilityRule, ...] = (
     ReachabilityRule(
         ecosystem="pypi",
         package_name="fastapi",
-        import_patterns=(r"^\s*import\s+fastapi\b", r"^\s*from\s+fastapi\s+import\s+"),
+        import_patterns=(r"^\s*import\s+fastapi\b", r"^\s*from\s+fastapi(?:\.[\w.]+)?\s+import\s+"),
         function_patterns=(r"FastAPI\s*\(", r"APIRouter\s*\(", r"@(app|router)\.(get|post|put|patch|delete|api_route)\s*\("),
         attacker_patterns=(r"Request\b", r"\b(request|req)\.(query_params|headers|path_params|json|body)\b", r"@(app|router)\.(get|post|put|patch|delete|api_route)\s*\("),
         description="FastAPI application or router entrypoint handling HTTP request data",
@@ -309,7 +310,7 @@ BUILTIN_RULES: tuple[ReachabilityRule, ...] = (
     ReachabilityRule(
         ecosystem="pypi",
         package_name="chainlit",
-        import_patterns=(r"^\s*import\s+chainlit\b", r"^\s*from\s+chainlit\s+import\s+"),
+        import_patterns=(r"^\s*import\s+chainlit\b", r"^\s*from\s+chainlit(?:\.[\w.]+)?\s+import\s+"),
         function_patterns=(r"@cl\.(on_message|on_chat_start|on_audio_chunk|on_file_upload)", r"\bcl\.Message\b", r"\bcl\.(AskFileMessage|AskUserMessage)\b"),
         attacker_patterns=(r"@cl\.on_message", r"\bmessage\.(content|elements|metadata)\b", r"\bcl\.Message\b"),
         description="Chainlit chat/message handler processing user-controlled messages",
@@ -317,7 +318,7 @@ BUILTIN_RULES: tuple[ReachabilityRule, ...] = (
     ReachabilityRule(
         ecosystem="pypi",
         package_name="aiohttp",
-        import_patterns=(r"^\s*import\s+aiohttp\b", r"^\s*from\s+aiohttp\s+import\s+"),
+        import_patterns=(r"^\s*import\s+aiohttp\b", r"^\s*from\s+aiohttp(?:\.[\w.]+)?\s+import\s+"),
         function_patterns=(r"\bClientSession\s*\(", r"\bweb\.Application\s*\(", r"\bweb\.RouteTableDef\s*\(", r"@routes\.(get|post|put|patch|delete)\s*\("),
         attacker_patterns=(r"\bweb\.Request\b", r"\brequest\.(query|query_string|match_info|headers|json|post)\b", r"@routes\.(get|post|put|patch|delete)\s*\("),
         description="aiohttp client/server use with HTTP request or route entrypoint evidence",
@@ -354,7 +355,7 @@ def load_reachability_rules(path: str | Path | None) -> tuple[ReachabilityRule, 
             raise ValueError(f"{rule_path}: rule {index} must be an object")
         ecosystem = str(item.get("ecosystem") or "").lower().strip()
         package = str(item.get("package") or item.get("package_name") or "").strip()
-        imports = _tuple_patterns(item.get("import_patterns"))
+        imports = _validated_patterns(item.get("import_patterns"), rule_path, index, "import_patterns")
         if not ecosystem or not package or not imports:
             raise ValueError(f"{rule_path}: rule {index} needs ecosystem, package, and import_patterns")
         rules.append(
@@ -362,8 +363,10 @@ def load_reachability_rules(path: str | Path | None) -> tuple[ReachabilityRule, 
                 ecosystem=ecosystem,
                 package_name=package,
                 import_patterns=imports,
-                function_patterns=_tuple_patterns(item.get("function_patterns")),
-                attacker_patterns=_tuple_patterns(item.get("attacker_patterns")),
+                function_patterns=_validated_patterns(item.get("function_patterns"), rule_path, index, "function_patterns"),
+                attacker_patterns=_validated_patterns(item.get("attacker_patterns"), rule_path, index, "attacker_patterns"),
+                # Vulnerability IDs are compared as literal lowercased strings, not
+                # regexes, so they must not be compiled.
                 vulnerability_ids=_tuple_patterns(item.get("vulnerabilities") or item.get("vulnerability_ids")),
                 description=str(item.get("description") or "custom reachability rule"),
             )
@@ -379,6 +382,22 @@ def _tuple_patterns(value: Any) -> tuple[str, ...]:
     if isinstance(value, list):
         return tuple(str(item) for item in value)
     return ()
+
+
+def _validated_patterns(value: Any, rule_path: Path, index: int, field: str) -> tuple[str, ...]:
+    """Reject rule patterns that are not valid regexes at load time.
+
+    An uncompilable pattern used to be accepted here and silently dropped at match
+    time, so a typo turned a reachable component into "package import was not
+    observed" -- a failed analysis reported as an absence of evidence.
+    """
+    patterns = _tuple_patterns(value)
+    for pattern in patterns:
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise ValueError(f"{rule_path}: rule {index} {field} pattern {pattern!r} is not a valid regex: {exc}") from exc
+    return patterns
 
 
 __all__ = ["BUILTIN_RULES", "ReachabilityRule", "load_reachability_rules"]

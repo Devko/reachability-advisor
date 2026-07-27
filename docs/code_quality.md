@@ -2,18 +2,18 @@
 
 ## Current gates
 
-- Unit and workflow tests: 630.
+- Unit and workflow tests: 904.
 - Coverage threshold: 93%.
 - Current measured coverage: passes the 93% line/branch-aware coverage gate.
 - Test runner: `scripts/run_tests.py`.
 - Compile check: `python -m compileall -q -x fixture_data src scripts tests`.
 - Static lint configuration: `ruff` with `E`, `F`, `I`, `UP`, `B`, `C4`, and `SIM` rules across `src`, `tests`, and `scripts`.
 - Static type configuration: strict `mypy` across `src`.
-- Sample workflow: `make sample`.
+- Sample workflow: `make sample` (identical flags to `scripts/run_sample.sh`).
 - Terraform fixture workflow: `make fixtures`.
-- Release validation: `make release-check` currently covers 56 import/export and release-contract checks.
-- Complex real-world app validation: `make external-complex` (AWS Retail Store, Google Online Boutique, Bank of Anthos, Azure AKS Store, and Instana Robot Shop).
-- Package build: `make package` (`python -m build --no-isolation`).
+- Release validation: `make release-check` currently covers 56 import/export and release-contract checks. It runs fully offline, so it verifies that the tier-regression comparator accepts a matching run and rejects an inflated one; it does not observe the real-app tier distribution.
+- Complex real-world app validation: `make external-complex` (AWS Retail Store, Google Online Boutique, Bank of Anthos, Azure AKS Store, and Instana Robot Shop). This is the gate that observes the real tier distribution: it validates the benchmark it generates against `fixtures/benchmarks/real-app-tier-snapshots.json` and fails on a snapshot regression.
+- Package build: `make package` (`python -m build --no-isolation`). `MANIFEST.in` ships the data directories the bundled test suite reads, so `make test` and `make release-check` also run from an unpacked sdist.
 - CI matrix: Python 3.10, 3.11, 3.12, 3.13.
 - CI runs compile, lint, strict type-checking, tests, coverage, sample output generation, fixture packs, release validation, package build, and a built-wheel CLI smoke test.
 - CI uploads generated JSON/Markdown/SARIF/HTML/text reports and built distribution files as workflow artifacts.

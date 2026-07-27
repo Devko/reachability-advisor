@@ -264,7 +264,11 @@ class SbomAndVulnTests(unittest.TestCase):
             )
             vulns = load_vulnerabilities(path)
         self.assertEqual(vulns[0].id, "PYSEC-EDGE")
-        self.assertEqual(vulns[0].severity, "cvss_v3")
+        # OSV's severity entries carry the CVSS *version tag* in "type" and the
+        # score in "score"; "cvss_v3" is not a severity. Severity is derived
+        # from the numeric score instead. See tests/test_audit_vuln.py for the
+        # CVSS vector-string cases.
+        self.assertEqual(vulns[0].severity, "high")
         self.assertEqual(vulns[0].cvss, 7.1)
 
 

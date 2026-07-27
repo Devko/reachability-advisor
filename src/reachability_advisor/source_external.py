@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -318,6 +319,25 @@ def _confidence(value: Any, default: Confidence = Confidence.MEDIUM) -> Confiden
         return default
 
 
+def _positive_int(value: Any, *, default: int = 1) -> int:
+    """Coerce untrusted scanner line/column values without crashing the scan.
+
+    Imported scanner output is untrusted, so a JSON object or a non-numeric string
+    in a line/column field must degrade to the default rather than escape as an
+    uncaught TypeError/ValueError. Values are clamped to >= 1 to match the sibling
+    security-evidence adapter and the SARIF region contract.
+    """
+    if value in (None, ""):
+        return default
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(number):
+        return default
+    return max(1, int(number))
+
+
 def _locations(items: Any) -> list[SourceLocation]:
     locations: list[SourceLocation] = []
     for item in items or []:
@@ -329,8 +349,8 @@ def _locations(items: Any) -> list[SourceLocation]:
         locations.append(
             SourceLocation(
                 path=Path(str(raw_path)),
-                line=int(item.get("line") or item.get("startLine") or 1),
-                column=int(item.get("column") or item.get("startColumn") or 1),
+                line=_positive_int(item.get("line") or item.get("startLine")),
+                column=_positive_int(item.get("column") or item.get("startColumn")),
                 snippet=str(item.get("snippet") or ""),
             )
         )
@@ -382,7 +402,11 @@ def _dedupe_location_dicts(locations: list[dict[str, Any]]) -> list[dict[str, An
         raw_path = location.get("path") or location.get("uri") or location.get("file")
         if not raw_path:
             continue
-        key = (str(raw_path), int(location.get("line") or location.get("startLine") or 1), int(location.get("column") or location.get("startColumn") or 1))
+        key = (
+            str(raw_path),
+            _positive_int(location.get("line") or location.get("startLine")),
+            _positive_int(location.get("column") or location.get("startColumn")),
+        )
         if key in seen:
             continue
         seen.add(key)

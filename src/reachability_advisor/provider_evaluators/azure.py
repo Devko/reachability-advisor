@@ -68,6 +68,7 @@ class AzureExposureEvaluator(ProviderEvaluator):
                 "scoped_resource",
                 "subscription_scope",
                 "unknown_resource_scope",
+                "unresolved_role_definition",
             }
         ),
         unknown_network_notes=("Azure NSG priority conflicts and App Gateway auth semantics are modeled only from rendered evidence.",),

@@ -9,7 +9,7 @@ with Terraform and explicit context JSON.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -56,6 +56,19 @@ class WorkloadMatch:
 
 
 @dataclass(frozen=True)
+class NetworkPolicySelection:
+    """NetworkPolicy objects proven to select a workload, plus the ones we could not evaluate.
+
+    ``unevaluable`` holds policies whose ``spec.podSelector`` uses selector forms this
+    static parser cannot resolve. Those are visibility gaps: they are never treated as
+    selecting the workload, because an unproven selector must never downgrade exposure.
+    """
+
+    selected: tuple[KubernetesResource, ...] = ()
+    unevaluable: tuple[KubernetesResource, ...] = ()
+
+
+@dataclass(frozen=True)
 class KubernetesAnalysis:
     contexts: dict[str, ContextEvidence]
     coverage: dict[str, Any]
@@ -78,6 +91,12 @@ READ_VERBS = {"get", "list", "watch"}
 COMPUTE_RESOURCES = {"pods", "deployments", "statefulsets", "daemonsets", "replicasets", "jobs", "cronjobs"}
 NETWORK_RESOURCES = {"services", "ingresses", "ingressclasses", "networkpolicies"}
 IAM_RESOURCES = {"roles", "rolebindings", "clusterroles", "clusterrolebindings", "serviceaccounts"}
+# Rendered manifests are shallow in practice (the deepest sample in this repo is 10 levels).
+# The cap keeps the recursive descent parser and the recursive document walkers inside the
+# interpreter stack for hostile input instead of raising RecursionError.
+MAX_MANIFEST_DEPTH = 100
+POD_SELECTOR_KEYS = {"matchLabels", "matchExpressions"}
+POD_SELECTOR_OPERATORS = {"In", "NotIn", "Exists", "DoesNotExist"}
 
 
 def analyze_kubernetes_manifests(
@@ -107,7 +126,7 @@ def load_kubernetes_resources(path: str | Path) -> list[KubernetesResource]:
         raise KubernetesManifestError(f"{manifest_path}: read failed: {exc}") from exc
     try:
         documents = _parse_manifest_documents(text, manifest_path)
-    except (json.JSONDecodeError, ValueError) as exc:
+    except (json.JSONDecodeError, ValueError, RecursionError) as exc:
         raise KubernetesManifestError(f"{manifest_path}: invalid manifest: {exc}") from exc
     resources: list[KubernetesResource] = []
     for index, document in enumerate(documents):
@@ -155,7 +174,9 @@ def _manifest_files(paths: Iterable[str | Path]) -> list[Path]:
 
 def _parse_manifest_documents(text: str, path: Path) -> list[Any]:
     if path.suffix.lower() == ".json":
-        return _json_manifest_documents(json.loads(text))
+        data = json.loads(text)
+        _ensure_supported_depth(data)
+        return _json_manifest_documents(data)
     documents: list[Any] = []
     for raw in text.split("\n---"):
         document = _parse_yaml_document(raw)
@@ -176,7 +197,7 @@ def _parse_yaml_document(raw: str) -> dict[str, Any]:
     lines = _yaml_lines(raw)
     if not lines:
         return {}
-    parsed, _ = _parse_yaml_block(lines, 0, lines[0][0])
+    parsed, _ = _parse_yaml_block(lines, 0, lines[0][0], 0)
     return parsed if isinstance(parsed, dict) else {}
 
 
@@ -204,15 +225,16 @@ def _strip_comment(line: str) -> str:
     return line
 
 
-def _parse_yaml_block(lines: list[tuple[int, str]], index: int, indent: int) -> tuple[Any, int]:
+def _parse_yaml_block(lines: list[tuple[int, str]], index: int, indent: int, depth: int) -> tuple[Any, int]:
+    _check_depth(depth)
     if index >= len(lines):
         return {}, index
     if lines[index][1].startswith("- "):
-        return _parse_yaml_list(lines, index, indent)
-    return _parse_yaml_mapping(lines, index, indent)
+        return _parse_yaml_list(lines, index, indent, depth)
+    return _parse_yaml_mapping(lines, index, indent, depth)
 
 
-def _parse_yaml_mapping(lines: list[tuple[int, str]], index: int, indent: int) -> tuple[dict[str, Any], int]:
+def _parse_yaml_mapping(lines: list[tuple[int, str]], index: int, indent: int, depth: int) -> tuple[dict[str, Any], int]:
     mapping: dict[str, Any] = {}
     while index < len(lines):
         line_indent, content = lines[index]
@@ -228,16 +250,16 @@ def _parse_yaml_mapping(lines: list[tuple[int, str]], index: int, indent: int) -
         value = raw_value.strip()
         index += 1
         if value:
-            mapping[key] = _parse_scalar(value)
+            mapping[key] = _parse_scalar(value, depth + 1)
         elif index < len(lines) and lines[index][0] > line_indent:
-            child, index = _parse_yaml_block(lines, index, lines[index][0])
+            child, index = _parse_yaml_block(lines, index, lines[index][0], depth + 1)
             mapping[key] = child
         else:
             mapping[key] = {}
     return mapping, index
 
 
-def _parse_yaml_list(lines: list[tuple[int, str]], index: int, indent: int) -> tuple[list[Any], int]:
+def _parse_yaml_list(lines: list[tuple[int, str]], index: int, indent: int, depth: int) -> tuple[list[Any], int]:
     values: list[Any] = []
     while index < len(lines):
         line_indent, content = lines[index]
@@ -249,7 +271,7 @@ def _parse_yaml_list(lines: list[tuple[int, str]], index: int, indent: int) -> t
         index += 1
         if not item_text:
             if index < len(lines) and lines[index][0] > line_indent:
-                child, index = _parse_yaml_block(lines, index, lines[index][0])
+                child, index = _parse_yaml_block(lines, index, lines[index][0], depth + 1)
                 values.append(child)
             else:
                 values.append(None)
@@ -259,23 +281,24 @@ def _parse_yaml_list(lines: list[tuple[int, str]], index: int, indent: int) -> t
             item: dict[str, Any] = {}
             value = raw_value.strip()
             if value:
-                item[key.strip()] = _parse_scalar(value)
+                item[key.strip()] = _parse_scalar(value, depth + 1)
             elif index < len(lines) and lines[index][0] > line_indent:
-                child, index = _parse_yaml_block(lines, index, lines[index][0])
+                child, index = _parse_yaml_block(lines, index, lines[index][0], depth + 1)
                 item[key.strip()] = child
             else:
                 item[key.strip()] = {}
             if index < len(lines) and lines[index][0] > line_indent:
-                continuation, index = _parse_yaml_block(lines, index, lines[index][0])
+                continuation, index = _parse_yaml_block(lines, index, lines[index][0], depth + 1)
                 if isinstance(continuation, dict):
                     item.update(continuation)
             values.append(item)
         else:
-            values.append(_parse_scalar(item_text))
+            values.append(_parse_scalar(item_text, depth + 1))
     return values, index
 
 
-def _parse_scalar(value: str) -> Any:
+def _parse_scalar(value: str, depth: int) -> Any:
+    _check_depth(depth)
     value = value.strip()
     if value in {"", "null", "Null", "NULL", "~"}:
         return None
@@ -284,16 +307,39 @@ def _parse_scalar(value: str) -> Any:
     if value.lower() == "false":
         return False
     if value.startswith("[") and value.endswith("]"):
-        return [_parse_scalar(item) for item in _split_inline_items(value[1:-1]) if item.strip()]
+        return [_parse_scalar(item, depth + 1) for item in _split_inline_items(value[1:-1]) if item.strip()]
     if value.startswith("{") and value.endswith("}"):
         result: dict[str, Any] = {}
         for item in _split_inline_items(value[1:-1]):
             if ":" not in item:
                 continue
             key, raw_value = item.split(":", 1)
-            result[_strip_quotes(key.strip())] = _parse_scalar(raw_value.strip())
+            result[_strip_quotes(key.strip())] = _parse_scalar(raw_value.strip(), depth + 1)
         return result
     return _strip_quotes(value)
+
+
+def _check_depth(depth: int) -> None:
+    if depth > MAX_MANIFEST_DEPTH:
+        raise KubernetesManifestError(f"manifest nesting exceeds supported depth of {MAX_MANIFEST_DEPTH}")
+
+
+def _ensure_supported_depth(data: Any) -> None:
+    """Reject documents nested deeper than the parser and the document walkers support.
+
+    JSON manifests bypass the YAML parser, so the depth guard has to be applied to the
+    decoded structure. The walk is iterative on purpose: it must not be the thing that
+    overflows the stack.
+    """
+
+    pending: list[tuple[Any, int]] = [(data, 0)]
+    while pending:
+        value, depth = pending.pop()
+        _check_depth(depth)
+        if isinstance(value, dict):
+            pending.extend((child, depth + 1) for child in value.values())
+        elif isinstance(value, list):
+            pending.extend((child, depth + 1) for child in value)
 
 
 def _split_inline_items(value: str) -> list[str]:
@@ -363,10 +409,16 @@ def _contexts_from_resources(
             service_name = next(iter(ingress_services.get(ingress.name, set())), "unknown-service")
             evidence.append(f"context network path: {exposure} via {ingress.address} -> kubernetes_service.{service_name} -> {workload_ref}")
         exposure = _max_exposure(exposures)
-        selected_network_policies = _network_policies_for_workload(workload, network_policies)
-        if _network_policies_deny_all_ingress(selected_network_policies):
+        policy_selection = _network_policies_for_workload(workload, network_policies)
+        unproven_ingress_policies = [policy for policy in policy_selection.unevaluable if _network_policy_controls_ingress(policy)]
+        if _network_policies_deny_all_ingress(policy_selection.selected) and not unproven_ingress_policies:
             exposure = "private"
             evidence.append(f"context network policy: private via {workload_ref}; selected NetworkPolicy resources deny all ingress")
+        for policy in policy_selection.unevaluable:
+            evidence.append(
+                f"context network policy: unknown via {workload_ref}; {policy.address} podSelector could not be evaluated, "
+                "so the policy was neither applied nor used to downgrade exposure"
+            )
         if exposure == "unknown":
             exposure = "private"
             evidence.append(f"context network path: private via {workload_ref}; no Service or Ingress targets this workload")
@@ -512,20 +564,88 @@ def _workload_service_account(workload: KubernetesResource) -> str:
     return str(value)
 
 
-def _network_policies_for_workload(workload: KubernetesResource, policies: list[KubernetesResource]) -> list[KubernetesResource]:
+def _network_policies_for_workload(workload: KubernetesResource, policies: list[KubernetesResource]) -> NetworkPolicySelection:
     labels = _workload_labels(workload)
     selected: list[KubernetesResource] = []
+    unevaluable: list[KubernetesResource] = []
     for policy in policies:
         if policy.namespace != workload.namespace:
             continue
-        selector = _string_mapping(_nested(policy.values, "spec", "podSelector", "matchLabels"))
-        if selector and not all(labels.get(key) == value for key, value in selector.items()):
-            continue
-        selected.append(policy)
-    return selected
+        matched = _pod_selector_matches(_nested(policy.values, "spec", "podSelector"), labels)
+        if matched is None:
+            unevaluable.append(policy)
+        elif matched:
+            selected.append(policy)
+    return NetworkPolicySelection(selected=tuple(selected), unevaluable=tuple(unevaluable))
 
 
-def _network_policies_deny_all_ingress(policies: list[KubernetesResource]) -> bool:
+def _pod_selector_matches(raw_selector: Any, labels: Mapping[str, str]) -> bool | None:
+    """Evaluate a NetworkPolicy ``spec.podSelector`` against a workload label set.
+
+    Returns ``True`` when the selector provably selects the workload, ``False`` when it
+    provably does not, and ``None`` when the selector uses forms this static parser cannot
+    evaluate. ``None`` is a visibility gap, never a match: only an absent or empty
+    ``podSelector`` selects every pod in the namespace.
+    """
+
+    if raw_selector is None:
+        return True
+    if not isinstance(raw_selector, dict):
+        return None
+    if not raw_selector:
+        return True
+    # Kubernetes ANDs every selector term, so evaluate with three-valued logic: a proven
+    # mismatch wins over an unevaluable term, and any unevaluable term blocks a match.
+    results: list[bool | None] = []
+    if set(raw_selector) - POD_SELECTOR_KEYS:
+        results.append(None)
+    if "matchLabels" in raw_selector:
+        results.append(_match_labels_match(raw_selector["matchLabels"], labels))
+    if "matchExpressions" in raw_selector:
+        expressions = raw_selector["matchExpressions"]
+        if isinstance(expressions, list):
+            results.extend(_match_expression_matches(expression, labels) for expression in expressions)
+        else:
+            results.append(None)
+    if any(result is False for result in results):
+        return False
+    if any(result is None for result in results):
+        return None
+    return True
+
+
+def _match_labels_match(raw_labels: Any, labels: Mapping[str, str]) -> bool | None:
+    if not isinstance(raw_labels, dict):
+        return None
+    selector = _string_mapping(raw_labels)
+    if len(selector) != len(raw_labels):
+        return None
+    return all(labels.get(key) == value for key, value in selector.items())
+
+
+def _match_expression_matches(expression: Any, labels: Mapping[str, str]) -> bool | None:
+    if not isinstance(expression, dict):
+        return None
+    key = expression.get("key")
+    operator = expression.get("operator")
+    if not isinstance(key, str) or not key or not isinstance(operator, str) or operator not in POD_SELECTOR_OPERATORS:
+        return None
+    if operator == "Exists":
+        return key in labels
+    if operator == "DoesNotExist":
+        return key not in labels
+    raw_values = expression.get("values")
+    if not isinstance(raw_values, list) or not raw_values:
+        return None
+    if any(item is None or isinstance(item, dict | list) for item in raw_values):
+        return None
+    values = {str(item) for item in raw_values}
+    if operator == "In":
+        return key in labels and labels[key] in values
+    return key not in labels or labels[key] not in values
+
+
+def _network_policies_deny_all_ingress(policies: Sequence[KubernetesResource]) -> bool:
     ingress_policies = [policy for policy in policies if _network_policy_controls_ingress(policy)]
     if not ingress_policies:
         return False
@@ -742,6 +862,7 @@ def _coverage_report(
             "Rendered Kubernetes manifest evidence is static and local. It does not query a live cluster.",
             "LoadBalancer, NodePort, and public Ingress objects create public exposure. ClusterIP services create internal exposure.",
             "Selected NetworkPolicy resources with no ingress allow rules override Service/Ingress exposure to private.",
+            "A NetworkPolicy podSelector that cannot be evaluated statically is reported as an unknown and never downgrades exposure.",
             "RBAC privilege is derived from rendered Role, ClusterRole, RoleBinding, and ClusterRoleBinding objects.",
         ],
     }

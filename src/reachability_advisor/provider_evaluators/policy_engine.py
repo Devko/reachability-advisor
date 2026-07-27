@@ -67,6 +67,17 @@ AZURE_ROLE_ACTION_HINTS: dict[str, list[str]] = {
     "reader": ["*/read"],
 }
 
+#: Marker key stamped on a parsed statement whose only grant evidence is a role reference that
+#: could not be expanded into a permission list. Such a statement is excluded from matching by
+#: _split_unresolved_roles and, crucially, must not be read as "no allow exists": an
+#: uninterpretable document is a visibility gap, never an observed deny.
+UNRESOLVED_ROLE_KEY = "_unresolved_role"
+
+#: Layers that can grant access. Only an unexpanded role reference in one of these can mask a
+#: real allow, so only these suppress the implicit-deny fallback.
+AZURE_GRANTING_LAYERS = frozenset({"role_assignment", "role_definition", "resource_policy"})
+GCP_GRANTING_LAYERS = frozenset({"iam_policy", "resource_policy"})
+
 GCP_ROLE_PERMISSION_HINTS: dict[str, list[str]] = {
     "roles/owner": ["*"],
     "roles/editor": ["*"],
@@ -337,13 +348,17 @@ def _evaluate_azure(record: PolicyRecord, documents: list[PolicyRecord]) -> Poli
     conditions: list[str] = []
     allow_layers: set[str] = set()
     deny_layers: set[str] = set()
+    unresolved_roles: list[str] = []
     docs_by_layer = _documents_by_layer(documents)
 
     for layer, docs in docs_by_layer.items():
         layer_allowed = False
         layer_denied = False
         layer_conditional = False
-        for statement in _azure_statement_asts(layer, docs):
+        layer_asts, layer_unresolved_roles = _azure_statement_asts(layer, docs)
+        if layer in AZURE_GRANTING_LAYERS:
+            unresolved_roles.extend(layer_unresolved_roles)
+        for statement in layer_asts:
             statement_match = _evaluate_statement(statement, request)
             if not statement_match.matched:
                 continue
@@ -367,18 +382,24 @@ def _evaluate_azure(record: PolicyRecord, documents: list[PolicyRecord]) -> Poli
             conditions.append("pim_activation")
         order.append({"step": layer, "state": "deny" if layer_denied else "conditional_allow" if layer_allowed and layer_conditional else "allow" if layer_allowed else "not_matched"})
 
-    if {"role_assignment", "role_definition", "resource_policy"} & set(docs_by_layer) and not allow_layers and not deny_layers:
-        deny_layers.add("implicit_deny")
-        blockers.append(_blocker("role_assignment_missing_allow", "blocks", "azure", f"no role assignment or resource policy allows {action}"))
+    unresolved_gap = False
+    if AZURE_GRANTING_LAYERS & set(docs_by_layer) and not allow_layers and not deny_layers:
+        if unresolved_roles:
+            unresolved_gap = True
+            blockers.append(_unresolved_role_blocker("azure", unresolved_roles))
+            unknowns.extend(_unresolved_role_unknowns(unresolved_roles))
+        else:
+            deny_layers.add("implicit_deny")
+            blockers.append(_blocker("role_assignment_missing_allow", "blocks", "azure", f"no role assignment or resource policy allows {action}"))
 
     for scope_kind in _azure_scope_blockers(resource, documents):
         blockers.append(_blocker(scope_kind, "constrains", "azure", f"Azure scope constraint: {scope_kind}"))
 
-    decision = "denied" if deny_layers else "constrained_allow" if blockers else "allowed"
+    decision = "denied" if deny_layers else "unknown" if unresolved_gap else "constrained_allow" if blockers else "allowed"
     return _evaluation_result(
         provider="azure",
         decision=decision,
-        basis=_basis("policy_engine", decision, sorted(deny_layers) or sorted(allow_layers)),
+        basis=_basis("policy_engine", decision, sorted(deny_layers) or sorted(allow_layers) or _unresolved_basis_layers(unresolved_gap, docs_by_layer, AZURE_GRANTING_LAYERS)),
         policy_layer=_strongest_layer(sorted(deny_layers) or sorted(allow_layers) or list(docs_by_layer)),
         blockers=blockers,
         unknowns=unknowns,
@@ -400,13 +421,17 @@ def _evaluate_gcp(record: PolicyRecord, documents: list[PolicyRecord]) -> Policy
     conditions: list[str] = []
     allow_layers: set[str] = set()
     deny_layers: set[str] = set()
+    unresolved_roles: list[str] = []
     docs_by_layer = _documents_by_layer(documents)
 
     for layer, docs in docs_by_layer.items():
         layer_allowed = False
         layer_denied = False
         layer_conditional = False
-        for statement in _gcp_statement_asts(layer, docs):
+        layer_asts, layer_unresolved_roles = _gcp_statement_asts(layer, docs)
+        if layer in GCP_GRANTING_LAYERS:
+            unresolved_roles.extend(layer_unresolved_roles)
+        for statement in layer_asts:
             statement_match = _evaluate_statement(statement, request)
             if not statement_match.matched:
                 continue
@@ -431,9 +456,15 @@ def _evaluate_gcp(record: PolicyRecord, documents: list[PolicyRecord]) -> Policy
             blockers.append(_blocker("principal_access_boundary_deny", "blocks", "gcp", f"principal access boundary has no matching allow for {action}"))
         order.append({"step": layer, "state": "deny" if layer_denied else "conditional_allow" if layer_allowed and layer_conditional else "allow" if layer_allowed else "not_matched"})
 
-    if {"iam_policy", "resource_policy"} & set(docs_by_layer) and not allow_layers and not deny_layers:
-        deny_layers.add("implicit_deny")
-        blockers.append(_blocker("implicit_deny", "blocks", "gcp", f"no IAM binding allows {action}"))
+    unresolved_gap = False
+    if GCP_GRANTING_LAYERS & set(docs_by_layer) and not allow_layers and not deny_layers:
+        if unresolved_roles:
+            unresolved_gap = True
+            blockers.append(_unresolved_role_blocker("gcp", unresolved_roles))
+            unknowns.extend(_unresolved_role_unknowns(unresolved_roles))
+        else:
+            deny_layers.add("implicit_deny")
+            blockers.append(_blocker("implicit_deny", "blocks", "gcp", f"no IAM binding allows {action}"))
 
     if _gcp_workload_identity(record, documents):
         blockers.append(_blocker("workload_identity_condition", "constrains", "gcp", "Workload Identity mapping participates in access"))
@@ -442,11 +473,11 @@ def _evaluate_gcp(record: PolicyRecord, documents: list[PolicyRecord]) -> Policy
     for scope_kind in _gcp_scope_blockers(resource, documents):
         blockers.append(_blocker(scope_kind, "constrains", "gcp", f"GCP scope constraint: {scope_kind}"))
 
-    decision = "denied" if deny_layers else "constrained_allow" if blockers else "allowed"
+    decision = "denied" if deny_layers else "unknown" if unresolved_gap else "constrained_allow" if blockers else "allowed"
     return _evaluation_result(
         provider="gcp",
         decision=decision,
-        basis=_basis("policy_engine", decision, sorted(deny_layers) or sorted(allow_layers)),
+        basis=_basis("policy_engine", decision, sorted(deny_layers) or sorted(allow_layers) or _unresolved_basis_layers(unresolved_gap, docs_by_layer, GCP_GRANTING_LAYERS)),
         policy_layer=_strongest_layer(sorted(deny_layers) or sorted(allow_layers) or list(docs_by_layer)),
         blockers=blockers,
         unknowns=unknowns,
@@ -574,6 +605,10 @@ def _azure_statements(layer: str, documents: list[PolicyRecord]) -> list[PolicyR
                     "principalId": payload.get("principalId") or payload.get("principal_id") or payload.get("principal"),
                 }
             )
+        elif role_name and not _policy_statements([document]):
+            # The assignment names a role we cannot expand and carries no action list of its own.
+            # Record the gap; do not let it read as "this role grants nothing".
+            statements.append({UNRESOLVED_ROLE_KEY: role_name, "role": role_name})
     for statement in _policy_statements(documents):
         if "permissions" in statement and isinstance(statement["permissions"], list):
             for permission in statement["permissions"]:
@@ -598,9 +633,15 @@ def _gcp_statements(layer: str, documents: list[PolicyRecord]) -> list[PolicyRec
         for binding in _listify(payload.get("bindings") if isinstance(payload, dict) else None):
             if isinstance(binding, dict):
                 statement = dict(binding)
-                role_permissions = _gcp_role_permissions(_first_string(statement, ("role", "name")))
-                if role_permissions and not _first_patterns(statement, ("permissions", "includedPermissions", "deniedPermissions", "permission")):
+                role_name = _first_string(statement, ("role", "name"))
+                role_permissions = _gcp_role_permissions(role_name)
+                explicit_permissions = _first_patterns(statement, ("permissions", "includedPermissions", "deniedPermissions", "permission"))
+                if role_permissions and not explicit_permissions:
                     statement["permissions"] = role_permissions
+                elif role_name and not role_permissions and not explicit_permissions:
+                    # The binding names a role outside the hint catalogue and carries no permission
+                    # list. Record the gap; do not let it read as "this binding grants nothing".
+                    statement[UNRESOLVED_ROLE_KEY] = role_name
                 statements.append(statement)
         for rule in _listify(payload.get("rules") if isinstance(payload, dict) else None):
             if isinstance(rule, dict):
@@ -692,28 +733,55 @@ def _aws_statement_asts(layer: str, documents: list[PolicyRecord]) -> list[Polic
     )
 
 
-def _azure_statement_asts(layer: str, documents: list[PolicyRecord]) -> list[PolicyStatementAst]:
-    return _statement_asts(
+def _unresolved_role_blocker(provider: str, roles: list[str]) -> PolicyRecord:
+    return _blocker(
+        "unresolved_role_definition",
+        "constrains",
+        provider,
+        f"role definition {', '.join(_dedupe_strings(roles))} was not expanded to permissions; effective access is unknown",
+    )
+
+
+def _unresolved_role_unknowns(roles: list[str]) -> list[str]:
+    return [f"role definition {role} was not expanded to permissions" for role in _dedupe_strings(roles)]
+
+
+def _unresolved_basis_layers(unresolved_gap: bool, docs_by_layer: dict[str, list[PolicyRecord]], granting: frozenset[str]) -> list[str]:
+    return sorted(granting & set(docs_by_layer)) if unresolved_gap else []
+
+
+def _split_unresolved_roles(statements: list[PolicyRecord]) -> tuple[list[PolicyRecord], list[str]]:
+    resolved = [statement for statement in statements if not statement.get(UNRESOLVED_ROLE_KEY)]
+    roles = [str(statement[UNRESOLVED_ROLE_KEY]) for statement in statements if statement.get(UNRESOLVED_ROLE_KEY)]
+    return resolved, _dedupe_strings(roles)
+
+
+def _azure_statement_asts(layer: str, documents: list[PolicyRecord]) -> tuple[list[PolicyStatementAst], list[str]]:
+    resolved, unresolved_roles = _split_unresolved_roles(_azure_statements(layer, documents))
+    asts = _statement_asts(
         "azure",
         layer,
-        _azure_statements(layer, documents),
+        resolved,
         action_keys=("actions", "Actions", "dataActions", "DataActions", "denyActions", "notActions"),
         not_action_keys=("notActions", "NotActions", "notDataActions", "NotDataActions", "excludeActions"),
         resource_keys=("scope", "scopes", "resource", "resources", "assignableScopes", "assignable_scopes"),
         not_resource_keys=("notScopes", "excludedScopes"),
     )
+    return asts, unresolved_roles
 
 
-def _gcp_statement_asts(layer: str, documents: list[PolicyRecord]) -> list[PolicyStatementAst]:
-    return _statement_asts(
+def _gcp_statement_asts(layer: str, documents: list[PolicyRecord]) -> tuple[list[PolicyStatementAst], list[str]]:
+    resolved, unresolved_roles = _split_unresolved_roles(_gcp_statements(layer, documents))
+    asts = _statement_asts(
         "gcp",
         layer,
-        _gcp_statements(layer, documents),
+        resolved,
         action_keys=("permissions", "includedPermissions", "deniedPermissions", "permission", "role"),
         not_action_keys=("exceptionPermissions", "excludedPermissions"),
         resource_keys=("resources", "resource", "scope", "projects", "folders", "organizations"),
         not_resource_keys=("excludedResources", "exceptionResources"),
     )
+    return asts, unresolved_roles
 
 
 def _kubernetes_statement_asts(layer: str, documents: list[PolicyRecord]) -> list[PolicyStatementAst]:
@@ -731,7 +799,7 @@ def _kubernetes_statement_asts(layer: str, documents: list[PolicyRecord]) -> lis
 def _evaluate_statement(statement: PolicyStatementAst, request: PolicyRequest) -> StatementMatch:
     action_matched = _pattern_set_applies(statement.actions, statement.not_actions, request.action)
     resource_matched = _resource_pattern_set_applies(statement, request)
-    principal_matched = _pattern_set_applies(statement.principals, statement.not_principals, request.principal, default_when_empty=True)
+    principal_matched = _pattern_set_applies(statement.principals, statement.not_principals, request.principal)
     condition_state, condition_blockers, unknowns = _conditions_apply(statement, request)
     matched = action_matched and resource_matched and principal_matched and condition_state != "not_satisfied"
     return StatementMatch(
@@ -843,18 +911,15 @@ def _patterns_match(patterns: list[str], value: str) -> bool:
     return False
 
 
-def _pattern_set_applies(
-    patterns: tuple[str, ...],
-    not_patterns: tuple[str, ...],
-    value: str,
-    *,
-    default_when_empty: bool = False,
-) -> bool:
+def _pattern_set_applies(patterns: tuple[str, ...], not_patterns: tuple[str, ...], value: str) -> bool:
     if not_patterns and _patterns_match(list(not_patterns), value):
         return False
     if patterns:
         return _patterns_match(list(patterns), value)
-    return default_when_empty or not not_patterns
+    # Reaching here means the statement carries no positive list and the value was proven to
+    # be outside the Not-list (or there is no Not-list at all). IAM semantics say a bare
+    # NotAction/NotResource/NotPrincipal statement applies to everything it does not exclude.
+    return True
 
 
 def _documents_by_layer(documents: list[PolicyRecord]) -> dict[str, list[PolicyRecord]]:
@@ -1155,7 +1220,9 @@ def _resource_pattern_set_applies(statement: PolicyStatementAst, request: Policy
     if statement.resources:
         patterns = list(statement.resources)
         return _patterns_match(patterns, request.resource) or _provider_scope_applies(request.provider, patterns, request.resource)
-    return not statement.not_resources
+    # A NotResource-only statement covers every resource it does not exclude; the exclusion
+    # was already applied by the guard above.
+    return True
 
 
 def _provider_scope_applies(provider: str, patterns: list[str], resource: str) -> bool:

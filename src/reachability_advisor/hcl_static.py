@@ -203,6 +203,16 @@ def audit_hcl_project(path: str | Path, artifacts: list[Artifact] | None = None)
                         "source": f"{block.file}:{block.line}",
                     }
                 )
+        if _security_group_direction_is_unattributed(block.body, block.type or ""):
+            coverage["visibility_gaps"].append(
+                {
+                    "address": block.address,
+                    "type": block.type or "unknown",
+                    "provider": provider_for_type(block.type or ""),
+                    "reason": "security group rule direction could not be attributed from HCL source; ingress sources are scraped from the whole body and may over-report",
+                    "source": f"{block.file}:{block.line}",
+                }
+            )
     return HclProjectAudit(
         root=root_dir.resolve(),
         files=tuple(path.resolve() for path in files),
@@ -403,6 +413,78 @@ def _find_matching_brace(text: str, open_brace: int) -> int:
     return -1
 
 
+def _nested_block_spans(body: str, name: str) -> list[tuple[int, int]]:
+    """Return (start, end) spans of ``name { ... }`` sub-blocks in a body."""
+
+    spans: list[tuple[int, int]] = []
+    for match in re.finditer(rf"(?<![\w.\"']){re.escape(name)}\s*\{{", body):
+        open_brace = match.end() - 1
+        close = _find_matching_brace(body, open_brace)
+        if close == -1:
+            continue
+        spans.append((match.start(), close + 1))
+    return spans
+
+
+def _security_group_ingress_scan(body: str, resource_type: str) -> tuple[str | None, bool]:
+    """Return the body region to scrape for ingress sources and whether direction is known.
+
+    CIDRs and security-group references are scraped by regex in static mode, so
+    the scan has to be scoped to the inbound part of the body. Otherwise the
+    allow-all ``egress`` block present on virtually every real security group is
+    read as public ingress. A ``None`` scan body means "definitely not ingress".
+    When direction genuinely cannot be attributed (a ``dynamic`` block, or a rule
+    whose ``type`` is an unresolved expression) the scan still falls back to the
+    residual body -- absence of evidence must not silently downgrade exposure --
+    but the caller reports it as a visibility gap instead of asserting it.
+    """
+
+    if resource_type == "aws_security_group_rule":
+        direction = (_string_attr(body, "type") or "").strip().strip('"').strip("'").lower()
+        if direction == "egress":
+            return None, True
+        return body, direction == "ingress"
+    ingress_spans = _nested_block_spans(body, "ingress")
+    if ingress_spans:
+        return "\n".join(body[start:end] for start, end in ingress_spans), True
+    # No attributable ingress block. Drop the egress sub-blocks so their outbound
+    # CIDRs cannot masquerade as ingress, then scan whatever is left (dynamic
+    # blocks, module-ish bodies, bare attributes).
+    scan_body = body
+    for start, end in reversed(_nested_block_spans(body, "egress")):
+        scan_body = scan_body[:start] + scan_body[end:]
+    return scan_body, False
+
+
+def _security_group_ingress_sources(body: str, resource_type: str) -> tuple[list[str], list[str], list[str]] | None:
+    scan_body, _attributed = _security_group_ingress_scan(body, resource_type)
+    if scan_body is None:
+        return None
+    cidrs = _cidr_values(scan_body)
+    ipv6_cidrs = _ipv6_cidr_values(scan_body)
+    source_security_groups = _security_group_ref_values(scan_body)
+    if not (cidrs or ipv6_cidrs or source_security_groups):
+        return None
+    return cidrs, ipv6_cidrs, source_security_groups
+
+
+def _security_group_direction_is_unattributed(body: str, resource_type: str) -> bool:
+    """True when an ingress verdict was scraped without knowing the rule direction."""
+
+    if not resource_type.startswith("aws_security_group"):
+        return False
+    _scan_body, attributed = _security_group_ingress_scan(body, resource_type)
+    return not attributed and _security_group_ingress_sources(body, resource_type) is not None
+
+
+def _apply_security_group_ingress(values: dict[str, Any], body: str, resource_type: str) -> None:
+    sources = _security_group_ingress_sources(body, resource_type)
+    if sources is None:
+        return
+    cidrs, ipv6_cidrs, source_security_groups = sources
+    values.setdefault("ingress", [{"cidr_blocks": cidrs, "ipv6_cidr_blocks": ipv6_cidrs, "security_groups": source_security_groups}])
+
+
 def _values_from_body(body: str, resource_type: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
     variables = variables or {}
     values: dict[str, Any] = {}
@@ -414,11 +496,7 @@ def _values_from_body(body: str, resource_type: str, variables: dict[str, Any] |
     if "container_definitions" in assignments:
         values["container_definitions"] = assignments["container_definitions"]
     if resource_type.startswith("aws_security_group"):
-        cidrs = _cidr_values(body)
-        ipv6_cidrs = _ipv6_cidr_values(body)
-        source_security_groups = _security_group_ref_values(body)
-        if cidrs or ipv6_cidrs or source_security_groups:
-            values.setdefault("ingress", [{"cidr_blocks": cidrs, "ipv6_cidr_blocks": ipv6_cidrs, "security_groups": source_security_groups}])
+        _apply_security_group_ingress(values, body, resource_type)
     if resource_type == "aws_ecs_service":
         security_groups = _security_group_ref_values(body)
         if security_groups:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -19,6 +20,30 @@ class IndexedSourceFile:
     text: str
 
 
+@dataclass(frozen=True)
+class FunctionSegment:
+    name: str
+    start: int
+    end: int
+    text: str
+    calls: frozenset[str]
+
+
+@dataclass(frozen=True)
+class FileSegments:
+    """Per-file function segmentation result.
+
+    Segmentation only depends on ``(path, text)``, so it is cached on the index
+    and shared across every analyzed component. A failed analysis is cached too:
+    losing the semantic signals for a file is a visibility gap that has to be
+    reported, never silently treated as "no functions here".
+    """
+
+    segments: tuple[FunctionSegment, ...] = ()
+    error_code: str | None = None
+    error_message: str | None = None
+
+
 @dataclass
 class SourceIndex:
     root: Path | None
@@ -26,6 +51,7 @@ class SourceIndex:
     manifest_files: list[IndexedSourceFile] = field(default_factory=list)
     skipped_files: list[dict[str, str]] = field(default_factory=list)
     import_cache: dict[str, bool] = field(default_factory=dict)
+    segment_cache: dict[Path, FileSegments] = field(default_factory=dict)
 
     @property
     def languages(self) -> list[str]:
@@ -64,17 +90,30 @@ def build_source_index(root: Path | None) -> SourceIndex:
             if not is_source and not is_manifest:
                 continue
             try:
-                size = path.stat().st_size
+                stat_result = path.stat()
             except OSError as exc:
                 index.skipped_files.append({"path": str(path), "reason": f"stat failed: {exc}"})
                 continue
-            if size > MAX_FILE_BYTES:
+            # stat() follows symlinks on purpose: a symlink to a real source file is
+            # legitimate. What must be rejected is anything that is not a regular
+            # file -- character devices (/dev/zero) report st_size == 0 and would
+            # sail past the size cap, and opening a FIFO blocks forever.
+            if not stat.S_ISREG(stat_result.st_mode):
+                index.skipped_files.append({"path": str(path), "reason": "not a regular file"})
+                continue
+            if stat_result.st_size > MAX_FILE_BYTES:
                 index.skipped_files.append({"path": str(path), "reason": "file exceeds source scan size limit"})
                 continue
             try:
-                text = path.read_text(encoding="utf-8", errors="ignore")
+                # Read with a hard cap so the size guard holds even when st_size lies
+                # (pseudo-files) or the file grows between stat() and open().
+                with path.open(encoding="utf-8", errors="ignore") as handle:
+                    text = handle.read(MAX_FILE_BYTES + 1)
             except OSError as exc:
                 index.skipped_files.append({"path": str(path), "reason": f"read failed: {exc}"})
+                continue
+            if len(text) > MAX_FILE_BYTES:
+                index.skipped_files.append({"path": str(path), "reason": "file exceeds source scan size limit"})
                 continue
             if is_source:
                 index.files.append(IndexedSourceFile(path=path, language=language_for_source_path(path), text=text))
@@ -97,6 +136,8 @@ def language_for_source_path(path: Path) -> str:
 
 
 __all__ = [
+    "FileSegments",
+    "FunctionSegment",
     "IndexedSourceFile",
     "MAX_FILE_BYTES",
     "SUPPORTED_EXTENSIONS",

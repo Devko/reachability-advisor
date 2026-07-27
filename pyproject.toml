@@ -52,6 +52,9 @@ dev = [
   "coverage[toml]>=7",
   "mypy>=1.10",
   "ruff>=0.6",
+  # `make package` runs `python -m build --no-isolation`, so the build backend declared in
+  # [build-system] requires must already be importable. Keep this floor identical to that pin.
+  "setuptools>=77",
 ]
 
 [tool.setuptools.packages.find]

@@ -1373,6 +1373,25 @@ function isRuntimeFinding(value) {
   return canonicalFindingType(value) === "dynamic_runtime_observation";
 }
 
+function isStaticFinding(value) {
+  return canonicalFindingType(value) === "static_code_weakness";
+}
+
+// Mirrors attack_path_view._finding_type_label, including its passthrough for unknown
+// future types: a ternary chain silently files anything it does not know into the wrong
+// bucket, which is how cloud posture findings came to be labelled a code weakness.
+function findingTypeLabel(value) {
+  const canonical = canonicalFindingType(value);
+  const labels = {
+    dependency_vulnerability: "dependency vulnerability",
+    static_code_weakness: "static code weakness",
+    dynamic_runtime_observation: "dynamic runtime observation",
+    correlated_security_finding: "correlated security finding",
+    cloud_posture_finding: "cloud posture finding",
+  };
+  return labels[canonical] || String(canonical).replace(/_/g, " ");
+}
+
 function assetText(asset) {
   return JSON.stringify(asset).toLowerCase();
 }
@@ -3255,9 +3274,9 @@ function renderDetails(datum) {
     section.append(chips([priorityChip(datum.tier), scoreChip(datum.score), ...scannerChips]));
     section.append(kv({
       component: `${datum.component}@${datum.componentVersion}`,
-      "finding type": isRuntimeFinding(datum.findingType) ? "dynamic runtime observation" : isSecurityFinding(datum.findingType) ? "static code weakness" : "dependency vulnerability",
+      "finding type": findingTypeLabel(datum.findingType),
       scanner: isSecurityFinding(datum.findingType) ? datum.weakness?.tool : undefined,
-      CWE: isSecurityFinding(datum.findingType) ? (datum.weakness?.cwe || "unknown") : undefined,
+      CWE: datum.weakness?.cwe || (isStaticFinding(datum.findingType) || isRuntimeFinding(datum.findingType) ? "unknown" : undefined),
       "runtime state": isRuntimeFinding(datum.findingType) ? datum.runtimeEvidence?.state : undefined,
       URL: isRuntimeFinding(datum.findingType) ? datum.runtimeEvidence?.url : undefined,
       "code evidence": datum.codeExposure,

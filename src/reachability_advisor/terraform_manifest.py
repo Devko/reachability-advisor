@@ -37,6 +37,8 @@ TERRAFORM_COVERAGE_MANIFEST: tuple[ResourceSupport, ...] = (
         types=(
             "aws_security_group",
             "aws_security_group_rule",
+            "aws_vpc_security_group_ingress_rule",
+            "aws_vpc_security_group_egress_rule",
             "aws_alb",
             "aws_alb_listener",
             "aws_alb_listener_rule",

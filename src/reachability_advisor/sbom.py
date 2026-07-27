@@ -136,6 +136,10 @@ def load_sbom(path: str | Path) -> SbomDocument:
         data = json.loads(read_text_limited(sbom_path, "SBOM"))
     except InputSizeError as exc:
         raise SbomError(str(exc)) from exc
+    except RecursionError as exc:
+        # CPython's JSON scanner raises RecursionError (not JSONDecodeError) on deeply nested
+        # documents.  Surface it as a normal input error instead of an uncaught crash.
+        raise SbomError(f"{sbom_path}: SBOM JSON nesting exceeds the supported depth") from exc
     except json.JSONDecodeError as exc:
         raise SbomError(f"{sbom_path}: invalid JSON: {exc}") from exc
     if not isinstance(data, dict):

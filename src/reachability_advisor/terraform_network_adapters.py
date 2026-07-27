@@ -119,6 +119,10 @@ def _gcp_firewall_signals(values: dict[str, Any]) -> tuple[NetworkAdapterSignal,
         return (NetworkAdapterSignal("disabled_firewall", "none", (), "disabled firewall rule ignored for exposure"),)
     if str(values.get("direction") or "INGRESS").upper() == "EGRESS":
         return (NetworkAdapterSignal("egress_firewall", "none", (), "egress firewall rule ignored for inbound exposure"),)
+    if values.get("deny") and not values.get("allow"):
+        # Mirrors the Azure NSG deny handling. No refs are emitted so the target
+        # tag is never seeded as reachable by _add_provider_network_adapter_edges.
+        return (NetworkAdapterSignal("deny_ingress", "none", (), "GCP firewall deny rule is not treated as exposure"),)
     exposure = "unknown"
     for source in listify(values.get("source_ranges")) + listify(values.get("source_tags")) + listify(values.get("source_service_accounts")):
         exposure = _max_exposure(exposure, network_source_exposure(source))

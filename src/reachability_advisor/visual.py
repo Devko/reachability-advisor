@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,7 @@ from .numeric import safe_float
 from .remediation import build_remediation_groups
 from .scenario_view import build_scenario_view
 from .visual_graph import visual_graph_model
-from .visual_layout import EXPOSURE_RANK, TIER_RANK
+from .visual_layout import EXPOSURE_RANK, TIER_RANK, UniqueIndex
 from .visual_template import HTML_TEMPLATE
 
 _visual_graph_model = visual_graph_model
@@ -31,8 +32,42 @@ def write_html_report(findings: list[Finding], path: str | Path, metadata: dict[
 
 def render_html_report(findings: list[Finding], metadata: dict[str, Any] | None = None, evidence_graph: dict[str, Any] | None = None) -> str:
     payload = _visual_payload(findings, metadata=metadata, evidence_graph=evidence_graph)
-    data_json = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
-    return HTML_TEMPLATE.replace("__REPORT_DATA__", data_json)
+    return HTML_TEMPLATE.replace("__REPORT_DATA__", _report_data_json(payload))
+
+
+def _report_data_json(payload: dict[str, Any]) -> str:
+    """Serialize the report payload as JSON the browser's ``JSON.parse`` always accepts.
+
+    The template hands this string straight to ``JSON.parse`` in the first statement of
+    the report script, so one non-standard ``NaN``/``Infinity`` token anywhere in the
+    payload aborts every render function and leaves a page that looks like a clean scan
+    with zero findings. ``allow_nan=False`` makes that failure impossible to miss, and
+    the fallback re-emits the offending values as explicit nulls (unknown) so the rest
+    of the evidence still reaches the analyst.
+    """
+
+    try:
+        data_json = json.dumps(payload, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
+    except ValueError:
+        data_json = json.dumps(_json_safe(payload), ensure_ascii=True, allow_nan=False, separators=(",", ":"))
+    return data_json.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+
+
+def _json_safe(value: Any) -> Any:
+    """Replace non-finite floats with ``null`` so the embedded payload stays strict JSON.
+
+    A NaN/Infinity that survived an ingest boundary is unusable evidence, never a safe
+    value, so it becomes an explicit null (rendered as "unknown") rather than 0.0, which
+    the report would present as "no risk".
+    """
+
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
 
 
 def _visual_payload(findings: list[Finding], metadata: dict[str, Any] | None = None, evidence_graph: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -40,6 +75,7 @@ def _visual_payload(findings: list[Finding], metadata: dict[str, Any] | None = N
     graph = evidence_graph or build_evidence_graph(findings, metadata=metadata)
     graph_paths_by_asset = _graph_network_paths_by_asset(graph)
     effective_paths_by_key = _effective_paths_by_key(graph)
+    unique = UniqueIndex()
     assets: dict[str, dict[str, Any]] = {}
     vulnerabilities: list[dict[str, Any]] = []
     links: list[dict[str, Any]] = []
@@ -77,7 +113,7 @@ def _visual_payload(findings: list[Finding], metadata: dict[str, Any] | None = N
                 "networkPaths": [],
             },
         )
-        _raise_asset(asset, finding)
+        _raise_asset(asset, finding, unique)
 
         vuln_id = f"vulnerability:{finding['key']}"
         vulnerability_node = {
@@ -132,9 +168,9 @@ def _visual_payload(findings: list[Finding], metadata: dict[str, Any] | None = N
         paths = graph_paths_by_asset.get(asset["id"])
         if paths:
             asset["networkPaths"] = paths
-    network_paths = _finalize_network_paths(ordered_assets)
+    network_paths = _finalize_network_paths(ordered_assets, unique)
     vulnerabilities.sort(key=lambda item: (item["assetId"], -TIER_RANK.get(item["tier"], 0), -safe_float(item["score"]), item["label"]))
-    architecture = _architecture_view(ordered_assets, network_paths, vulnerabilities)
+    architecture = _architecture_view(ordered_assets, network_paths, vulnerabilities, unique)
     remediations = build_remediation_groups(findings)
     attack_paths = build_attack_paths(findings, network_paths, vulnerabilities, remediations)
     scenario_view = build_scenario_view(findings, network_paths, vulnerabilities, attack_paths)
@@ -162,31 +198,29 @@ def _visual_payload(findings: list[Finding], metadata: dict[str, Any] | None = N
     }
 
 
-def _raise_asset(asset: dict[str, Any], finding: dict[str, Any]) -> None:
+def _raise_asset(asset: dict[str, Any], finding: dict[str, Any], unique: UniqueIndex) -> None:
     context = finding.get("context") or {}
     source = finding.get("source_reachability") or {}
-    key = finding["key"]
-    if key not in asset["findingKeys"]:
-        asset["findingKeys"].append(key)
+    unique.append(asset["findingKeys"], finding["key"])
     asset["score"] = max(safe_float(asset["score"]), safe_float(finding.get("score")))
     if TIER_RANK.get(finding.get("tier", "informational"), 0) > TIER_RANK.get(asset["tier"], 0):
         asset["tier"] = finding.get("tier") or "informational"
     if context.get("owner") and not asset.get("owner"):
         asset["owner"] = context.get("owner")
-    _append_unique(asset["exposures"], context.get("exposure") or "unknown")
-    _append_unique(asset["privileges"], context.get("privilege") or "unknown")
-    _append_unique(asset["criticalities"], context.get("criticality") or "unknown")
-    _append_unique(asset["environments"], context.get("environment") or "unknown")
-    _append_unique(asset["sourceStates"], source.get("state") or "unknown")
-    _append_unique(asset["codeExposures"], _code_exposure_label(source))
+    unique.append(asset["exposures"], context.get("exposure") or "unknown")
+    unique.append(asset["privileges"], context.get("privilege") or "unknown")
+    unique.append(asset["criticalities"], context.get("criticality") or "unknown")
+    unique.append(asset["environments"], context.get("environment") or "unknown")
+    unique.append(asset["sourceStates"], source.get("state") or "unknown")
+    unique.append(asset["codeExposures"], _code_exposure_label(source))
     for impact in context.get("iam_impacts") or []:
-        _append_unique(asset["iamImpacts"], impact)
+        unique.append(asset["iamImpacts"], impact)
     for access in context.get("effective_access") or []:
         if len(asset["effectiveAccess"]) < 8:
-            _append_unique(asset["effectiveAccess"], access)
+            unique.append(asset["effectiveAccess"], access)
     for item in context.get("evidence") or []:
         if len(asset["evidence"]) < 8:
-            _append_unique(asset["evidence"], item)
+            unique.append(asset["evidence"], item)
 
 
 def _graph_network_paths_by_asset(graph: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
@@ -235,7 +269,7 @@ def _effective_paths_by_key(graph: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return by_key
 
 
-def _finalize_network_paths(assets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _finalize_network_paths(assets: list[dict[str, Any]], unique: UniqueIndex) -> list[dict[str, Any]]:
     shared_paths: dict[str, dict[str, Any]] = {}
     for asset in assets:
         paths = asset.get("networkPaths") or []
@@ -245,7 +279,7 @@ def _finalize_network_paths(assets: list[dict[str, Any]]) -> list[dict[str, Any]
         paths.sort(key=lambda item: (-EXPOSURE_RANK.get(item.get("exposure", "unknown"), 0), -TIER_RANK.get(item.get("tier", "informational"), 0), item.get("label", "")))
         linked_paths: list[dict[str, Any]] = []
         for index, path in enumerate(paths):
-            shared = _shared_network_path(shared_paths, asset, path, index)
+            shared = _shared_network_path(shared_paths, asset, path, index, unique)
             linked_paths.append(shared)
         asset["networkPaths"] = linked_paths
     return sorted(
@@ -259,7 +293,13 @@ def _finalize_network_paths(assets: list[dict[str, Any]]) -> list[dict[str, Any]
     )
 
 
-def _shared_network_path(shared_paths: dict[str, dict[str, Any]], asset: dict[str, Any], path: dict[str, Any], index: int) -> dict[str, Any]:
+def _shared_network_path(
+    shared_paths: dict[str, dict[str, Any]],
+    asset: dict[str, Any],
+    path: dict[str, Any],
+    index: int,
+    unique: UniqueIndex,
+) -> dict[str, Any]:
     original_id = str(path.get("id") or f"{asset['id']}:{index}")
     path["tier"] = _stronger_tier(asset.get("tier"), path.get("tier"))
     path["score"] = max(safe_float(path.get("score")), safe_float(asset.get("score")))
@@ -279,11 +319,11 @@ def _shared_network_path(shared_paths: dict[str, dict[str, Any]], asset: dict[st
             "assetCount": 0,
         }
         shared_paths[shared_id] = shared
-    _append_unique(shared["sourcePathIds"], original_id)
-    _append_unique(shared["assetIds"], asset["id"])
-    _append_unique(shared["assetNames"], asset.get("name"))
+    unique.append(shared["sourcePathIds"], original_id)
+    unique.append(shared["assetIds"], asset["id"])
+    unique.append(shared["assetNames"], asset.get("name"))
     for finding_key in asset.get("findingKeys") or []:
-        _append_unique(shared["findingKeys"], finding_key)
+        unique.append(shared["findingKeys"], finding_key)
     shared["tier"] = _stronger_tier(shared.get("tier"), path.get("tier"))
     shared["score"] = max(safe_float(shared.get("score")), safe_float(path.get("score")))
     shared["assetCount"] = len(shared["assetIds"])
@@ -350,7 +390,12 @@ def _shared_network_steps(path: dict[str, Any]) -> list[str]:
     return steps
 
 
-def _architecture_view(assets: list[dict[str, Any]], network_paths: list[dict[str, Any]], vulnerabilities: list[dict[str, Any]]) -> dict[str, Any]:
+def _architecture_view(
+    assets: list[dict[str, Any]],
+    network_paths: list[dict[str, Any]],
+    vulnerabilities: list[dict[str, Any]],
+    unique: UniqueIndex,
+) -> dict[str, Any]:
     zones: list[dict[str, Any]] = [
         {
             "id": "zone:internet-external",
@@ -469,9 +514,9 @@ def _architecture_view(assets: list[dict[str, Any]], network_paths: list[dict[st
                 "evidence": path.get("evidence") or "",
             },
         )
-        _append_unique(hops[entry_id]["pathIds"], path_id)
+        unique.append(hops[entry_id]["pathIds"], path_id)
         for asset_id in _path_asset_ids(path):
-            _append_unique(hops[entry_id]["assetIds"], asset_id)
+            unique.append(hops[entry_id]["assetIds"], asset_id)
         previous_id = entry_id
         edge_steps = _architecture_steps(path)
         if not edge_steps:
@@ -499,9 +544,9 @@ def _architecture_view(assets: list[dict[str, Any]], network_paths: list[dict[st
                     "evidence": path.get("evidence") or "",
                 },
             )
-            _append_unique(hop["pathIds"], path_id)
+            unique.append(hop["pathIds"], path_id)
             for asset_id in _path_asset_ids(path):
-                _append_unique(hop["assetIds"], asset_id)
+                unique.append(hop["assetIds"], asset_id)
             hop["tier"] = _stronger_tier(hop.get("tier"), path.get("tier"))
             hop["score"] = max(safe_float(hop.get("score")), safe_float(path.get("score")))
             edges.append({"source": previous_id, "target": hop_id, "role": "route-hop", "pathId": path_id, "tier": path.get("tier") or "informational"})
@@ -846,11 +891,6 @@ def _code_exposure_detail(state: str) -> str:
     if state == "absent":
         return "The analyzer has explicit evidence that the package is absent from the scanned source scope."
     return "Source reachability is unknown."
-
-
-def _append_unique(items: list[Any], value: Any) -> None:
-    if value not in (None, "", [], {}) and value not in items:
-        items.append(value)
 
 
 def _stats(findings: list[dict[str, Any]]) -> dict[str, Any]:

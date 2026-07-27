@@ -211,9 +211,10 @@ def _unknowns_for_record(record: SecurityEvidenceRecord, mapping: SecurityEviden
         unknowns.append("affected cloud resource unavailable")
     if record.scanner_type == "cspm" and mapping.confidence == Confidence.LOW and not record.artifact:
         unknowns.append("artifact or workload mapping unavailable or weak one-SBOM fallback")
-    if record.scanner_type == "cspm":
-        unknowns.extend(record.unknowns)
-    return unknowns
+    # Scanner-declared gaps apply to every scanner type: a SAST/DAST tool that says it could not
+    # resolve a sink or a dataflow trace must not be presented as fully evidenced.
+    unknowns.extend(record.unknowns)
+    return list(dict.fromkeys(unknowns))
 
 
 def _evidence_summary(record: SecurityEvidenceRecord, finding: Finding) -> list[str]:

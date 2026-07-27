@@ -512,9 +512,9 @@ def _evaluate_aws_edge(edge: NetworkEdge, exposure: str) -> EdgeDecision:
     if edge_type == "route":
         destination = _first_string(edge.raw, ("destination_cidr_block", "destination_ipv6_cidr_block", "destination", "cidr_block", "cidr"))
         target = _first_string(edge.raw, ("gateway_id", "nat_gateway_id", "transit_gateway_id", "vpc_peering_connection_id", "egress_only_gateway_id", "target"))
-        if "blackhole" in text:
+        if _route_is_blackholed(edge.raw, target):
             return _block(edge, "route_blackhole", "selected AWS route is blackholed")
-        if "eigw" in target.lower() or "egress_only" in text:
+        if "eigw" in target.lower() or bool(edge.raw.get("egress_only_gateway_id")):
             return _block(edge, "egress_only_gateway", "selected AWS route uses an egress-only internet gateway")
         if exposure in {"public", "external"} and destination and destination not in {"0.0.0.0/0", "::/0"}:
             return _block(edge, "no_public_route", "AWS route edge is not a default public route")
@@ -527,11 +527,11 @@ def _evaluate_aws_edge(edge: NetworkEdge, exposure: str) -> EdgeDecision:
         cidrs = _cidrs(edge.raw)
         if cidrs and not _contains_public_cidr(cidrs):
             return _constrain(edge, "source_cidr_restriction", "AWS security-group edge is scoped to non-public CIDR ranges")
-        if "no_ingress" in text or "no inbound" in text:
+        if _flag_is_true(edge.raw, ("no_ingress", "no_inbound")):
             return _block(edge, "security_group_no_ingress", "AWS security-group edge has no inbound allow")
         return _allow(edge)
     if edge_type == "network_acl":
-        if "deny" in text:
+        if _record_has_deny(edge.raw):
             return _block(edge, "network_acl_deny", "AWS NACL edge denies the selected source")
         if not _first_string(edge.raw, ("rule_number", "number", "priority")):
             return _constrain(edge, "nacl_rule_order_unknown", "AWS NACL edge has no rule number")
@@ -560,7 +560,7 @@ def _evaluate_azure_edge(edge: NetworkEdge, exposure: str) -> EdgeDecision:
     text = _edge_text(edge)
     edge_type = edge.edge_type
     if edge_type == "network_security_group":
-        if "deny" in text:
+        if _record_has_deny(edge.raw):
             return _block(edge, "nsg_deny", "Azure NSG edge denies inbound traffic")
         if not _first_string(edge.raw, ("priority",)):
             return _constrain(edge, "nsg_priority_unknown", "Azure NSG edge has no priority")
@@ -582,7 +582,7 @@ def _evaluate_azure_edge(edge: NetworkEdge, exposure: str) -> EdgeDecision:
             return _block(edge, "private_endpoint", "Azure Private Endpoint restricts public access")
         return _constrain(edge, "private_endpoint", "Azure Private Endpoint constrains the private path")
     if edge_type == "access_restriction":
-        if "deny" in text:
+        if _record_has_deny(edge.raw):
             return _block(edge, "access_restriction_deny", "Azure access restriction denies the path")
         return _constrain(edge, "access_restriction_scope", "Azure access restriction scopes ingress")
     if edge_type == "auth":
@@ -595,14 +595,13 @@ def _evaluate_azure_edge(edge: NetworkEdge, exposure: str) -> EdgeDecision:
 
 
 def _evaluate_gcp_edge(edge: NetworkEdge, exposure: str) -> EdgeDecision:
-    text = _edge_text(edge)
     edge_type = edge.edge_type
     if edge_type == "firewall":
-        if "disabled" in text:
+        if _flag_is_true(edge.raw, ("disabled",)):
             return _block(edge, "disabled_firewall", "GCP firewall edge is disabled")
-        if "egress" in text:
+        if _rule_direction(edge.raw) == "egress":
             return _block(edge, "egress_firewall", "GCP firewall edge is egress-only")
-        if "deny" in text:
+        if _record_has_deny(edge.raw):
             return _block(edge, "firewall_deny", "GCP firewall edge denies ingress")
         cidrs = _cidrs(edge.raw)
         if cidrs and not _contains_public_cidr(cidrs):
@@ -612,7 +611,7 @@ def _evaluate_gcp_edge(edge: NetworkEdge, exposure: str) -> EdgeDecision:
         return _allow(edge)
     if edge_type == "route":
         next_hop = _first_string(edge.raw, ("next_hop_gateway", "next_hop_internet", "next_hop_instance", "next_hop_vpn_tunnel", "next_hop_ilb", "target", "next_hop"))
-        if "blackhole" in text or next_hop.lower() in {"none", "blackhole"}:
+        if _route_is_blackholed(edge.raw, next_hop) or next_hop.lower() == "none":
             return _block(edge, "route_blackhole", "GCP route edge drops traffic")
         if edge.raw.get("precedence_evaluated") and _is_public_route_target(next_hop, "gcp"):
             return _allow(edge)
@@ -627,9 +626,9 @@ def _evaluate_gcp_edge(edge: NetworkEdge, exposure: str) -> EdgeDecision:
         if exposure in {"public", "external"}:
             return _block(edge, "private_endpoint", "GCP Private Service Connect restricts public access")
         return _constrain(edge, "private_endpoint", "GCP Private Service Connect constrains the private path")
-    if edge_type == "serverless_ingress" and ("internal" in text or "ingress_internal" in text):
+    if edge_type == "serverless_ingress" and _gcp_ingress_is_internal(edge.raw):
         return _block(edge, "ingress_internal_only", "GCP serverless ingress is internal only") if exposure in {"public", "external"} else _constrain(edge, "ingress_internal_only", "GCP serverless ingress is internal only")
-    if edge_type == "vpc_connector" and "egress" in text and "all" in text:
+    if edge_type == "vpc_connector" and _gcp_connector_routes_all_egress(edge.raw):
         return _block(edge, "serverless_vpc_connector_egress_only", "GCP serverless VPC connector routes traffic privately") if exposure in {"public", "external"} else _constrain(edge, "serverless_vpc_connector_egress_only", "GCP serverless VPC connector routes traffic privately")
     return _allow(edge)
 
@@ -915,8 +914,55 @@ def _rule_matches_source(rule: NetworkRecord, network: NetworkRecord) -> bool:
 
 
 def _record_has_deny(raw: NetworkRecord) -> bool:
-    text = _record_text(raw)
-    return any(str(raw.get(key) or "").lower() == "deny" for key in ("action", "rule_action", "access", "effect")) or "deny" in text
+    """Deny is decided from typed rule fields only.
+
+    Never from serialized text: resource addresses, network tags and step prose are
+    author-controlled and routinely contain the substring "deny" (``deny_internet``,
+    ``fw-deny-legacy``) without describing a deny rule. Treating those as a deny silently
+    downgrades a reachable path to ``blocked``.
+    """
+    if any(str(raw.get(key) or "").strip().lower() == "deny" for key in ("action", "rule_action", "access", "effect")):
+        return True
+    return any(bool(raw.get(key)) for key in ("deny", "denied", "deny_rules"))
+
+
+def _flag_is_true(raw: NetworkRecord, keys: tuple[str, ...]) -> bool:
+    for key in keys:
+        value = raw.get(key)
+        if value is True:
+            return True
+        if isinstance(value, str) and value.strip().lower() in {"true", "yes"}:
+            return True
+    return False
+
+
+def _rule_direction(raw: NetworkRecord) -> str:
+    """Direction from typed rule fields only.
+
+    Unlike :func:`_direction` this never reads ``type``/``kind``, which on explicit graph
+    edges carry the edge label (``"firewall"``) rather than a traffic direction.
+    """
+    if raw.get("egress") is True:
+        return "egress"
+    value = _first_string(raw, ("direction", "traffic_direction", "traffic_type")).lower()
+    if value in {"egress", "outbound"}:
+        return "egress"
+    return "inbound" if value == "inbound" else "ingress"
+
+
+def _route_is_blackholed(raw: NetworkRecord, target: str) -> bool:
+    state = _first_string(raw, ("state", "route_state", "status")).strip().lower()
+    return state == "blackhole" or target.strip().lower() == "blackhole"
+
+
+def _gcp_ingress_is_internal(raw: NetworkRecord) -> bool:
+    value = _first_string(raw, ("ingress", "ingress_settings", "ingress_traffic", "settings", "mode")).lower()
+    return "internal" in value
+
+
+def _gcp_connector_routes_all_egress(raw: NetworkRecord) -> bool:
+    value = _first_string(raw, ("egress", "egress_settings", "vpc_access_connector_egress", "connector_egress")).lower()
+    return "all" in value
 
 
 def _record_text(raw: NetworkRecord) -> str:

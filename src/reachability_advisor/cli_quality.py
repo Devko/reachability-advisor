@@ -7,12 +7,59 @@ import math
 from typing import Any
 
 from .models import Tier
+from .security_evidence_model import SecurityEvidenceRecord
+from .security_profiles import (
+    SECURITY_EVIDENCE_PROFILES,
+    security_evidence_profile_report,
+    security_record_requires_profile,
+)
+
+# Scanner classes the maintained profile catalog can actually cover. Records outside this
+# set (cloud posture today) have no profile to match, so scoring them as "missing profile"
+# would make the coverage ratio permanently unsatisfiable instead of measuring evidence.
+PROFILED_SCANNER_TYPES: frozenset[str] = frozenset(profile.scanner_type for profile in SECURITY_EVIDENCE_PROFILES)
 
 
 def _findings_fail(findings: list[Any], tier: Tier) -> bool:
     order = {Tier.INFORMATIONAL: 0, Tier.LOW: 1, Tier.MEDIUM: 2, Tier.HIGH: 3, Tier.URGENT: 4}
     threshold = order[tier]
     return any(finding.policy_status != "excepted" and order[finding.tier] >= threshold for finding in findings)
+
+
+def _scope_security_profile_coverage(report: dict[str, Any], records: list[SecurityEvidenceRecord]) -> None:
+    """Scope critical security-profile coverage to scanner classes the catalog covers.
+
+    ``critical_profile_coverage`` gates *imported* SAST/DAST evidence. Cloud posture
+    records - including the CSPM records this tool generates itself from rendered
+    Terraform/Kubernetes evidence - can never match a maintained SAST/DAST profile, so
+    counting them drives the ratio to 0.0 with no action an operator can take. They stay
+    fully visible through their own counters and their own findings; they are simply not
+    scored as missing SAST/DAST profile coverage.
+    """
+
+    summary = report.get("summary")
+    if not isinstance(summary, dict):
+        return
+    profiled: list[SecurityEvidenceRecord] = []
+    outside: list[SecurityEvidenceRecord] = []
+    for record in records:
+        target = profiled if str(record.scanner_type or "").lower() in PROFILED_SCANNER_TYPES else outside
+        target.append(record)
+    scoped = security_evidence_profile_report(profiled, [])["summary"]
+    for key in ("critical_records", "critical_records_with_profile", "critical_records_missing_profile", "critical_profile_coverage"):
+        summary[key] = scoped[key]
+    summary["profiled_scanner_records"] = len(profiled)
+    summary["records_outside_profile_catalog"] = len(outside)
+    summary["critical_records_outside_profile_catalog"] = sum(1 for record in outside if security_record_requires_profile(record))
+    summary["native_posture_records"] = sum(1 for record in outside if str(record.tool or "") == "reachability-advisor")
+    summary["profiled_scanner_types"] = sorted(PROFILED_SCANNER_TYPES)
+    rows = report.get("profile_records")
+    if isinstance(rows, list) and len(rows) == len(records):
+        for row, record in zip(rows, records, strict=True):
+            if not isinstance(row, dict) or row.get("profiles"):
+                continue
+            if str(record.scanner_type or "").lower() not in PROFILED_SCANNER_TYPES:
+                row["profile_status"] = "not_applicable"
 
 
 def _quality_gate_failures(
@@ -139,9 +186,11 @@ def _annotate_analysis_profile(
 
 
 __all__ = [
+    "PROFILED_SCANNER_TYPES",
     "_annotate_analysis_profile",
     "_findings_fail",
     "_profile_minimum",
     "_quality_gate_failures",
     "_quality_gate_next_step",
+    "_scope_security_profile_coverage",
 ]

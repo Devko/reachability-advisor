@@ -29,6 +29,7 @@ def build_attack_paths(
     paths_by_asset = _network_paths_by_asset(network_paths)
     vulnerability_by_key = {str(item.get("findingKey") or ""): item for item in vulnerabilities}
     remediation_by_key = _remediation_by_finding_key(remediations)
+    slim_paths: dict[str, dict[str, Any]] = {}
     attack_paths: list[dict[str, Any]] = []
     for finding in findings:
         asset_id = f"asset:{finding.artifact.name}"
@@ -83,7 +84,7 @@ def build_attack_paths(
                 "why": _why_prioritized(finding, network_path),
                 "rawEvidence": {
                     "finding": finding.to_json(),
-                    "network_path": network_path or {},
+                    "network_path": _slim_network_path(network_path, slim_paths),
                     "visual_vulnerability": vulnerability,
                 },
             }
@@ -96,6 +97,35 @@ def build_attack_paths(
             str(item.get("title") or ""),
         ),
     )
+
+
+_NETWORK_PATH_FAN_OUT_KEYS = frozenset({"assetIds", "assetNames", "findingKeys", "sourcePathIds"})
+
+
+def _slim_network_path(network_path: dict[str, Any] | None, cache: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Return the raw-evidence view of a shared network path, without its fan-out lists.
+
+    ``visual._shared_network_path`` merges every asset that walks the same route into a
+    single object, so its ``findingKeys``/``assetIds``/``assetNames``/``sourcePathIds``
+    grow with the whole scan. Embedding that object once per attack path makes the report
+    quadratic in the finding count, and it also shows the analyst finding keys belonging
+    to unrelated assets in a panel labelled "Raw evidence". The aggregate counts are kept
+    so the fan-out stays visible as a number, and the full lists remain on the top-level
+    ``networkPaths`` entries, where the architecture and evidence-path views read them.
+    """
+
+    if not network_path:
+        return {}
+    path_id = str(network_path.get("id") or "")
+    cached = cache.get(path_id)
+    if cached is not None:
+        return cached
+    slim = {key: value for key, value in network_path.items() if key not in _NETWORK_PATH_FAN_OUT_KEYS}
+    slim["findingCount"] = len(network_path.get("findingKeys") or [])
+    slim["assetCount"] = network_path.get("assetCount", len(network_path.get("assetIds") or []))
+    if path_id:
+        cache[path_id] = slim
+    return slim
 
 
 def _path_nodes_and_edges(

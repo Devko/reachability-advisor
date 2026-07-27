@@ -27,6 +27,8 @@ TIER_RANK: dict[Tier, int] = {
     Tier.URGENT: 4,
 }
 
+IMPACT_UNKNOWN = "vulnerability impact unknown"
+
 TIER_SCORE_BANDS: dict[Tier, tuple[float, float, float]] = {
     Tier.URGENT: (85.0, 100.0, 91.0),
     Tier.HIGH: (65.0, 84.0, 74.0),
@@ -74,6 +76,7 @@ def evaluate_graph_risk(finding: Finding) -> GraphRiskDecision:
     exposure = _normalized(context.exposure)
     network_decision = _network_decision(finding)
     network_blockers = _network_blockers(finding)
+    hard_blockers = _hard_network_blockers(finding)
     network_unknowns = _network_unknowns(finding)
     source_strength = _source_strength(source.reachability)
     impact = _impact_level(finding)
@@ -86,6 +89,8 @@ def evaluate_graph_risk(finding: Finding) -> GraphRiskDecision:
     drivers: list[str] = []
     blockers = list(network_blockers)
     unknowns = _dedupe([*network_unknowns, *finding.unknowns])
+    if impact == "unknown":
+        unknowns.append(IMPACT_UNKNOWN)
     visibility_gaps = _visibility_gaps(finding, unknowns)
 
     if vulnerability.known_exploited:
@@ -114,7 +119,7 @@ def evaluate_graph_risk(finding: Finding) -> GraphRiskDecision:
     elif finding_type == CLOUD_POSTURE_FINDING:
         tier, rule = _posture_tier(finding, exposure, impact, critical_context, network_decision, blockers, strong_correlation, medium_correlation)
     elif is_dependency_finding(finding_type):
-        tier, rule = _dependency_tier(finding, exposure, impact, source_strength, critical_context, exploit_signal, network_decision, blockers)
+        tier, rule = _dependency_tier(finding, exposure, impact, source_strength, critical_context, exploit_signal, network_decision, blockers, hard_blockers)
     else:
         tier, rule = (Tier.MEDIUM if impact in {"critical", "high"} else Tier.LOW, "generic security finding")
 
@@ -162,12 +167,13 @@ def _dependency_tier(
     exploit_signal: bool,
     network_decision: str,
     blockers: list[str],
+    hard_blockers: list[str],
 ) -> tuple[Tier, str]:
     public_like = exposure in {"public", "external"}
     unknown_like = exposure == "unknown"
     direct_source = source_strength in {"attacker_controlled", "function_reachable"}
     weak_source = source_strength in {"absent", "unknown", "package_present"}
-    if exploit_signal and direct_source and public_like and not blockers and network_decision != "blocked":
+    if exploit_signal and direct_source and public_like and not hard_blockers and network_decision != "blocked":
         return Tier.URGENT, "exploit intelligence plus confirmed public reachable source path"
     if direct_source and public_like and critical_context and impact in {"critical", "high"} and not blockers and not _low_confidence_effective_access(finding):
         return Tier.URGENT, "confirmed public reachable path with critical impact and blast radius"
@@ -261,8 +267,8 @@ def _posture_tier(
         return Tier.MEDIUM, "high-risk cloud posture with exposure, blast radius, or strong correlated context"
     if impact == "medium" and (public_like or critical_context or medium_correlation):
         return Tier.MEDIUM, "medium-risk posture with deployment or identity context"
-    if finding.posture_evidence.confidence.value == "low" or finding.context.exposure == "unknown":
-        return Tier.LOW, "posture finding lacks enough mapping or exposure evidence for higher priority"
+    if finding.posture_evidence.confidence.value == "low":
+        return Tier.LOW, "posture finding lacks enough mapping evidence for higher priority"
     return (Tier.MEDIUM if impact in {"critical", "high", "medium"} else Tier.LOW, "posture finding without exploit proof")
 
 
@@ -306,6 +312,8 @@ def _potential_tier(
     potential = tier
     if unknowns and impact in {"critical", "high"} and (source_strength in {"attacker_controlled", "function_reachable"} or runtime_observed or exploit_signal):
         potential = _max_tier(potential, Tier.HIGH)
+    if unknowns and impact == "unknown" and (source_strength in {"attacker_controlled", "function_reachable"} or runtime_observed or exploit_signal):
+        potential = _max_tier(potential, Tier.HIGH if exposure in {"public", "external"} else Tier.MEDIUM)
     if unknowns and exploit_signal and source_strength in {"attacker_controlled", "function_reachable"} and exposure in {"public", "external", "unknown"}:
         potential = _max_tier(potential, Tier.URGENT)
     if unknowns and critical_context and impact == "critical" and exposure in {"public", "external", "unknown"}:
@@ -394,10 +402,12 @@ def _impact_level(finding: Finding) -> str:
     severity = finding.vulnerability.severity.lower()
     if severity in {"critical", "error"}:
         return "critical"
-    if severity in {"high", "warning"}:
+    if severity in {"high", "warning", "important"}:
         return "high"
     if severity in {"medium", "moderate"}:
         return "medium"
+    if severity in {"low", "negligible", "note"}:
+        return "low"
     if severity in {"info", "informational", "notice"}:
         return "informational"
     return "unknown"
@@ -431,9 +441,22 @@ def _network_decision(finding: Finding) -> str:
     return "reachable"
 
 
-def _network_blockers(finding: Finding) -> list[str]:
-    blockers: list[str] = []
-    for record in [*finding.context.effective_exposure, *finding.context.network_paths]:
+def _network_records(finding: Finding) -> list[dict[str, Any]]:
+    """Return the authoritative network records for this asset.
+
+    ``effective_exposure`` already carries the selected strongest path, so raw
+    ``network_paths`` are only a fallback for callers that never ran the
+    provider evaluators. Unioning both would re-import blockers from paths the
+    engine did not select, which lets an unrelated hardened path demote the
+    exposed one.
+    """
+
+    return list(finding.context.effective_exposure) or list(finding.context.network_paths)
+
+
+def _network_blocker_records(finding: Finding) -> list[dict[str, Any]]:
+    blockers: list[dict[str, Any]] = []
+    for record in _network_records(finding):
         if not isinstance(record, dict):
             continue
         network = record.get("network") if isinstance(record.get("network"), dict) else record
@@ -441,13 +464,32 @@ def _network_blockers(finding: Finding) -> list[str]:
             continue
         for blocker in network.get("blockers", []) if isinstance(network.get("blockers"), list) else []:
             if isinstance(blocker, dict):
-                blockers.append(str(blocker.get("kind") or blocker.get("effect") or blocker.get("evidence") or "network blocker"))
+                blockers.append(blocker)
     return blockers
+
+
+def _blocker_label(blocker: dict[str, Any]) -> str:
+    return str(blocker.get("kind") or blocker.get("effect") or blocker.get("evidence") or "network blocker")
+
+
+def _network_blockers(finding: Finding) -> list[str]:
+    return _dedupe([_blocker_label(blocker) for blocker in _network_blocker_records(finding)])
+
+
+def _hard_network_blockers(finding: Finding) -> list[str]:
+    """Blockers that are not proven to merely constrain the path.
+
+    ``constrains`` evidence (WAF, auth, API key) keeps the path reachable, so it
+    must not read as a hard blocker. Missing blocker semantics stay conservative
+    and remain in this set, because unknown semantics are uncertainty, not proof.
+    """
+
+    return _dedupe([_blocker_label(blocker) for blocker in _network_blocker_records(finding) if str(blocker.get("effect") or "").lower() != "constrains"])
 
 
 def _network_blocker_effects(finding: Finding) -> set[str]:
     effects: set[str] = set()
-    for record in [*finding.context.effective_exposure, *finding.context.network_paths]:
+    for record in _network_records(finding):
         if not isinstance(record, dict):
             continue
         network = record.get("network") if isinstance(record.get("network"), dict) else record
@@ -458,11 +500,10 @@ def _network_blocker_effects(finding: Finding) -> set[str]:
             effects.add("blocks")
         elif decision == "constrained":
             effects.add("constrains")
-        for blocker in network.get("blockers", []) if isinstance(network.get("blockers"), list) else []:
-            if isinstance(blocker, dict):
-                effect = str(blocker.get("effect") or "").lower()
-                if effect in {"blocks", "constrains"}:
-                    effects.add(effect)
+    for blocker in _network_blocker_records(finding):
+        effect = str(blocker.get("effect") or "").lower()
+        if effect in {"blocks", "constrains"}:
+            effects.add(effect)
     return effects
 
 

@@ -68,6 +68,7 @@ class GcpExposureEvaluator(ProviderEvaluator):
                 "scoped_resource",
                 "service_account_impersonation",
                 "unknown_resource_scope",
+                "unresolved_role_definition",
                 "workload_identity_condition",
             }
         ),

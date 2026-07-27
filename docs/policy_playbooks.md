@@ -8,10 +8,14 @@ Use for protected release branches when the team is ready to block medium and hi
 
 ```bash
 reachability-advisor scan \
+  --sbom samples/sboms/payments-api.cdx.json \
+  --vuln-in samples/vulnerabilities.json \
   --policy configs/policy.strict-release.json \
   --fail-on-tier medium \
   --out reachability/findings.json
 ```
+
+With the checked-in samples this command exits `10`: the sample data contains an active medium finding, so the gate fires as designed. Replace the two input flags with your own SBOM and scanner output.
 
 Expected behavior:
 
@@ -25,6 +29,8 @@ Use while onboarding a repository or when a team wants visibility before hard bl
 
 ```bash
 reachability-advisor scan \
+  --sbom samples/sboms/payments-api.cdx.json \
+  --vuln-in samples/vulnerabilities.json \
   --policy configs/policy.advisory-pr.json \
   --out reachability/findings.json \
   --markdown-out reachability/summary.md
@@ -42,6 +48,8 @@ Use when existing high findings should not block every pull request, but new or 
 
 ```bash
 reachability-advisor scan \
+  --sbom samples/sboms/payments-api.cdx.json \
+  --vuln-in samples/vulnerabilities.json \
   --baseline-out reachability-baseline.json \
   --policy configs/policy.backlog-migration.json \
   --out reachability/findings.json
@@ -52,6 +60,8 @@ reachability-advisor compare \
   --fail-on-new-tier high \
   --markdown-out reachability-delta.md
 ```
+
+The `scan` step runs on the pull request head. `main.reachability-baseline.json` is the `reachability-baseline.json` artifact published by the previous default-branch run, downloaded under that name before `compare` runs.
 
 Expected behavior:
 

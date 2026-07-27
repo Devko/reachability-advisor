@@ -254,6 +254,95 @@ def _check_no_former_project_positioning() -> None:
         raise ReleaseCheckError("former project positioning references remain: " + ", ".join(offenders))
 
 
+def _snapshot_benchmark_document(expectations: dict[str, Any], inflate_urgent: int = 0) -> dict[str, Any]:
+    """Build a benchmark document from snapshot expectations.
+
+    With ``inflate_urgent`` set, findings are moved from ``medium`` into ``urgent`` so the
+    document violates the ``urgent`` ceilings every snapshot declares. This is used to prove the
+    comparator is able to reject an over-prioritized distribution.
+    """
+
+    def tier_counts(snapshot: dict[str, Any]) -> dict[str, int]:
+        counts = dict(snapshot["expected_tier_counts"])
+        if inflate_urgent:
+            counts["urgent"] = counts.get("urgent", 0) + inflate_urgent
+            counts["medium"] = max(counts.get("medium", 0) - inflate_urgent, 0)
+        return counts
+
+    aggregate = tier_counts(expectations["snapshots"][0])
+    return {
+        "schema_version": "1.0",
+        "generated_at": "release-validation",
+        "corpus": "external_corpus/complex_app_cases.json",
+        "aggregate": {"finding_count": sum(aggregate.values()), "tier_counts": aggregate},
+        "cases": [
+            {
+                "id": snapshot["case_id"],
+                "status": "passed",
+                "finding_count": sum(tier_counts(snapshot).values()),
+                "tier_counts": tier_counts(snapshot),
+            }
+            for snapshot in expectations["snapshots"]
+            if snapshot.get("case_id")
+        ],
+    }
+
+
+def check_benchmark_snapshot_comparator(out_dir: Path, expectations: Path, checks: list[dict[str, str]]) -> None:
+    """Prove the tier-regression comparator both accepts a matching run and rejects an inflated one.
+
+    The real distribution gate for the external corpus is `make external-complex`, which scans the
+    cloned upstream applications and validates the benchmark it generates against these same
+    expectations. Release validation runs fully offline and cannot recompute that distribution, so
+    it must not claim to. What it can prove, and what it would be worthless without, is that the
+    comparator that gate depends on is wired up and able to fail.
+    """
+    expectation_data = load_json(expectations)
+    matching = out_dir / "benchmark-snapshot-matching.json"
+    matching_report = out_dir / "benchmark-snapshot-matching-report.json"
+    inflated = out_dir / "benchmark-snapshot-inflated.json"
+    inflated_report = out_dir / "benchmark-snapshot-inflated-report.json"
+    matching.write_text(json.dumps(_snapshot_benchmark_document(expectation_data), indent=2), encoding="utf-8")
+    inflated.write_text(
+        json.dumps(_snapshot_benchmark_document(expectation_data, inflate_urgent=1), indent=2), encoding="utf-8"
+    )
+
+    run_cli(
+        [
+            "benchmark-snapshots",
+            "--benchmark",
+            str(matching),
+            "--expectations",
+            str(expectations),
+            "--out",
+            str(matching_report),
+        ]
+    )
+    if require_json(matching_report).get("status") != "passed":
+        raise ReleaseCheckError("benchmark snapshot comparator rejected a run that matches the checked-in expectations")
+
+    run_cli(
+        [
+            "benchmark-snapshots",
+            "--benchmark",
+            str(inflated),
+            "--expectations",
+            str(expectations),
+            "--out",
+            str(inflated_report),
+            "--warn-only",
+        ]
+    )
+    if require_json(inflated_report).get("status") != "failed":
+        raise ReleaseCheckError(
+            "benchmark snapshot comparator accepted an inflated urgent tier; the real-app tier "
+            "regression gate run by `make external-complex` cannot detect over-prioritization"
+        )
+    checks.append(
+        {"name": "benchmark snapshot regression comparator", "status": "passed", "document": str(inflated_report)}
+    )
+
+
 def run_release_validation(out_dir: Path) -> dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
     schema_dir = ROOT / "schemas"
@@ -311,46 +400,7 @@ def run_release_validation(out_dir: Path) -> dict[str, Any]:
     scoring_benchmark.write_text(json.dumps(scoring_report, indent=2), encoding="utf-8")
     checks.append({"name": "generated scoring benchmark", "status": "passed", "document": str(scoring_benchmark)})
 
-    benchmark_snapshot_actual = out_dir / "benchmark-snapshot-actual.json"
-    benchmark_snapshot_report = out_dir / "benchmark-snapshot-report.json"
-    benchmark_expectation_data = load_json(benchmark_expectations)
-    aggregate_counts = benchmark_expectation_data["snapshots"][0]["expected_tier_counts"]
-    benchmark_snapshot_actual.write_text(
-        json.dumps(
-            {
-                "schema_version": "1.0",
-                "generated_at": "release-validation",
-                "corpus": "external_corpus/complex_app_cases.json",
-                "aggregate": {"finding_count": sum(aggregate_counts.values()), "tier_counts": aggregate_counts},
-                "cases": [
-                    {
-                        "id": snapshot["case_id"],
-                        "status": "passed",
-                        "finding_count": sum(snapshot["expected_tier_counts"].values()),
-                        "tier_counts": snapshot["expected_tier_counts"],
-                    }
-                    for snapshot in benchmark_expectation_data["snapshots"]
-                    if snapshot.get("case_id")
-                ],
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-    run_cli(
-        [
-            "benchmark-snapshots",
-            "--benchmark",
-            str(benchmark_snapshot_actual),
-            "--expectations",
-            str(benchmark_expectations),
-            "--out",
-            str(benchmark_snapshot_report),
-        ]
-    )
-    if require_json(benchmark_snapshot_report).get("status") != "passed":
-        raise ReleaseCheckError("benchmark snapshot regression check failed")
-    checks.append({"name": "real-app benchmark snapshot regression gate", "status": "passed", "document": str(benchmark_snapshot_report)})
+    check_benchmark_snapshot_comparator(out_dir, benchmark_expectations, checks)
 
     hcl_audit = out_dir / "hcl-audit.json"
     hcl_audit_md = out_dir / "hcl-audit.md"

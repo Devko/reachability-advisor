@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from dataclasses import dataclass, field
 from importlib import resources
@@ -63,6 +64,14 @@ class FixtureIssue:
 TIER_ORDER = {Tier.INFORMATIONAL.value: 0, Tier.LOW.value: 1, Tier.MEDIUM.value: 2, Tier.HIGH.value: 3, Tier.URGENT.value: 4}
 FIXTURES_ROOT_ENV = "REACHABILITY_ADVISOR_FIXTURES_ROOT"
 _PACKAGED_FIXTURES_ROOT: Path | None = None
+# Fixture packs are community contributions, and the pack id becomes an output directory
+# name.  Restrict it to a slug so a manifest cannot steer writes outside --output-dir.
+FIXTURE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_FIXTURE_ID_RULE = "fixture ids must match [A-Za-z0-9][A-Za-z0-9._-]* and cannot contain path separators"
+
+
+def _is_safe_fixture_id(value: str) -> bool:
+    return bool(FIXTURE_ID_PATTERN.fullmatch(value)) and value not in {".", ".."}
 
 
 def default_fixtures_root() -> Path:
@@ -127,10 +136,14 @@ def discover_fixture_packs(root: str | Path | None = None) -> list[Path]:
             raise FixtureError(f"{index_path}: invalid JSON: {exc}") from exc
         packs = index.get("packs", []) if isinstance(index, dict) else []
         result: list[Path] = []
+        base = fixture_root.resolve()
         for item in packs:
             if not isinstance(item, dict) or not item.get("path"):
                 continue
-            result.append((fixture_root / str(item["path"]) / "fixture.json").resolve())
+            manifest = (fixture_root / str(item["path"]) / "fixture.json").resolve()
+            if not manifest.is_relative_to(base):
+                raise FixtureError(f"{index_path}: pack path escapes the fixtures root: {str(item['path'])!r}")
+            result.append(manifest)
         return result
     return sorted(path.resolve() for path in fixture_root.glob("packs/*/fixture.json"))
 
@@ -150,6 +163,8 @@ def load_fixture_pack(path_or_dir: str | Path) -> FixturePack:
         raise FixtureError(f"{manifest_path}: expected a JSON object")
     root = manifest_path.parent
     pack_id = str(data.get("id") or root.name)
+    if not _is_safe_fixture_id(pack_id):
+        raise FixtureError(f"{manifest_path}: invalid fixture id: {pack_id!r}. {_FIXTURE_ID_RULE}.")
     name = str(data.get("name") or pack_id)
     plan = _resolve_pack_path(root, data.get("terraform_plan") or data.get("plan") or "tfplan.json")
     sbom_values = data.get("sboms") or []
@@ -189,6 +204,8 @@ def validate_fixture_pack(pack: FixturePack) -> list[FixtureIssue]:
     issues: list[FixtureIssue] = []
     if not pack.id.strip():
         issues.append(FixtureIssue("error", "fixture id is empty", str(pack.root)))
+    elif not _is_safe_fixture_id(pack.id):
+        issues.append(FixtureIssue("error", f"fixture id is not a safe directory name: {pack.id!r}. {_FIXTURE_ID_RULE}", str(pack.root)))
     _require_file(pack.plan, "terraform plan", issues)
     _require_file(pack.vulnerabilities, "vulnerability intelligence", issues)
     if not pack.sboms:
@@ -247,13 +264,25 @@ def run_fixture_pack(pack: FixturePack, output_dir: str | Path | None = None) ->
         assertions=assertions,
     )
     if output_dir:
-        out_root = Path(output_dir) / pack.id
+        out_root = _fixture_output_root(output_dir, pack.id)
         out_root.mkdir(parents=True, exist_ok=True)
         (out_root / "findings.json").write_text(json.dumps({"findings": report["findings"]}, indent=2), encoding="utf-8")
         (out_root / "terraform-coverage.json").write_text(json.dumps(terraform_analysis.coverage, indent=2), encoding="utf-8")
         (out_root / "source-coverage.json").write_text(json.dumps(source_coverage, indent=2), encoding="utf-8")
         (out_root / "fixture-report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report
+
+
+def _fixture_output_root(output_dir: str | Path, pack_id: str) -> Path:
+    """Resolve the per-pack output directory and refuse anything outside ``output_dir``."""
+
+    if not _is_safe_fixture_id(pack_id):
+        raise FixtureError(f"refusing to write fixture output for invalid fixture id: {pack_id!r}. {_FIXTURE_ID_RULE}.")
+    base = Path(output_dir).resolve()
+    out_root = (base / pack_id).resolve()
+    if out_root == base or not out_root.is_relative_to(base):
+        raise FixtureError(f"fixture id {pack_id!r} resolves outside the requested output directory: {out_root}")
+    return out_root
 
 
 def run_fixture_packs(root: str | Path | None = None, output_dir: str | Path | None = None, only: str | None = None) -> dict[str, Any]:

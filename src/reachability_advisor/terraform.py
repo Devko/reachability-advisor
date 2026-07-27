@@ -69,6 +69,9 @@ from .terraform_network_model import (
     NetworkPathEdge,
 )
 from .terraform_resources import TerraformResource, extract_resources
+from .terraform_resources import (
+    network_attachment_is_unknown as _network_attachment_is_unknown,
+)
 from .terraform_values import (
     listify as _listify,
 )
@@ -79,6 +82,18 @@ from .terraform_values import (
 
 class TerraformContextError(ValueError):
     """Raised when Terraform JSON cannot be parsed."""
+
+
+# AWS ships two generations of security-group rule resources. The classic
+# `aws_security_group_rule` encodes direction in `values["type"]`; the modern
+# `aws_vpc_security_group_{ingress,egress}_rule` resources encode it in the
+# resource type name and use `cidr_ipv4` / `cidr_ipv6` /
+# `referenced_security_group_id` instead of `cidr_blocks` / `security_groups`.
+# Direction must therefore always be resolved from the resource type, never from
+# the values dict alone, or an allow-all egress rule reads as public ingress.
+AWS_SG_INGRESS_RULE_TYPES = frozenset({"aws_security_group_rule", "aws_vpc_security_group_ingress_rule"})
+AWS_SG_EGRESS_RULE_TYPES = frozenset({"aws_vpc_security_group_egress_rule"})
+AWS_SG_EXPOSURE_TYPES = frozenset({"aws_security_group"}) | AWS_SG_INGRESS_RULE_TYPES | AWS_SG_EGRESS_RULE_TYPES
 
 
 @dataclass
@@ -196,7 +211,11 @@ class TerraformNetworkGraph:
             grant = iam_grant_for_resource(resource)
             if grant.privilege == "unknown" and not grant.capabilities:
                 continue
-            for ref in self._identity_refs_for_resource(resource):
+            # Sorted: these sets are built from randomized string hashes, and the
+            # insertion order here seeds identity_grants_by_ref, which is later
+            # iterated to build reported evidence. Unsorted iteration makes
+            # findings.json non-reproducible run to run.
+            for ref in sorted(self._identity_refs_for_resource(resource)):
                 self._record_identity_grant(ref, grant)
 
         for resource in self.resources:
@@ -222,7 +241,10 @@ class TerraformNetworkGraph:
             capabilities: list[dict[str, Any]] = []
             effective_access: list[dict[str, Any]] = []
             target_evidence: list[str] = []
-            for ref in self._workload_identity_refs(resource):
+            # Sorted for the same reason: effective_access / capabilities /
+            # evidence order is user-visible in findings.json and in the derived
+            # evidence-graph node ids.
+            for ref in sorted(self._workload_identity_refs(resource)):
                 ref_privilege = self.identity_privilege_by_ref.get(ref, "unknown")
                 grants = self.identity_grants_by_ref.get(ref, [])
                 if ref_privilege == "unknown" and not grants:
@@ -343,7 +365,7 @@ class TerraformNetworkGraph:
     def _build_graph(self) -> None:
         for resource in self.resources:
             self._add_resource_aliases(resource)
-            if resource.type in {"aws_security_group", "aws_security_group_rule"}:
+            if resource.type in AWS_SG_EXPOSURE_TYPES:
                 self._add_aws_security_group(resource)
             elif resource.type in {"aws_lb", "aws_alb"}:
                 self._add_aws_load_balancer(resource)
@@ -410,7 +432,7 @@ class TerraformNetworkGraph:
         if exposure in {"public", "external", "internal"}:
             for ref in target_refs:
                 self._seed(self._sg_node(ref), exposure, f"{resource.address} {exposure} ingress")
-        for source_ref in _security_group_source_refs(resource.values):
+        for source_ref in _security_group_source_refs(resource.values, resource.type):
             for target_ref in target_refs:
                 self._add_edge(self._sg_node(source_ref), self._sg_node(target_ref), f"{resource.address} allows traffic from {source_ref}", exposure_cap="internal")
 
@@ -864,7 +886,7 @@ class TerraformAnalyzer:
             if is_public_exposure(resource):
                 public.update(_resource_identifiers(resource))
         for resource in self.resources:
-            if resource.type == "aws_security_group_rule" and is_public_exposure(resource):
+            if resource.type in AWS_SG_INGRESS_RULE_TYPES and is_public_exposure(resource):
                 public.update(_value_reference_candidates(resource.values.get("security_group_id")))
 
         return public
@@ -873,10 +895,10 @@ class TerraformAnalyzer:
         internal: set[str] = set()
         security_groups = [resource for resource in self.resources if resource.type == "aws_security_group"]
         for resource in security_groups:
-            if not is_public_exposure(resource) and _aws_security_group_has_internal_ingress(resource.values):
+            if not is_public_exposure(resource) and _aws_security_group_has_internal_ingress(resource.values, resource.type):
                 internal.update(_resource_identifiers(resource))
         for resource in self.resources:
-            if resource.type == "aws_security_group_rule" and not is_public_exposure(resource) and _aws_security_group_has_internal_ingress(resource.values):
+            if resource.type in AWS_SG_INGRESS_RULE_TYPES and not is_public_exposure(resource) and _aws_security_group_has_internal_ingress(resource.values, resource.type):
                 internal.update(_value_reference_candidates(resource.values.get("security_group_id")))
 
         changed = True
@@ -886,7 +908,7 @@ class TerraformAnalyzer:
                 identifiers = _resource_identifiers(resource)
                 if identifiers & internal or identifiers & self._public_security_groups:
                     continue
-                source_refs = _security_group_source_refs(resource.values)
+                source_refs = _security_group_source_refs(resource.values, resource.type)
                 if _references_any(source_refs, internal) or _references_any(source_refs, self._external_security_groups) or _references_any(source_refs, self._public_security_groups):
                     internal.update(identifiers)
                     changed = True
@@ -896,10 +918,10 @@ class TerraformAnalyzer:
         external: set[str] = set()
         security_groups = [resource for resource in self.resources if resource.type == "aws_security_group"]
         for resource in security_groups:
-            if _aws_security_group_ingress_exposure(resource.values) == "external":
+            if _aws_security_group_ingress_exposure(resource.values, resource.type) == "external":
                 external.update(_resource_identifiers(resource))
         for resource in self.resources:
-            if resource.type == "aws_security_group_rule" and _aws_security_group_ingress_exposure(resource.values) == "external":
+            if resource.type in AWS_SG_INGRESS_RULE_TYPES and _aws_security_group_ingress_exposure(resource.values, resource.type) == "external":
                 external.update(_value_reference_candidates(resource.values.get("security_group_id")))
         return external
 
@@ -973,6 +995,7 @@ class TerraformAnalyzer:
                 self._public_target_groups,
                 self._internal_target_groups,
                 self._provider_network_fallback(resource.provider),
+                resource.unknown_paths,
             )
             if exposure == "unknown":
                 continue
@@ -1068,17 +1091,17 @@ def exposure_for_matched_workload(
             public_network = values.get("is_publicly_accessible")
         return "public" if public_network is not False else "internal"
     if resource.type == "aws_ecs_service":
-        return _ecs_service_exposure(values, public_security_groups, external_security_groups, internal_security_groups, public_target_groups, internal_target_groups, provider_fallback)
+        return _ecs_service_exposure(values, public_security_groups, external_security_groups, internal_security_groups, public_target_groups, internal_target_groups, provider_fallback, resource.unknown_paths)
     if resource.type == "aws_ecs_task_definition":
         if _references_any(_resource_identifiers(resource), public_ecs_task_definitions):
             return "public"
         exposure = _max_referenced_exposure(_resource_identifiers(resource), ecs_task_definition_exposure)
-        return exposure if exposure != "unknown" else _workload_network_exposure(values, provider_fallback)
+        return exposure if exposure != "unknown" else _workload_network_exposure(values, provider_fallback, resource.unknown_paths)
     if resource.type == "aws_lambda_function":
         names = {str(values.get("function_name") or ""), str(values.get("name") or ""), str(values.get("arn") or "")}
         if any(name in public_functions for name in names if name):
             return "public"
-        return _workload_network_exposure(values, provider_fallback)
+        return _workload_network_exposure(values, provider_fallback, resource.unknown_paths)
     if resource.type in {"aws_instance", "aws_launch_template", "aws_batch_job_definition", "aws_eks_cluster"}:
         if _has_direct_public_address(values) or _references_any(_security_group_refs(values), public_security_groups):
             return "public"
@@ -1086,7 +1109,7 @@ def exposure_for_matched_workload(
             return "external"
         if _references_any(_security_group_refs(values), internal_security_groups):
             return "internal"
-        return _workload_network_exposure(values, provider_fallback)
+        return _workload_network_exposure(values, provider_fallback, resource.unknown_paths)
     if resource.type in {"azurerm_linux_web_app", "azurerm_windows_web_app", "azurerm_app_service", "azurerm_function_app", "azurerm_linux_function_app", "azurerm_windows_function_app"}:
         public_network = values.get("public_network_access_enabled")
         if public_network is False:
@@ -1097,17 +1120,17 @@ def exposure_for_matched_workload(
             return "public"
         if _azure_container_app_has_ingress(values):
             return "internal"
-        return _workload_network_exposure(values, provider_fallback)
+        return _workload_network_exposure(values, provider_fallback, resource.unknown_paths)
     if resource.type.startswith("azapi_") and normalized_arm_type(values.get("type")) == "microsoft.app/containerapps":
         if _azure_container_app_external_ingress(values):
             return "public"
         if _azure_container_app_has_ingress(values):
             return "internal"
-        return _workload_network_exposure(values, provider_fallback)
+        return _workload_network_exposure(values, provider_fallback, resource.unknown_paths)
     if resource.type in {"azurerm_container_group", "azurerm_kubernetes_cluster", "azurerm_linux_virtual_machine", "azurerm_windows_virtual_machine", "azurerm_virtual_machine"}:
         if _has_direct_public_address(values):
             return "public"
-        return _workload_network_exposure(values, provider_fallback)
+        return _workload_network_exposure(values, provider_fallback, resource.unknown_paths)
     if resource.type in {"google_cloud_run_service", "google_cloud_run_v2_service"}:
         names = {str(values.get("name") or ""), str(resource.name or "")}
         if any(name in public_cloud_run_services for name in names if name):
@@ -1117,19 +1140,19 @@ def exposure_for_matched_workload(
             return "external"
         if "internal" in ingress:
             return "internal"
-        return _workload_network_exposure(values, provider_fallback)
+        return _workload_network_exposure(values, provider_fallback, resource.unknown_paths)
     if resource.type in {"google_cloudfunctions_function", "google_cloudfunctions2_function"}:
         if _references_any(_resource_identifiers(resource), public_functions):
             return "public"
-        return _workload_network_exposure(values, provider_fallback)
+        return _workload_network_exposure(values, provider_fallback, resource.unknown_paths)
     if resource.type in {"google_container_cluster", "google_compute_instance", "google_compute_instance_template"}:
         if _has_direct_public_address(values):
             return "public"
-        return _workload_network_exposure(values, provider_fallback)
+        return _workload_network_exposure(values, provider_fallback, resource.unknown_paths)
     if resource.type.startswith("kubernetes_") and resource.type != "kubernetes_manifest":
         exposure = _max_referenced_exposure(_kubernetes_names_and_selectors(resource), kubernetes_workload_exposure)
-        return exposure if exposure != "unknown" else _workload_network_exposure(values, provider_fallback)
-    return _workload_network_exposure(values, provider_fallback)
+        return exposure if exposure != "unknown" else _workload_network_exposure(values, provider_fallback, resource.unknown_paths)
+    return _workload_network_exposure(values, provider_fallback, resource.unknown_paths)
 
 
 def _azure_container_app_external_ingress(values: dict[str, Any]) -> bool:
@@ -1159,8 +1182,8 @@ def exposure_for_resource(resource: TerraformResource) -> str:
         return "public"
     if rtype in NETWORK_BRIDGE_RESOURCE_TYPES:
         return "internal"
-    if rtype in {"aws_security_group", "aws_security_group_rule"}:
-        return _aws_security_group_ingress_exposure(values)
+    if rtype in AWS_SG_EXPOSURE_TYPES:
+        return _aws_security_group_ingress_exposure(values, rtype)
     if rtype in {"azurerm_network_security_group", "azurerm_network_security_rule"}:
         return _azure_nsg_ingress_exposure(values)
     if rtype == "google_compute_firewall":
@@ -1185,8 +1208,8 @@ def is_public_exposure(resource: TerraformResource) -> bool:
         if rtype in {"azurerm_application_gateway", "azurerm_lb"} and _azure_has_private_frontend_only(values):
             return False
         return not (rtype in {"google_compute_forwarding_rule", "google_compute_global_forwarding_rule"} and str(values.get("load_balancing_scheme") or "").lower().startswith("internal"))
-    if rtype in {"aws_security_group", "aws_security_group_rule"}:
-        return _aws_security_group_is_public(values)
+    if rtype in AWS_SG_EXPOSURE_TYPES:
+        return _aws_security_group_is_public(values, rtype)
     if rtype in {"azurerm_network_security_group", "azurerm_network_security_rule"}:
         return _azure_nsg_is_public(values)
     if rtype == "google_compute_firewall":
@@ -1202,15 +1225,19 @@ def is_public_exposure(resource: TerraformResource) -> bool:
     return rtype in {"aws_apigatewayv2_api", "aws_api_gateway_rest_api", "aws_cloudfront_distribution", "google_cloud_run_domain_mapping"}
 
 
-def _aws_security_group_is_public(values: dict[str, Any]) -> bool:
-    return _aws_security_group_ingress_exposure(values) == "public"
+def _aws_security_group_is_public(values: dict[str, Any], resource_type: str = "") -> bool:
+    return _aws_security_group_ingress_exposure(values, resource_type) == "public"
 
 
-def _aws_security_group_has_internal_ingress(values: dict[str, Any]) -> bool:
-    return _aws_security_group_ingress_exposure(values) == "internal"
+def _aws_security_group_has_internal_ingress(values: dict[str, Any], resource_type: str = "") -> bool:
+    return _aws_security_group_ingress_exposure(values, resource_type) == "internal"
 
 
-def _aws_security_group_ingress_exposure(values: dict[str, Any]) -> str:
+def _aws_security_group_ingress_exposure(values: dict[str, Any], resource_type: str = "") -> str:
+    if resource_type in AWS_SG_EGRESS_RULE_TYPES:
+        # An egress rule carries no direction field, and its CIDR is outbound.
+        # Never let it contribute ingress exposure.
+        return "unknown"
     rules: list[Any] = []
     for key in ("ingress", "ingress_with_cidr_blocks"):
         item = values.get(key)
@@ -1218,14 +1245,16 @@ def _aws_security_group_ingress_exposure(values: dict[str, Any]) -> str:
             rules.extend(item)
         elif isinstance(item, dict):
             rules.append(item)
-    if values.get("type") == "ingress":
+    if values.get("type") == "ingress" or resource_type == "aws_vpc_security_group_ingress_rule":
         rules.append(values)
     result = "unknown"
     for rule in rules:
         if not isinstance(rule, dict):
             continue
         cidrs = _listify(rule.get("cidr_blocks")) + _listify(rule.get("ipv6_cidr_blocks"))
+        cidrs += _listify(rule.get("cidr_ipv4")) + _listify(rule.get("cidr_ipv6"))
         sources = cidrs + _listify(rule.get("source_security_group_id")) + _listify(rule.get("source_security_group_ids")) + _listify(rule.get("security_groups"))
+        sources += _listify(rule.get("referenced_security_group_id")) + _listify(rule.get("prefix_list_id"))
         exposure = "unknown"
         for source in sources:
             exposure = max_exposure(exposure, _network_source_exposure(source))
@@ -1274,6 +1303,13 @@ def _gcp_firewall_exposure(values: dict[str, Any]) -> str:
     direction = str(values.get("direction") or "INGRESS").lower()
     disabled = bool(values.get("disabled"))
     if disabled or direction != "ingress":
+        return "unknown"
+    # google_compute_firewall requires exactly one of `allow` / `deny`. A deny
+    # rule blocks traffic, so it must never be read as ingress exposure. Keyed on
+    # the presence of `deny` (not the absence of `allow`) because plan fixtures
+    # and the HCL static extractor legitimately produce values with neither
+    # block; those still classify from source_ranges.
+    if values.get("deny") and not values.get("allow"):
         return "unknown"
     exposure = "unknown"
     for item in ranges:
@@ -1360,6 +1396,7 @@ def _ecs_service_exposure(
     public_target_groups: set[str],
     internal_target_groups: set[str],
     provider_fallback: str,
+    unknown_paths: frozenset[str] = frozenset(),
 ) -> str:
     security_group_refs = _security_group_refs(values)
     target_group_refs = _target_group_refs(values)
@@ -1370,18 +1407,25 @@ def _ecs_service_exposure(
     if _references_any(security_group_refs, internal_security_groups) or _references_any(target_group_refs, internal_target_groups):
         return "internal"
     if security_group_refs or target_group_refs or _has_private_network_attachment(values):
+        if _network_attachment_is_unknown(unknown_paths):
+            return "unknown"
         return max_exposure("private", provider_fallback)
-    return _workload_network_exposure(values, provider_fallback)
+    return _workload_network_exposure(values, provider_fallback, unknown_paths)
 
 
 def _provider_network_fallback(exposure: str) -> str:
     return exposure if exposure == "internal" else "unknown"
 
 
-def _workload_network_exposure(values: dict[str, Any], provider_fallback: str) -> str:
+def _workload_network_exposure(values: dict[str, Any], provider_fallback: str, unknown_paths: frozenset[str] = frozenset()) -> str:
     if _has_direct_public_address(values):
         return "public"
     if _has_private_network_attachment(values):
+        # Absence of ingress evidence is only "private" when the plan actually
+        # resolved the attachment. An unknown-after-apply security group or
+        # subnet is a visibility gap, not a safety claim.
+        if _network_attachment_is_unknown(unknown_paths):
+            return "unknown"
         return max_exposure("private", provider_fallback)
     return "unknown"
 
@@ -1732,8 +1776,11 @@ def _network_tag_refs(values: Any) -> set[str]:
     return refs
 
 
-def _security_group_source_refs(values: dict[str, Any]) -> set[str]:
+def _security_group_source_refs(values: dict[str, Any], resource_type: str = "") -> set[str]:
     refs: set[str] = set()
+    if resource_type in AWS_SG_EGRESS_RULE_TYPES:
+        # Outbound rules do not create an inbound lateral edge.
+        return refs
     rules: list[Any] = []
     for key in ("ingress", "ingress_with_source_security_group_id"):
         item = values.get(key)
@@ -1741,12 +1788,12 @@ def _security_group_source_refs(values: dict[str, Any]) -> set[str]:
             rules.extend(item)
         elif isinstance(item, dict):
             rules.append(item)
-    if values.get("type") == "ingress":
+    if values.get("type") == "ingress" or resource_type == "aws_vpc_security_group_ingress_rule":
         rules.append(values)
     for rule in rules:
         if not isinstance(rule, dict):
             continue
-        for key in ("security_groups", "source_security_group_id", "source_security_group_ids"):
+        for key in ("security_groups", "source_security_group_id", "source_security_group_ids", "referenced_security_group_id"):
             refs.update(_value_reference_candidates(rule.get(key)))
     return refs
 

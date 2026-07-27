@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import json
+import math
+import re
+from collections.abc import Mapping
+from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from . import __version__
 from .evidence_graph import build_evidence_graph
@@ -20,6 +25,64 @@ from .finding_types import (
 from .input_limits import read_text_limited
 from .models import Finding, SourceLocation, Tier, reachability_label
 from .remediation import build_remediation_groups
+
+MAX_RENDERED_TEXT = 240
+
+_LINE_BREAK_RE = re.compile(r"[\r\n\t\v\f\u2028\u2029]+")
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+# RFC 3986 reserved characters plus "%": kept intact so an already-encoded URI is not double-encoded.
+_URI_RESERVED = ":/?#[]@!$&'()*+,;=%"
+
+
+def _json_safe(value: Any) -> Any:
+    """Replace non-finite floats with null so emitted artifacts stay valid RFC 8259 JSON.
+
+    A NaN/Infinity that survived an ingest boundary is unusable evidence, never a safe
+    value, so it is emitted as an explicit null (unknown) rather than as a non-standard
+    ``NaN``/``Infinity`` literal that every strict JSON parser rejects.
+    """
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def _dump_json(payload: Any) -> str:
+    # allow_nan=False is a backstop assertion: _json_safe already removed every non-finite value.
+    return json.dumps(_json_safe(payload), indent=2, allow_nan=False)
+
+
+def _single_line(value: object, limit: int = MAX_RENDERED_TEXT) -> str:
+    """Collapse untrusted scanner text onto one bounded line of printable characters."""
+    text = _LINE_BREAK_RE.sub(" ", str(value))
+    text = _CONTROL_CHAR_RE.sub("", text)
+    if len(text) > limit:
+        text = text[:limit].rstrip() + "..."
+    return text
+
+
+def _md_text(value: object, limit: int = MAX_RENDERED_TEXT) -> str:
+    """Escape untrusted scanner text interpolated into Markdown body text.
+
+    Scanner reports are untrusted input and the rendered Markdown is pasted into
+    GitHub job summaries, so a raw newline, backtick or ``<`` would let a finding
+    inject headings, HTML, or an unterminated comment that hides later findings.
+    """
+    text = _single_line(value, limit).replace("\\", "\\\\").replace("`", "\\`")
+    return text.replace("<", "&lt;").replace(">", "&gt;").replace("|", "\\|")
+
+
+def _md_code(value: object, limit: int = MAX_RENDERED_TEXT) -> str:
+    """Neutralize untrusted scanner text interpolated inside a Markdown code span.
+
+    Backticks cannot be backslash-escaped inside a code span, so they are replaced;
+    every other character stays literal because a code span renders it verbatim.
+    """
+    return _single_line(value, limit).replace("`", "'")
 
 
 def _metadata(extra: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -40,14 +103,13 @@ def write_json_findings(findings: list[Finding], path: str | Path, metadata: dic
     metadata_with_rollup = dict(metadata or {})
     metadata_with_rollup.setdefault("remediation_groups", len(remediations))
     out.write_text(
-        json.dumps(
+        _dump_json(
             {
                 "metadata": _metadata(metadata_with_rollup),
                 "remediations": remediations,
                 "evidence_graph": build_evidence_graph(findings, metadata=metadata_with_rollup),
                 "findings": [finding.to_json() for finding in findings],
-            },
-            indent=2,
+            }
         ),
         encoding="utf-8",
     )
@@ -92,9 +154,49 @@ def _level(tier: Tier) -> str:
     return "note"
 
 
-def write_sarif(findings: list[Finding], path: str | Path) -> None:
+def _security_severity(finding: Finding) -> str:
+    """GitHub code scanning parses this as a number, so it must always be finite."""
+    cvss = finding.vulnerability.cvss
+    if cvss is None or not math.isfinite(cvss) or not cvss:
+        cvss = finding.score / 10
+    return str(cvss if math.isfinite(cvss) else 0.0)
+
+
+def _uri_reference(value: str) -> str:
+    """Percent-encode characters that are illegal in a URI reference, leaving reserved ones."""
+    return quote(value, safe=_URI_RESERVED)
+
+
+def _uri_component(value: str) -> str:
+    """Percent-encode an untrusted name used as a single URI path segment."""
+    return quote(value, safe="")
+
+
+def _artifact_uri(path: Path, roots: tuple[Path, ...]) -> str:
+    """Emit a SARIF artifactLocation.uri: repo-relative when possible, always encoded.
+
+    SARIF 2.1.0 3.4.3 requires a valid URI reference, so a legal POSIX path containing
+    "#", "?" or a space must be percent-encoded or the alert anchors to the wrong file.
+    """
+    candidate = path
+    for root in roots:
+        with suppress(ValueError):
+            candidate = path.relative_to(root)
+            break
+    return quote(candidate.as_posix(), safe="/")
+
+
+def _working_directory() -> Path | None:
+    try:
+        return Path.cwd()
+    except OSError:  # pragma: no cover - the process cwd was removed underneath us
+        return None
+
+
+def write_sarif(findings: list[Finding], path: str | Path, *, source_roots: Mapping[str, Path] | None = None) -> None:
     rules: dict[str, dict[str, Any]] = {}
     results: list[dict[str, Any]] = []
+    working_directory = _working_directory()
     for finding in findings:
         rule_id = finding.vulnerability.id
         rules.setdefault(
@@ -104,21 +206,31 @@ def write_sarif(findings: list[Finding], path: str | Path) -> None:
                 "name": finding.vulnerability.id,
                 "shortDescription": {"text": finding.vulnerability.summary or f"Vulnerability {rule_id}"},
                 "help": {"text": _sarif_rule_help(finding)},
-                "properties": {"security-severity": str(finding.vulnerability.cvss or finding.score / 10)},
+                "properties": {"security-severity": _security_severity(finding)},
             },
         )
         location = _primary_location(finding)
         physical_location: dict[str, Any]
         if location:
+            artifact_root = (source_roots or {}).get(finding.artifact.name)
+            roots = tuple(root for root in (artifact_root, working_directory) if root is not None)
             physical_location = {
-                "artifactLocation": {"uri": str(location.path)},
-                "region": {"startLine": location.line, "startColumn": max(1, location.column)},
+                "artifactLocation": {"uri": _artifact_uri(location.path, roots)},
+                "region": {
+                    "startLine": _position_number(location.line),
+                    "startColumn": _position_number(location.column),
+                },
             }
         elif _is_dynamic(finding):
-            uri = finding.runtime_evidence.url or f"security-evidence://{finding.artifact.name}/{finding.vulnerability.id}"
+            uri = (
+                _uri_reference(finding.runtime_evidence.url)
+                if finding.runtime_evidence.url
+                else f"security-evidence://{_uri_component(finding.artifact.name)}/{_uri_component(finding.vulnerability.id)}"
+            )
             physical_location = {"artifactLocation": {"uri": uri}}
         else:
-            physical_location = {"artifactLocation": {"uri": f"sbom://{finding.artifact.name}/{finding.component.name}"}}
+            uri = f"sbom://{_uri_component(finding.artifact.name)}/{_uri_component(finding.component.name)}"
+            physical_location = {"artifactLocation": {"uri": uri}}
         results.append(
             {
                 "ruleId": rule_id,
@@ -160,7 +272,7 @@ def write_sarif(findings: list[Finding], path: str | Path) -> None:
     }
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(sarif, indent=2), encoding="utf-8")
+    out.write_text(_dump_json(sarif), encoding="utf-8")
 
 
 def _sarif_rule_help(finding: Finding) -> str:
@@ -180,8 +292,9 @@ def write_diagnostics(findings: list[Finding], path: str | Path) -> None:
         if location is None:
             continue
         uri = str(location.path)
-        line = location.line - 1
-        column = location.column - 1
+        # LSP Position.line/character are uinteger, so a malformed scanner position must floor at 0.
+        line = max(0, location.line - 1)
+        column = max(0, location.column - 1)
         diagnostics.append(
             {
                 "uri": uri,
@@ -221,7 +334,7 @@ def write_diagnostics(findings: list[Finding], path: str | Path) -> None:
         )
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps({"diagnostics": diagnostics}, indent=2), encoding="utf-8")
+    out.write_text(_dump_json({"diagnostics": diagnostics}), encoding="utf-8")
 
 
 def _diagnostic_severity(tier: Tier) -> int:
@@ -297,7 +410,10 @@ def _typed_markdown_sections(findings: list[Finding], max_findings: int = 15) ->
             lines.append("None.")
             continue
         for finding in items[:max_findings]:
-            lines.append(f"- `{finding.tier.value}` `{finding.vulnerability.id}` on `{finding.artifact.name}`: {_markdown_summary(finding)}")
+            lines.append(
+                f"- `{finding.tier.value}` `{_md_code(finding.vulnerability.id)}` "
+                f"on `{_md_code(finding.artifact.name)}`: {_markdown_summary(finding)}"
+            )
         if len(items) > max_findings:
             lines.append(f"- {len(items) - max_findings} more in JSON output")
     return lines
@@ -306,14 +422,25 @@ def _typed_markdown_sections(findings: list[Finding], max_findings: int = 15) ->
 def _markdown_summary(finding: Finding) -> str:
     if _is_dynamic(finding):
         state = finding.runtime_evidence.state.value
-        unknowns = f"; unknown: {', '.join(finding.unknowns[:2])}" if finding.unknowns else ""
+        gaps = ", ".join(_md_text(unknown) for unknown in finding.unknowns[:2])
+        unknowns = f"; unknown: {gaps}" if finding.unknowns else ""
         return f"runtime evidence `{state}`, source evidence `{finding.source.reachability.value}`{unknowns}"
     if _is_static(finding):
-        return f"static scanner evidence `{finding.source.evidence_source}`, source evidence `{finding.source.reachability.value}`"
+        return (
+            f"static scanner evidence `{_md_code(finding.source.evidence_source)}`, "
+            f"source evidence `{finding.source.reachability.value}`"
+        )
     if _is_posture(finding):
         posture = finding.posture_evidence
-        return f"posture `{posture.rule_id}`, resource `{posture.resource_id or finding.component.name}`, expected `{posture.expected or 'unknown'}`, actual `{posture.actual or 'unknown'}`"
-    return f"dependency `{finding.component.display_name}`, source evidence `{finding.source.reachability.value}`"
+        return (
+            f"posture `{_md_code(posture.rule_id)}`, "
+            f"resource `{_md_code(posture.resource_id or finding.component.name)}`, "
+            f"expected `{_md_code(posture.expected or 'unknown')}`, actual `{_md_code(posture.actual or 'unknown')}`"
+        )
+    return (
+        f"dependency `{_md_code(finding.component.display_name)}`, "
+        f"source evidence `{finding.source.reachability.value}`"
+    )
 
 
 def _remediation_markdown(index: int, remediation: dict[str, Any]) -> list[str]:
@@ -322,19 +449,23 @@ def _remediation_markdown(index: int, remediation: dict[str, Any]) -> list[str]:
     owner = context.get("owner") or "unknown owner"
     vulnerabilities = remediation["top_vulnerabilities"]
     lines = [
-        f"### {index}. {str(remediation['tier']).upper()}: `{component['display_name']}@{component.get('version') or 'unknown'}`",
+        f"### {index}. {_md_text(str(remediation['tier']).upper())}: "
+        f"`{_md_code(component['display_name'])}@{_md_code(component.get('version') or 'unknown')}`",
         "",
-        f"- Artifact: `{remediation['artifact']['name']}`",
-        f"- Vulnerabilities grouped: `{remediation['vulnerability_count']}`",
-        f"- Max score: `{float(remediation['max_score']):.1f}`; confidence: `{remediation['confidence']}`",
-        f"- Owner: `{owner}`",
-        f"- Source evidence: `{remediation.get('reachability_label', remediation['reachability'])}` (`{remediation['reachability']}`)",
-        f"- Runtime/deployment context: network exposure=`{context['exposure']}`, environment=`{context['environment']}`, IAM/RBAC privilege=`{context['privilege']}`, asset criticality=`{context.get('criticality', 'unknown')}`",
+        f"- Artifact: `{_md_code(remediation['artifact']['name'])}`",
+        f"- Vulnerabilities grouped: `{_md_code(remediation['vulnerability_count'])}`",
+        f"- Max score: `{float(remediation['max_score']):.1f}`; confidence: `{_md_code(remediation['confidence'])}`",
+        f"- Owner: `{_md_code(owner)}`",
+        f"- Source evidence: `{_md_code(remediation.get('reachability_label', remediation['reachability']))}` "
+        f"(`{_md_code(remediation['reachability'])}`)",
+        f"- Runtime/deployment context: network exposure=`{_md_code(context['exposure'])}`, "
+        f"environment=`{_md_code(context['environment'])}`, IAM/RBAC privilege=`{_md_code(context['privilege'])}`, "
+        f"asset criticality=`{_md_code(context.get('criticality', 'unknown'))}`",
     ]
     if context.get("iam_impacts"):
-        lines.append(f"- IAM impacts: `{', '.join(context['iam_impacts'])}`")
+        lines.append(f"- IAM impacts: `{_md_code(', '.join(context['iam_impacts']))}`")
     if remediation.get("suggested_fix"):
-        lines.append(f"- Suggested fix: `{remediation['suggested_fix']}`")
+        lines.append(f"- Suggested fix: `{_md_code(remediation['suggested_fix'])}`")
     elif not remediation.get("fix_available"):
         lines.append("- Suggested fix: no fixed version was reported by vulnerability intelligence")
     if vulnerabilities:
@@ -342,8 +473,8 @@ def _remediation_markdown(index: int, remediation: dict[str, Any]) -> list[str]:
         lines.append("- Included vulnerabilities:")
         for vulnerability in shown:
             lines.append(
-                f"  - `{vulnerability['id']}` score `{float(vulnerability['score']):.1f}` "
-                f"severity `{vulnerability['severity']}`"
+                f"  - `{_md_code(vulnerability['id'])}` score `{float(vulnerability['score']):.1f}` "
+                f"severity `{_md_code(vulnerability['severity'])}`"
             )
         if len(vulnerabilities) > len(shown):
             lines.append(f"  - {len(vulnerabilities) - len(shown)} more in JSON output")
@@ -354,56 +485,78 @@ def _remediation_markdown(index: int, remediation: dict[str, Any]) -> list[str]:
 def _finding_markdown(index: int, finding: Finding) -> list[str]:
     owner = finding.context.owner or "unknown owner"
     title = (
-        f"{finding.vulnerability.id} in `{finding.component.name}`"
+        f"{_md_text(finding.vulnerability.id)} in `{_md_code(finding.component.name)}`"
         if _is_dependency(finding)
-        else f"{finding.vulnerability.id} `{finding.weakness.get('weakness') or finding.vulnerability.summary or 'security finding'}`"
+        else f"{_md_text(finding.vulnerability.id)} "
+        f"`{_md_code(finding.weakness.get('weakness') or finding.vulnerability.summary or 'security finding')}`"
     )
     component_label = (
-        f"{finding.component.name}@{finding.component.version or 'unknown'}"
+        f"{_md_code(finding.component.name)}@{_md_code(finding.component.version or 'unknown')}"
         if _is_dependency(finding)
-        else finding.component.name
+        else _md_code(finding.component.name)
     )
     lines = [
         f"### {index}. {finding.tier.value.upper()}: {title}",
         "",
-        f"- Artifact: `{finding.artifact.name}`",
+        f"- Artifact: `{_md_code(finding.artifact.name)}`",
         f"- Component: `{component_label}`",
-        f"- Finding type: `{finding.finding_type}`",
+        f"- Finding type: `{_md_code(finding.finding_type)}`",
         f"- Score: `{finding.score:.1f}`; confidence: `{finding.confidence.value}`",
-        f"- Owner: `{owner}`",
-        f"- Source evidence: `{reachability_label(finding.source.reachability)}` (`{finding.source.reachability.value}`) - {finding.source.reason}",
-        f"- Runtime/deployment context: network exposure=`{finding.context.exposure}`, environment=`{finding.context.environment}`, IAM/RBAC privilege=`{finding.context.privilege}`, asset criticality=`{finding.context.criticality}`",
+        f"- Owner: `{_md_code(owner)}`",
+        f"- Source evidence: `{reachability_label(finding.source.reachability)}` "
+        f"(`{finding.source.reachability.value}`) - {_md_text(finding.source.reason)}",
+        f"- Runtime/deployment context: network exposure=`{_md_code(finding.context.exposure)}`, "
+        f"environment=`{_md_code(finding.context.environment)}`, "
+        f"IAM/RBAC privilege=`{_md_code(finding.context.privilege)}`, "
+        f"asset criticality=`{_md_code(finding.context.criticality)}`",
     ]
     if _is_security_finding(finding):
-        lines.append(f"- Scanner: `{finding.weakness.get('tool', 'unknown')}`; type=`{finding.weakness.get('scanner_type', 'unknown')}`; CWE=`{finding.weakness.get('cwe') or 'unknown'}`")
+        lines.append(
+            f"- Scanner: `{_md_code(finding.weakness.get('tool', 'unknown'))}`; "
+            f"type=`{_md_code(finding.weakness.get('scanner_type', 'unknown'))}`; "
+            f"CWE=`{_md_code(finding.weakness.get('cwe') or 'unknown')}`"
+        )
     if _is_dynamic(finding):
         runtime = finding.runtime_evidence
-        lines.append(f"- Runtime evidence: state=`{runtime.state.value}`, confidence=`{runtime.confidence.value}`, url=`{runtime.url or 'unknown'}`, method=`{runtime.method or 'unknown'}`")
+        lines.append(
+            f"- Runtime evidence: state=`{runtime.state.value}`, confidence=`{runtime.confidence.value}`, "
+            f"url=`{_md_code(runtime.url or 'unknown')}`, method=`{_md_code(runtime.method or 'unknown')}`"
+        )
     if _is_posture(finding):
         posture = finding.posture_evidence
-        lines.append(f"- Posture evidence: resource=`{posture.resource_id or 'unknown'}`, type=`{posture.resource_type or 'unknown'}`, provider=`{posture.provider or 'unknown'}`")
-        lines.append(f"- Expected/actual: `{posture.expected or 'unknown'}` / `{posture.actual or 'unknown'}`")
+        lines.append(
+            f"- Posture evidence: resource=`{_md_code(posture.resource_id or 'unknown')}`, "
+            f"type=`{_md_code(posture.resource_type or 'unknown')}`, "
+            f"provider=`{_md_code(posture.provider or 'unknown')}`"
+        )
+        lines.append(
+            f"- Expected/actual: `{_md_code(posture.expected or 'unknown')}` / `{_md_code(posture.actual or 'unknown')}`"
+        )
     if finding.correlated_evidence:
         lines.append("- Correlated evidence:")
         for item in finding.correlated_evidence[:3]:
-            lines.append(f"  - `{item.correlation_type}` confidence=`{item.confidence.value}`: {item.reason}")
+            lines.append(
+                f"  - `{_md_code(item.correlation_type)}` confidence=`{item.confidence.value}`: {_md_text(item.reason)}"
+            )
     if finding.unknowns:
         lines.append("- Unknown evidence and visibility gaps:")
         for unknown in finding.unknowns[:5]:
-            lines.append(f"  - {unknown}")
+            lines.append(f"  - {_md_text(unknown)}")
     if finding.context.iam_impacts:
-        lines.append(f"- IAM impacts: `{', '.join(finding.context.iam_impacts)}`")
+        lines.append(f"- IAM impacts: `{_md_code(', '.join(finding.context.iam_impacts))}`")
     if finding.fix_commands:
         lines.append("- Suggested fix:")
         for command in finding.fix_commands:
-            lines.append(f"  - `{command}`")
+            lines.append(f"  - `{_md_code(command)}`")
     if finding.source.locations:
         lines.append("- Evidence locations:")
         for location in finding.source.locations[:3]:
-            lines.append(f"  - `{location.path}:{location.line}` - {location.snippet}")
+            lines.append(
+                f"  - `{_md_code(str(location.path))}:{_position_number(location.line)}` - {_md_text(location.snippet)}"
+            )
     lines.append("- Why it matters:")
     for reason in finding.rationale[:5]:
-        lines.append(f"  - {reason}")
+        lines.append(f"  - {_md_text(reason)}")
     lines.append("")
     return lines
 
@@ -417,8 +570,8 @@ def write_annotations(findings: list[Finding], path: str | Path, min_tier: Tier 
         location = _primary_location(finding)
         if location:
             file_property = _escape_annotation_property(str(location.path))
-            line_property = _annotation_number(location.line)
-            column_property = _annotation_number(location.column)
+            line_property = _position_number(location.line)
+            column_property = _position_number(location.column)
             lines.append(f"::error file={file_property},line={line_property},col={column_property}::{_escape_annotation_message(_finding_message(finding))}")
         else:
             lines.append(f"::warning title=Reachability Advisor::{_escape_annotation_message(_finding_message(finding))}")
@@ -437,22 +590,26 @@ def _escape_annotation_property(value: str) -> str:
     return _escape_annotation_message(value).replace(":", "%3A").replace(",", "%2C")
 
 
-def _annotation_number(value: int) -> int:
+def _position_number(value: int) -> int:
+    """Clamp a 1-based position: SARIF region.startLine/startColumn require minimum 1."""
     return max(1, int(value))
 
 
 def render_table(findings: list[Finding], limit: int = 20) -> str:
     rows = [("Priority", "Score", "Artifact", "Component", "Finding", "Source evidence", "Owner")]
     for finding in findings[:limit]:
+        # Untrusted scanner text is collapsed to one line: a newline here corrupts column alignment.
+        weakness = _single_line(finding.weakness.get("weakness", "security finding"))
+        vulnerability_id = _single_line(finding.vulnerability.id)
         rows.append(
             (
                 finding.tier.value,
                 f"{finding.score:.1f}",
-                finding.artifact.name,
-                finding.component.name,
-                finding.vulnerability.id if _is_dependency(finding) else f"{finding.vulnerability.id} ({finding.weakness.get('weakness', 'security finding')})",
+                _single_line(finding.artifact.name),
+                _single_line(finding.component.name),
+                vulnerability_id if _is_dependency(finding) else f"{vulnerability_id} ({weakness})",
                 reachability_label(finding.source.reachability),
-                finding.context.owner or "unknown",
+                _single_line(finding.context.owner or "unknown"),
             )
         )
     widths = [max(len(str(row[i])) for row in rows) for i in range(len(rows[0]))]
@@ -480,40 +637,58 @@ def explain_finding(data: dict[str, Any], key: str | None = None, artifact: str 
     selected_is_security_finding = is_security_finding(finding_type)
     weakness = selected.get("weakness", {}) if isinstance(selected.get("weakness"), dict) else {}
     title = (
-        f"{selected['vulnerability']['id']} in {selected['component']['name']}"
+        f"{_md_text(selected['vulnerability']['id'])} in {_md_text(selected['component']['name'])}"
         if not selected_is_security_finding
-        else f"{selected['vulnerability']['id']} {weakness.get('weakness') or 'security finding'}"
+        else f"{_md_text(selected['vulnerability']['id'])} {_md_text(weakness.get('weakness') or 'security finding')}"
     )
+    reachability = selected["source_reachability"]
+    context = selected["context"]
     lines = [
         f"# Explanation: {title}",
         "",
-        f"Artifact: `{selected['artifact']['name']}`",
-        f"Priority: `{selected['tier']}`; score: `{selected['score']}`; confidence: `{selected['confidence']}`",
+        f"Artifact: `{_md_code(selected['artifact']['name'])}`",
+        f"Priority: `{_md_code(selected['tier'])}`; score: `{_md_code(selected['score'])}`; "
+        f"confidence: `{_md_code(selected['confidence'])}`",
         "",
         "## Evidence",
-        f"- Source evidence: `{selected['source_reachability'].get('label', selected['source_reachability']['state'])}` (`{selected['source_reachability']['state']}`) - {selected['source_reachability']['reason']}",
-        f"- Runtime/deployment context: network exposure=`{selected['context']['exposure']}`, environment=`{selected['context']['environment']}`, IAM/RBAC privilege=`{selected['context']['privilege']}`, asset criticality=`{selected['context'].get('criticality', 'unknown')}`",
+        f"- Source evidence: `{_md_code(reachability.get('label', reachability['state']))}` "
+        f"(`{_md_code(reachability['state'])}`) - {_md_text(reachability['reason'])}",
+        f"- Runtime/deployment context: network exposure=`{_md_code(context['exposure'])}`, "
+        f"environment=`{_md_code(context['environment'])}`, IAM/RBAC privilege=`{_md_code(context['privilege'])}`, "
+        f"asset criticality=`{_md_code(context.get('criticality', 'unknown'))}`",
     ]
-    if selected["context"].get("iam_impacts"):
-        lines.append(f"- IAM impacts: `{', '.join(selected['context']['iam_impacts'])}`")
+    if context.get("iam_impacts"):
+        lines.append(f"- IAM impacts: `{_md_code(', '.join(context['iam_impacts']))}`")
     if selected_is_security_finding:
-        lines.append(f"- Scanner: `{weakness.get('tool', 'unknown')}`; type=`{weakness.get('scanner_type', 'unknown')}`; CWE=`{weakness.get('cwe') or 'unknown'}`")
+        lines.append(
+            f"- Scanner: `{_md_code(weakness.get('tool', 'unknown'))}`; "
+            f"type=`{_md_code(weakness.get('scanner_type', 'unknown'))}`; "
+            f"CWE=`{_md_code(weakness.get('cwe') or 'unknown')}`"
+        )
     runtime = selected.get("runtime_evidence", {}) if isinstance(selected.get("runtime_evidence"), dict) else {}
     if finding_type == "dynamic_runtime_observation":
-        lines.append(f"- Runtime evidence: state=`{runtime.get('state', 'unknown')}`, url=`{runtime.get('url') or 'unknown'}`, method=`{runtime.get('method') or 'unknown'}`")
+        lines.append(
+            f"- Runtime evidence: state=`{_md_code(runtime.get('state', 'unknown'))}`, "
+            f"url=`{_md_code(runtime.get('url') or 'unknown')}`, method=`{_md_code(runtime.get('method') or 'unknown')}`"
+        )
     posture = selected.get("posture_evidence", {}) if isinstance(selected.get("posture_evidence"), dict) else {}
     if finding_type == "cloud_posture_finding":
-        lines.append(f"- Posture evidence: resource=`{posture.get('resource_id') or 'unknown'}`, provider=`{posture.get('provider') or 'unknown'}`, expected=`{posture.get('expected') or 'unknown'}`, actual=`{posture.get('actual') or 'unknown'}`")
+        lines.append(
+            f"- Posture evidence: resource=`{_md_code(posture.get('resource_id') or 'unknown')}`, "
+            f"provider=`{_md_code(posture.get('provider') or 'unknown')}`, "
+            f"expected=`{_md_code(posture.get('expected') or 'unknown')}`, "
+            f"actual=`{_md_code(posture.get('actual') or 'unknown')}`"
+        )
     unknowns = selected.get("unknowns", [])
     if isinstance(unknowns, list) and unknowns:
         lines.extend(["", "## Unknown Evidence And Visibility Gaps"])
         for unknown in unknowns:
-            lines.append(f"- {unknown}")
+            lines.append(f"- {_md_text(unknown)}")
     lines.extend(["", "## Rationale"])
     for reason in selected.get("rationale", []):
-        lines.append(f"- {reason}")
+        lines.append(f"- {_md_text(reason)}")
     if selected.get("fix_commands"):
         lines.append("\n## Suggested fixes")
         for command in selected["fix_commands"]:
-            lines.append(f"- `{command}`")
+            lines.append(f"- `{_md_code(command)}`")
     return "\n".join(lines) + "\n"

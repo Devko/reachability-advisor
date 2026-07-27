@@ -28,6 +28,7 @@ from .cli_quality import (
     _annotate_analysis_profile,
     _findings_fail,
     _quality_gate_failures,
+    _scope_security_profile_coverage,
 )
 from .compare import compare_findings, delta_fails, pr_delta, write_delta, write_delta_markdown
 from .context import ContextError, load_context_file
@@ -291,6 +292,7 @@ def run_scan(args: argparse.Namespace) -> int:
         contexts,
         policy=runtime_policy.score_policy,
     )
+    _scope_security_profile_coverage(security_evidence_report, security_evidence)
     findings = apply_correlations(sorted([*findings, *security_findings], key=lambda finding: finding.score, reverse=True))
     findings = sorted(findings, key=lambda finding: finding.score, reverse=True)
     findings = apply_exceptions(findings, runtime_policy)
@@ -319,8 +321,9 @@ def run_scan(args: argparse.Namespace) -> int:
         "analysis_profile": args.analysis_profile,
         "artifact_manifest_entries": artifact_manifest_report.get("entries", 0),
     }
-    if security_evidence:
-        source_coverage["security_evidence"] = security_evidence_report
+    # Always attach the report, including the zero-record case. Otherwise the gate reads a
+    # missing metric as 0.0 and fails a scan that imported no security evidence at all.
+    source_coverage["security_evidence"] = security_evidence_report
     _annotate_analysis_profile(args, source_coverage, terraform_coverage, kubernetes_coverage)
     if args.out:
         write_json_findings(findings, args.out, metadata=metadata)
@@ -629,8 +632,55 @@ def run_artifact_manifest(args: argparse.Namespace) -> int:
             out.write_text(json.dumps(report, indent=2), encoding="utf-8")
         else:
             print(json.dumps(report, indent=2))
-        return 10 if args.fail_on_warning and report.get("status") != "ready" else 0
+        if args.fail_on_warning and report.get("status") != "ready":
+            print(f"Reachability Advisor artifact manifest gate failed: {_artifact_manifest_gate_failure(report, args.out)}", file=sys.stderr)
+            return 10
+        return 0
     raise UserFacingError(f"unknown artifact-manifest command: {args.artifact_manifest_command}", 2)
+
+
+def _artifact_manifest_gate_failure(report: dict[str, Any], out_path: str | None) -> str:
+    summary = report.get("summary", {}) if isinstance(report.get("summary"), dict) else {}
+    problems = _artifact_manifest_problems(report)
+    if not int(summary.get("artifacts") or 0):
+        detail = "the manifest declares no artifacts"
+    elif problems:
+        detail = _truncated_detail(problems)
+    else:
+        detail = f"manifest status is {report.get('status')}"
+    location = f" Full report: {out_path}." if out_path else ""
+    return (
+        f"{detail}. Release gates cannot tie findings to the deployed build without digest-level "
+        "artifact identity and provenance markers. Next step: rerun `artifact-manifest init` with "
+        f"--digest, --registry-ref, --git-sha, --sbom, and --signed, or add the missing markers to the manifest.{location}"
+    )
+
+
+def _artifact_manifest_problems(report: dict[str, Any]) -> list[str]:
+    rows = report.get("artifacts")
+    if not isinstance(rows, list):
+        return []
+    problems: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "unnamed artifact")
+        blockers = row.get("provenance_blockers")
+        for blocker in blockers if isinstance(blockers, list) else []:
+            if not isinstance(blocker, dict):
+                continue
+            message = str(blocker.get("message") or blocker.get("kind") or "").strip()
+            if message:
+                problems.append(f"{name}: {message}")
+        if not row.get("strong_identity"):
+            problems.append(f"{name}: no image digest or exact registry reference")
+    return problems
+
+
+def _truncated_detail(messages: list[str]) -> str:
+    suffix = "; ".join(messages[:3])
+    more = f"; plus {len(messages) - 3} more" if len(messages) > 3 else ""
+    return f"{suffix}{more}"
 
 
 def run_rendered_iac_plan(args: argparse.Namespace) -> int:
@@ -682,7 +732,32 @@ def run_benchmark_snapshots(args: argparse.Namespace) -> int:
         out.write_text(json.dumps(report, indent=2), encoding="utf-8")
     else:
         print(json.dumps(report, indent=2))
-    return 0 if args.warn_only or report.get("status") == "passed" else 10
+    if args.warn_only or report.get("status") == "passed":
+        return 0
+    print(f"Reachability Advisor benchmark snapshot gate failed: {_benchmark_snapshot_gate_failure(report, args.out)}", file=sys.stderr)
+    return 10
+
+
+def _benchmark_snapshot_gate_failure(report: dict[str, Any], out_path: str | None) -> str:
+    problems: list[str] = []
+    results = report.get("results")
+    for row in results if isinstance(results, list) else []:
+        if not isinstance(row, dict) or row.get("status") == "passed":
+            continue
+        snapshot_id = str(row.get("id") or "aggregate")
+        row_problems = row.get("problems")
+        for problem in row_problems if isinstance(row_problems, list) else []:
+            problems.append(f"{snapshot_id}: {problem}")
+        if not isinstance(row_problems, list) or not row_problems:
+            problems.append(f"{snapshot_id}: snapshot did not match its checked-in expectations")
+    failed = int(report.get("failed_count") or 0) or len({problem.split(":", 1)[0] for problem in problems})
+    detail = _truncated_detail(problems) if problems else "snapshot validation reported no detail"
+    location = f" Full report: {out_path}." if out_path else ""
+    return (
+        f"{failed} snapshot(s) regressed. {detail}. Prioritization drifted away from the checked-in "
+        "benchmark, so tier counts are no longer trustworthy. Next step: review the scoring change, then "
+        f"either correct it or update the expectations file with a documented reason.{location}"
+    )
 
 
 def run_export_semgrep_rules(args: argparse.Namespace) -> int:

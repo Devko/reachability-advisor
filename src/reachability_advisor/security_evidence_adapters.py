@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from collections.abc import Sequence
 from pathlib import Path
@@ -25,6 +26,12 @@ def load_security_evidence(paths: Sequence[str | Path], *, default_scanner_type:
             data = json.loads(read_text_limited(evidence_path, "security evidence"))
         except InputSizeError as exc:
             raise SecurityEvidenceError(str(exc)) from exc
+        except RecursionError as exc:
+            # CPython's JSON scanner raises RecursionError (not JSONDecodeError) on deeply nested
+            # documents.  Surface it as a normal input error instead of an uncaught crash.
+            raise SecurityEvidenceError(
+                f"{evidence_path}: security evidence JSON nesting exceeds the supported depth"
+            ) from exc
         except json.JSONDecodeError as exc:
             raise SecurityEvidenceError(f"{evidence_path}: invalid JSON security evidence: {exc}") from exc
         records.extend(_records_from_data(data, evidence_path, default_scanner_type=default_scanner_type))
@@ -40,6 +47,10 @@ def _records_from_jsonl(path: Path, *, default_scanner_type: str | None = None) 
                 continue
             try:
                 item = json.loads(line)
+            except RecursionError as exc:
+                raise SecurityEvidenceError(
+                    f"{path}:{line_number}: security evidence JSON nesting exceeds the supported depth"
+                ) from exc
             except json.JSONDecodeError as exc:
                 raise SecurityEvidenceError(f"{path}:{line_number}: invalid JSONL security evidence: {exc}") from exc
             if not isinstance(item, dict):
@@ -624,9 +635,12 @@ def _optional_float(value: Any) -> float | None:
     if value in (None, ""):
         return None
     try:
-        return float(value)
+        result = float(value)
     except (TypeError, ValueError):
         return None
+    # `Infinity`/`NaN`/`1e400` are accepted by json.loads but are not usable numbers: they crash
+    # int() conversion and would serialize as non-RFC-8259 JSON.  Treat them as absent.
+    return result if math.isfinite(result) else None
 
 
 def _normalize_label(value: str) -> str:
