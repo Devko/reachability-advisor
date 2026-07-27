@@ -5,10 +5,12 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 
 from reachability_advisor.kubernetes import (
     MAX_MANIFEST_DEPTH,
     KubernetesManifestError,
+    _ensure_supported_depth,
     analyze_kubernetes_manifests,
     load_kubernetes_resources,
 )
@@ -278,6 +280,39 @@ class ManifestNestingDepthTests(unittest.TestCase):
         resources = load_kubernetes_resources(sample)
         self.assertTrue(resources)
         self.assertTrue(any(resource.kind == "Ingress" for resource in resources))
+
+    def test_ensure_supported_depth_directly_rejects_exceeding_max(
+        self,
+    ) -> None:
+        """Direct test of _ensure_supported_depth; defense-in-depth.
+
+        This guard is unreachable through the public API since
+        yaml_loader's own depth check hits first. This test keeps
+        the guard honest even if MAX_YAML_DEPTH and MAX_MANIFEST_DEPTH
+        are changed independently.
+        """
+        # Build a structure exceeding MAX_MANIFEST_DEPTH
+        structure: Any = "leaf"
+        for _ in range(MAX_MANIFEST_DEPTH + 1):
+            structure = {"nested": structure}
+
+        # Assert kubernetes.py's message, not yaml_loader's
+        with self.assertRaises(KubernetesManifestError) as error:
+            _ensure_supported_depth(structure)
+        self.assertIn("manifest nesting exceeds supported depth",
+                      str(error.exception))
+
+    def test_ensure_supported_depth_accepts_boundary_depth(
+        self,
+    ) -> None:
+        """Verify the guard accepts structures at boundary depth."""
+        # Build a structure at exactly MAX_MANIFEST_DEPTH (should pass)
+        structure: Any = "leaf"
+        for _ in range(MAX_MANIFEST_DEPTH):
+            structure = {"nested": structure}
+
+        # Must not raise
+        _ensure_supported_depth(structure)
 
 
 class SharedYamlLoaderTests(unittest.TestCase):
