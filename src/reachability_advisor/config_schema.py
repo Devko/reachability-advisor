@@ -6,9 +6,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from .numeric import finite_float_or_none
+
 SUPPORTED_VERSIONS = frozenset({1})
 TIERS = ("informational", "low", "medium", "high", "urgent")
 PROFILES = ("advisory", "production")
+# gate.thresholds uses the same names as the CLI's `--min-*` flags (see cli_parser.py),
+# which are all documented as 0..1 ratios (e.g. "--min-artifact-match-coverage ... 0..1
+# ratio", production defaults of 1.0). A threshold outside that range can never be a
+# legitimate coverage ratio, and a negative one would silently defeat the gate.
+THRESHOLD_MIN = 0.0
+THRESHOLD_MAX = 1.0
 
 TOP_LEVEL_KEYS = frozenset({"version", "extends", "artifacts", "evidence", "iac", "gate", "output"})
 ARTIFACT_KEYS = frozenset({"sbom", "source", "image", "manifest"})
@@ -116,9 +124,20 @@ def _gate(value: Any, label: str) -> GateConfig:
     raw_thresholds = _mapping(block.get("thresholds"), f"{label}: gate.thresholds")
     thresholds: dict[str, float] = {}
     for key, item in raw_thresholds.items():
+        if not isinstance(key, str):
+            raise ConfigError(
+                f"{label}: gate.thresholds key {key!r} must be a string, "
+                f"got {type(key).__name__}"
+            )
         if isinstance(item, bool) or not isinstance(item, (int, float)):
             raise ConfigError(f"{label}: gate.thresholds.{key} must be a number, got {item!r}")
-        thresholds[str(key)] = float(item)
+        parsed = finite_float_or_none(item)
+        if parsed is None or not THRESHOLD_MIN <= parsed <= THRESHOLD_MAX:
+            raise ConfigError(
+                f"{label}: gate.thresholds.{key} must be a finite number between "
+                f"{THRESHOLD_MIN} and {THRESHOLD_MAX}, got {item!r}"
+            )
+        thresholds[key] = parsed
     return GateConfig(
         profile=profile, fail_on=fail_on, fail_on_new=fail_on_new, thresholds=thresholds
     )
@@ -147,7 +166,8 @@ def validate_config(raw: dict[str, Any], source: str) -> ReachabilityConfig:
     if "version" not in raw:
         raise ConfigError(f"{source}: 'version' is required; write `version: 1`")
     version = raw["version"]
-    if isinstance(version, bool) or version not in SUPPORTED_VERSIONS:
+    is_plain_int = isinstance(version, int) and not isinstance(version, bool)
+    if not is_plain_int or version not in SUPPORTED_VERSIONS:
         raise ConfigError(
             f"{source}: unsupported version {version!r}; "
             f"this build supports {', '.join(str(item) for item in sorted(SUPPORTED_VERSIONS))}"
