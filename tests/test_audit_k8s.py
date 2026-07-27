@@ -218,7 +218,10 @@ class ManifestNestingDepthTests(unittest.TestCase):
             )
             with self.assertRaises(KubernetesManifestError) as error:
                 load_kubernetes_resources(manifest)
-        self.assertIn("manifest nesting exceeds supported depth", str(error.exception))
+        # PyYAML's own parser recurses per nesting level and hits RecursionError while
+        # *parsing* this input, before yaml_loader's node-count/depth bound ever runs.
+        # yaml_loader converts that into a controlled YamlError, which this module wraps.
+        self.assertIn("nesting too deep for the YAML parser", str(error.exception))
 
     def test_block_nesting_is_rejected_instead_of_overflowing_the_stack(self) -> None:
         lines = ["apiVersion: v1", "kind: ConfigMap", "metadata:", "  name: y", "data:"]
@@ -229,7 +232,8 @@ class ManifestNestingDepthTests(unittest.TestCase):
             manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
             with self.assertRaises(KubernetesManifestError) as error:
                 load_kubernetes_resources(manifest)
-        self.assertIn("manifest nesting exceeds supported depth", str(error.exception))
+        # Same RecursionError-during-parse path as the inline flow case above.
+        self.assertIn("nesting too deep for the YAML parser", str(error.exception))
 
     @staticmethod
     def _nested_json_manifest(depth: int) -> str:
@@ -242,16 +246,18 @@ class ManifestNestingDepthTests(unittest.TestCase):
         return '{"kind": "Deployment", "metadata": {"name": "z"}, "spec": ' + nested + "}"
 
     def test_json_nesting_past_the_supported_depth_is_rejected(self) -> None:
-        # Just past MAX_MANIFEST_DEPTH: shallow enough that `json.loads` succeeds on
-        # every supported interpreter, so this deterministically exercises the tool's
-        # own depth guard rather than CPython's stack limit.
+        # Just past MAX_MANIFEST_DEPTH: shallow enough that `yaml.safe_load` (JSON is
+        # valid YAML, so JSON manifests go through the same loader as YAML ones) parses
+        # it successfully on every supported interpreter, so this deterministically
+        # exercises the shared loader's node-walking depth bound (MAX_YAML_DEPTH, which
+        # is numerically equal to MAX_MANIFEST_DEPTH) rather than CPython's stack limit.
         document = self._nested_json_manifest(MAX_MANIFEST_DEPTH + 50)
         with tempfile.TemporaryDirectory() as tmp:
             manifest = Path(tmp) / "deep.json"
             manifest.write_text(document, encoding="utf-8")
             with self.assertRaises(KubernetesManifestError) as load_error:
                 load_kubernetes_resources(manifest)
-        self.assertIn("manifest nesting exceeds supported depth", str(load_error.exception))
+        self.assertIn("nesting exceeds the supported depth of 100", str(load_error.exception))
 
     def test_pathological_json_nesting_never_escapes_as_a_recursion_error(self) -> None:
         # Deep enough that `json.loads` may hit its own recursion limit first. Which
@@ -272,6 +278,46 @@ class ManifestNestingDepthTests(unittest.TestCase):
         resources = load_kubernetes_resources(sample)
         self.assertTrue(resources)
         self.assertTrue(any(resource.kind == "Ingress" for resource in resources))
+
+
+class SharedYamlLoaderTests(unittest.TestCase):
+    """Manifests must go through the shared bounded loader, not a private parser."""
+
+    def test_kubernetes_module_keeps_no_private_yaml_parser(self) -> None:
+        from reachability_advisor import kubernetes as k8s
+
+        for name in ("_parse_yaml_document", "_parse_yaml_block", "_parse_yaml_mapping",
+                     "_parse_yaml_list", "_yaml_lines"):
+            self.assertFalse(
+                hasattr(k8s, name),
+                f"kubernetes.{name} still exists; manifests must use yaml_loader",
+            )
+
+    def test_anchor_aliases_are_supported_now(self) -> None:
+        # The hand-rolled parser silently mis-parsed anchors: `selector: &sel` followed by
+        # an indented block was read as the scalar string "&sel", and the nested
+        # `app: payments-api` / `ports: []` lines were silently dropped rather than
+        # attached anywhere. Assert the resolved structure, not just `.kind`, so this
+        # test actually fails against that bug instead of passing either way.
+        # Anchors are scoped to a single YAML document, so the alias must be used in the
+        # same document as the anchor -- the realistic case is reusing one label mapping
+        # for both the selector and a second field within one manifest.
+        text = (
+            "apiVersion: v1\nkind: Service\nmetadata:\n  name: a\n"
+            "spec:\n  selector: &sel\n    app: payments-api\n"
+            "  altSelector: *sel\n"
+            "  ports: []\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "svc.yaml"
+            manifest.write_text(text, encoding="utf-8")
+            resources = load_kubernetes_resources(manifest)
+        self.assertEqual(resources[0].kind, "Service")
+        self.assertEqual(resources[0].values["spec"]["selector"], {"app": "payments-api"})
+        self.assertEqual(resources[0].values["spec"]["ports"], [])
+        # The alias must resolve to the same mapping the anchor captured, proving aliases
+        # -- not just anchors -- are handled correctly.
+        self.assertEqual(resources[0].values["spec"]["altSelector"], {"app": "payments-api"})
 
 
 if __name__ == "__main__":

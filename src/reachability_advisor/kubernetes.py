@@ -20,6 +20,7 @@ from .iam_capabilities import dedupe_iam_capabilities
 from .input_limits import InputSizeError, read_text_limited
 from .models import Artifact, Confidence, ContextEvidence
 from .terraform import max_confidence, max_criticality, max_exposure, max_privilege
+from .yaml_loader import YamlError, load_yaml_documents
 
 
 class KubernetesManifestError(ValueError):
@@ -92,8 +93,10 @@ COMPUTE_RESOURCES = {"pods", "deployments", "statefulsets", "daemonsets", "repli
 NETWORK_RESOURCES = {"services", "ingresses", "ingressclasses", "networkpolicies"}
 IAM_RESOURCES = {"roles", "rolebindings", "clusterroles", "clusterrolebindings", "serviceaccounts"}
 # Rendered manifests are shallow in practice (the deepest sample in this repo is 10 levels).
-# The cap keeps the recursive descent parser and the recursive document walkers inside the
-# interpreter stack for hostile input instead of raising RecursionError.
+# Manifest text is parsed through the shared bounded YAML loader, which enforces its own
+# MAX_YAML_DEPTH; this cap is a second, independent bound on the parsed structure that
+# expresses what this tool is willing to model, and keeps the recursive document walkers
+# (e.g. _collect_key_values) inside the interpreter stack for hostile input.
 MAX_MANIFEST_DEPTH = 100
 POD_SELECTOR_KEYS = {"matchLabels", "matchExpressions"}
 POD_SELECTOR_OPERATORS = {"In", "NotIn", "Exists", "DoesNotExist"}
@@ -126,7 +129,7 @@ def load_kubernetes_resources(path: str | Path) -> list[KubernetesResource]:
         raise KubernetesManifestError(f"{manifest_path}: read failed: {exc}") from exc
     try:
         documents = _parse_manifest_documents(text, manifest_path)
-    except (json.JSONDecodeError, ValueError, RecursionError) as exc:
+    except (ValueError, RecursionError) as exc:
         raise KubernetesManifestError(f"{manifest_path}: invalid manifest: {exc}") from exc
     resources: list[KubernetesResource] = []
     for index, document in enumerate(documents):
@@ -173,16 +176,26 @@ def _manifest_files(paths: Iterable[str | Path]) -> list[Path]:
 
 
 def _parse_manifest_documents(text: str, path: Path) -> list[Any]:
-    if path.suffix.lower() == ".json":
-        data = json.loads(text)
-        _ensure_supported_depth(data)
-        return _json_manifest_documents(data)
-    documents: list[Any] = []
-    for raw in text.split("\n---"):
-        document = _parse_yaml_document(raw)
-        if document:
-            documents.extend(_json_manifest_documents(document))
-    return documents
+    """Parse a multi-document manifest through the shared bounded loader.
+
+    JSON manifests are valid YAML, so both suffixes go through the same call: there is
+    exactly one parsing path for untrusted manifest text, never a second one for JSON.
+
+    The depth and node bounds live in ``yaml_loader`` (``MAX_YAML_DEPTH``, guarding the
+    parser itself). ``MAX_MANIFEST_DEPTH`` is checked separately, against the already-parsed
+    structure, because it expresses what *this tool* is willing to model -- a narrower,
+    independent bound that must keep holding even if the shared loader's own limit ever
+    changes for other callers.
+    """
+    try:
+        documents = load_yaml_documents(text, f"{path}: manifest")
+    except YamlError as exc:
+        raise KubernetesManifestError(str(exc)) from None
+    parsed: list[Any] = []
+    for document in documents:
+        _ensure_supported_depth(document)
+        parsed.extend(_json_manifest_documents(document))
+    return parsed
 
 
 def _json_manifest_documents(data: Any) -> list[Any]:
@@ -193,143 +206,15 @@ def _json_manifest_documents(data: Any) -> list[Any]:
     return [data]
 
 
-def _parse_yaml_document(raw: str) -> dict[str, Any]:
-    lines = _yaml_lines(raw)
-    if not lines:
-        return {}
-    parsed, _ = _parse_yaml_block(lines, 0, lines[0][0], 0)
-    return parsed if isinstance(parsed, dict) else {}
-
-
-def _yaml_lines(raw: str) -> list[tuple[int, str]]:
-    lines: list[tuple[int, str]] = []
-    for line in raw.splitlines():
-        trimmed = _strip_comment(line).rstrip()
-        if not trimmed.strip():
-            continue
-        indent = len(trimmed) - len(trimmed.lstrip(" "))
-        lines.append((indent, trimmed.strip()))
-    return lines
-
-
-def _strip_comment(line: str) -> str:
-    in_single = False
-    in_double = False
-    for index, char in enumerate(line):
-        if char == "'" and not in_double:
-            in_single = not in_single
-        elif char == '"' and not in_single:
-            in_double = not in_double
-        elif char == "#" and not in_single and not in_double:
-            return line[:index]
-    return line
-
-
-def _parse_yaml_block(lines: list[tuple[int, str]], index: int, indent: int, depth: int) -> tuple[Any, int]:
-    _check_depth(depth)
-    if index >= len(lines):
-        return {}, index
-    if lines[index][1].startswith("- "):
-        return _parse_yaml_list(lines, index, indent, depth)
-    return _parse_yaml_mapping(lines, index, indent, depth)
-
-
-def _parse_yaml_mapping(lines: list[tuple[int, str]], index: int, indent: int, depth: int) -> tuple[dict[str, Any], int]:
-    mapping: dict[str, Any] = {}
-    while index < len(lines):
-        line_indent, content = lines[index]
-        if line_indent < indent:
-            break
-        if line_indent > indent or content.startswith("- "):
-            break
-        if ":" not in content:
-            index += 1
-            continue
-        key, raw_value = content.split(":", 1)
-        key = key.strip()
-        value = raw_value.strip()
-        index += 1
-        if value:
-            mapping[key] = _parse_scalar(value, depth + 1)
-        elif index < len(lines) and lines[index][0] > line_indent:
-            child, index = _parse_yaml_block(lines, index, lines[index][0], depth + 1)
-            mapping[key] = child
-        else:
-            mapping[key] = {}
-    return mapping, index
-
-
-def _parse_yaml_list(lines: list[tuple[int, str]], index: int, indent: int, depth: int) -> tuple[list[Any], int]:
-    values: list[Any] = []
-    while index < len(lines):
-        line_indent, content = lines[index]
-        if line_indent < indent or not content.startswith("- "):
-            break
-        if line_indent > indent:
-            break
-        item_text = content[2:].strip()
-        index += 1
-        if not item_text:
-            if index < len(lines) and lines[index][0] > line_indent:
-                child, index = _parse_yaml_block(lines, index, lines[index][0], depth + 1)
-                values.append(child)
-            else:
-                values.append(None)
-            continue
-        if ":" in item_text:
-            key, raw_value = item_text.split(":", 1)
-            item: dict[str, Any] = {}
-            value = raw_value.strip()
-            if value:
-                item[key.strip()] = _parse_scalar(value, depth + 1)
-            elif index < len(lines) and lines[index][0] > line_indent:
-                child, index = _parse_yaml_block(lines, index, lines[index][0], depth + 1)
-                item[key.strip()] = child
-            else:
-                item[key.strip()] = {}
-            if index < len(lines) and lines[index][0] > line_indent:
-                continuation, index = _parse_yaml_block(lines, index, lines[index][0], depth + 1)
-                if isinstance(continuation, dict):
-                    item.update(continuation)
-            values.append(item)
-        else:
-            values.append(_parse_scalar(item_text, depth + 1))
-    return values, index
-
-
-def _parse_scalar(value: str, depth: int) -> Any:
-    _check_depth(depth)
-    value = value.strip()
-    if value in {"", "null", "Null", "NULL", "~"}:
-        return None
-    if value.lower() == "true":
-        return True
-    if value.lower() == "false":
-        return False
-    if value.startswith("[") and value.endswith("]"):
-        return [_parse_scalar(item, depth + 1) for item in _split_inline_items(value[1:-1]) if item.strip()]
-    if value.startswith("{") and value.endswith("}"):
-        result: dict[str, Any] = {}
-        for item in _split_inline_items(value[1:-1]):
-            if ":" not in item:
-                continue
-            key, raw_value = item.split(":", 1)
-            result[_strip_quotes(key.strip())] = _parse_scalar(raw_value.strip(), depth + 1)
-        return result
-    return _strip_quotes(value)
-
-
 def _check_depth(depth: int) -> None:
     if depth > MAX_MANIFEST_DEPTH:
         raise KubernetesManifestError(f"manifest nesting exceeds supported depth of {MAX_MANIFEST_DEPTH}")
 
 
 def _ensure_supported_depth(data: Any) -> None:
-    """Reject documents nested deeper than the parser and the document walkers support.
+    """Reject documents nested deeper than this tool is willing to model.
 
-    JSON manifests bypass the YAML parser, so the depth guard has to be applied to the
-    decoded structure. The walk is iterative on purpose: it must not be the thing that
-    overflows the stack.
+    The walk is iterative on purpose: it must not be the thing that overflows the stack.
     """
 
     pending: list[tuple[Any, int]] = [(data, 0)]
@@ -340,32 +225,6 @@ def _ensure_supported_depth(data: Any) -> None:
             pending.extend((child, depth + 1) for child in value.values())
         elif isinstance(value, list):
             pending.extend((child, depth + 1) for child in value)
-
-
-def _split_inline_items(value: str) -> list[str]:
-    items: list[str] = []
-    current: list[str] = []
-    in_single = False
-    in_double = False
-    for char in value:
-        if char == "'" and not in_double:
-            in_single = not in_single
-        elif char == '"' and not in_single:
-            in_double = not in_double
-        if char == "," and not in_single and not in_double:
-            items.append("".join(current).strip())
-            current = []
-        else:
-            current.append(char)
-    if current:
-        items.append("".join(current).strip())
-    return items
-
-
-def _strip_quotes(value: str) -> str:
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-        return value[1:-1]
-    return value
 
 
 def _contexts_from_resources(
