@@ -28,6 +28,14 @@ def _check_bounds(value: Any, label: str, depth: int = 0, budget: list[int] | No
     ``safe_load`` refuses to construct arbitrary Python objects, but it will happily
     expand anchors and aliases, so a small file can produce an enormous structure.
     The node budget is what stops that; the depth cap stops unbounded recursion.
+
+    This function is itself recursive, but it cannot overflow the interpreter stack: the
+    depth check is the first statement in the function body, so it raises before ever
+    recursing past ``MAX_YAML_DEPTH`` frames, regardless of how deep the input actually
+    goes. (Verified directly against Python structures built far past that depth, bypassing
+    the parser entirely.) The real hazard is ``yaml.safe_load`` itself, which recurses while
+    *parsing* -- that can raise a raw ``RecursionError`` on pure structural nesting before
+    this function ever runs; callers must guard the parse call, not this one.
     """
     if budget is None:
         budget = [MAX_YAML_NODES]
@@ -51,6 +59,12 @@ def _check_bounds(value: Any, label: str, depth: int = 0, budget: list[int] | No
 def load_yaml_text(text: str, label: str) -> Any:
     try:
         parsed = yaml.safe_load(text)
+    except RecursionError as exc:
+        # PyYAML's scanner/parser/composer recurse per nesting level, so pure structural
+        # nesting -- no anchors or aliases needed -- can exhaust the stack while parsing,
+        # well before the result ever reaches `_check_bounds`. Surface it as a normal
+        # loader error instead of an uncaught crash.
+        raise YamlError(f"{label}: nesting too deep for the YAML parser") from exc
     except yaml.YAMLError as exc:
         raise YamlError(f"{label}: invalid YAML: {exc}") from None
     _check_bounds(parsed, label)
@@ -60,6 +74,9 @@ def load_yaml_text(text: str, label: str) -> Any:
 def load_yaml_documents(text: str, label: str) -> list[Any]:
     try:
         documents = list(yaml.safe_load_all(text))
+    except RecursionError as exc:
+        # See load_yaml_text: safe_load_all's parser recurses the same way while iterating.
+        raise YamlError(f"{label}: nesting too deep for the YAML parser") from exc
     except yaml.YAMLError as exc:
         raise YamlError(f"{label}: invalid YAML: {exc}") from None
     for document in documents:

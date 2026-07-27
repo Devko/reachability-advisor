@@ -5,7 +5,27 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from reachability_advisor.yaml_loader import MAX_YAML_DEPTH, YamlError, load_yaml_mapping
+from reachability_advisor.yaml_loader import (
+    MAX_YAML_DEPTH,
+    YamlError,
+    load_yaml_documents,
+    load_yaml_mapping,
+    load_yaml_text,
+)
+
+# yaml.safe_load's own recursive-descent parser raises a raw RecursionError on documents
+# this deep, before `_check_bounds` (which only runs on the returned value) ever sees them.
+# 50,000 is well past where CPython's default recursion limit gives out for both flow and
+# block styles; keep it well above that line rather than tuned to the exact threshold.
+RECURSION_DEPTH = 50_000
+
+
+def _deep_flow_sequence(depth: int = RECURSION_DEPTH) -> str:
+    return "root: " + "[" * depth + "1" + "]" * depth
+
+
+def _deep_block_mapping(depth: int = RECURSION_DEPTH) -> str:
+    return "".join(f"{'  ' * i}k:\n" for i in range(depth)) + f"{'  ' * depth}leaf: 1\n"
 
 
 def _write(text: str) -> Path:
@@ -55,6 +75,46 @@ class LoadYamlMappingTests(unittest.TestCase):
         path = _write("value: !!python/object/apply:os.system ['echo pwned']\n")
         with self.assertRaises(YamlError):
             load_yaml_mapping(path, "config")
+
+
+class DeeplyNestedYamlTests(unittest.TestCase):
+    """`yaml.safe_load` recurses while parsing, so pure structural nesting can raise a raw
+    `RecursionError` before `_check_bounds` ever runs -- `_check_bounds` only inspects the
+    value `safe_load` returns, not the document text. These regression tests cover both the
+    single-document and multi-document loaders, and both flow-style and block-style nesting.
+    """
+
+    def test_load_yaml_text_rejects_deep_flow_nesting_without_recursion_error(self) -> None:
+        with self.assertRaises(YamlError) as caught:
+            load_yaml_text(_deep_flow_sequence(), "config")
+        self.assertIn("nesting", str(caught.exception))
+        self.assertIsInstance(caught.exception.__cause__, RecursionError)
+
+    def test_load_yaml_text_rejects_deep_block_nesting_without_recursion_error(self) -> None:
+        with self.assertRaises(YamlError) as caught:
+            load_yaml_text(_deep_block_mapping(), "config")
+        self.assertIn("nesting", str(caught.exception))
+        self.assertIsInstance(caught.exception.__cause__, RecursionError)
+
+    def test_load_yaml_documents_rejects_deep_flow_nesting_without_recursion_error(self) -> None:
+        with self.assertRaises(YamlError) as caught:
+            load_yaml_documents(_deep_flow_sequence(), "config")
+        self.assertIn("nesting", str(caught.exception))
+        self.assertIsInstance(caught.exception.__cause__, RecursionError)
+
+    def test_load_yaml_documents_rejects_deep_block_nesting_without_recursion_error(self) -> None:
+        with self.assertRaises(YamlError) as caught:
+            load_yaml_documents(_deep_block_mapping(), "config")
+        self.assertIn("nesting", str(caught.exception))
+        self.assertIsInstance(caught.exception.__cause__, RecursionError)
+
+    def test_load_yaml_mapping_rejects_deep_flow_nesting_through_a_file(self) -> None:
+        # End-to-end through the file-reading entry point malicious configs and manifests
+        # actually go through, not just the in-memory parse helpers.
+        path = _write(_deep_flow_sequence())
+        with self.assertRaises(YamlError) as caught:
+            load_yaml_mapping(path, "config")
+        self.assertIn("nesting", str(caught.exception))
 
 
 if __name__ == "__main__":
