@@ -344,6 +344,64 @@ class PathValuedFieldBoundaryTests(unittest.TestCase):
         loaded = load_config(root / CONFIG_FILENAME)
         self.assertEqual(loaded.config.artifacts["api"].sbom, "sboms/api.cdx.json")
 
+    def test_rejects_an_absolute_output_dir(self) -> None:
+        outer = Path(tempfile.mkdtemp())
+        root = outer / "repo"
+        root.mkdir()
+        abs_dir = outer / "abs-escape"
+        (root / CONFIG_FILENAME).write_text(
+            f"version: 1\nartifacts:\n  api:\n    sbom: sboms/api.cdx.json\n"
+            f"output:\n  dir: {abs_dir}\n",
+            encoding="utf-8",
+        )
+        with self.assertRaises(ConfigError) as error:
+            load_config(root / CONFIG_FILENAME)
+        message = str(error.exception)
+        self.assertIn("output.dir", message)
+        self.assertIn("absolute path", message)
+        self.assertIn("relative to the repository", message)
+        # The error must not leak the actual absolute path to prevent disclosure
+        self.assertNotIn(str(abs_dir.resolve()), message)
+
+    def test_relative_output_dir_still_works(self) -> None:
+        root = _tree({
+            CONFIG_FILENAME: (
+                "version: 1\n"
+                "artifacts:\n  api:\n    sbom: sboms/api.cdx.json\n"
+                "output:\n  dir: my-outputs\n"
+            ),
+        })
+        loaded = load_config(root / CONFIG_FILENAME)
+        self.assertEqual(loaded.config.output.dir, "my-outputs")
+
+    def test_relative_output_dir_escaping_via_dotdot_is_still_rejected(self) -> None:
+        outer = Path(tempfile.mkdtemp())
+        root = outer / "repo"
+        root.mkdir()
+        (root / CONFIG_FILENAME).write_text(
+            "version: 1\nartifacts:\n  api:\n    sbom: sboms/api.cdx.json\n"
+            "output:\n  dir: ../../elsewhere\n",
+            encoding="utf-8",
+        )
+        with self.assertRaises(ConfigError) as error:
+            load_config(root / CONFIG_FILENAME)
+        message = str(error.exception)
+        self.assertIn("output.dir", message)
+        self.assertIn("outside the repository", message)
+
+    def test_absolute_read_paths_are_still_allowed(self) -> None:
+        outer = Path(tempfile.mkdtemp())
+        elsewhere = outer / "elsewhere" / "sbom.json"
+        elsewhere.parent.mkdir(parents=True)
+        elsewhere.write_text("{}", encoding="utf-8")
+        root = outer / "repo"
+        root.mkdir()
+        (root / CONFIG_FILENAME).write_text(
+            f"version: 1\nartifacts:\n  api:\n    sbom: {elsewhere}\n", encoding="utf-8"
+        )
+        loaded = load_config(root / CONFIG_FILENAME)
+        self.assertEqual(loaded.config.artifacts["api"].sbom, str(elsewhere))
+
 
 class YamlErrorDoesNotEchoFileContentTests(unittest.TestCase):
     """A YAML parse failure must report where and what went wrong, never the surrounding

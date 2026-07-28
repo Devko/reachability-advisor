@@ -266,22 +266,33 @@ def _check_declared_path_boundaries(config: ReachabilityConfig, config_path: Pat
     disclose a file this repository does not own -- for example in a CI log a pull request
     author can read.
 
-    Deliberately scoped to *relative* paths only: an absolute path here has exactly the
-    reach an equivalent CLI flag already has and has never been restricted (`--sbom
-    /anywhere`, `--kubernetes-manifest /anywhere`, ...) -- these config fields are direct
-    stand-ins for those flags, not a new, more powerful primitive the way `extends` is
-    (which pulls in and merges a whole second config document, offline, from a location
-    the repository does not otherwise reference at all). Boundary-checking relative
-    escapes closes the concrete `../` disclosure path without changing what an absolute
-    path can already do today, or requiring every legitimate absolute-path config in use
-    today to be rewritten.
+    Read paths (artifacts, evidence, iac) scoped to *relative* paths only: an absolute
+    path there has exactly the reach an equivalent CLI flag already has and has never been
+    restricted (`--sbom /anywhere`, `--kubernetes-manifest /anywhere`, ...) -- these config
+    fields are direct stand-ins for those flags, not a new, more powerful primitive the way
+    `extends` is (which pulls in and merges a whole second config document, offline, from a
+    location the repository does not otherwise reference at all).
+
+    Write paths (output.dir) are different: the distinction between "CLI flag" and "config
+    content" matters here. A CLI flag is supplied by whoever invokes the tool (trusted),
+    whereas output.dir is supplied by repository content that a pull request can edit. So
+    absolute output.dir must be rejected to prevent PR-controlled config from writing
+    outside the repository.
     """
     boundary = _repo_boundary(config_path)
     base = config_path.parent.resolve()
 
-    def check(value: str, label: str) -> None:
+    def check(
+        value: str, label: str, allow_absolute: bool = True
+    ) -> None:
         candidate = Path(value)
         if candidate.is_absolute():
+            if not allow_absolute:
+                raise ConfigError(
+                    f"{config_path}: {label} is an absolute path. "
+                    "Config-controlled write paths must be relative to the repository; "
+                    "use a relative path instead."
+                )
             return
         resolved = (base / candidate).resolve()
         if not resolved.is_relative_to(boundary):
@@ -303,7 +314,7 @@ def _check_declared_path_boundaries(config: ReachabilityConfig, config_path: Pat
             check(value, f"evidence.{key}")
     for key, value in config.iac.items():
         check(value, f"iac.{key}")
-    check(config.output.dir, "output.dir")
+    check(config.output.dir, "output.dir", allow_absolute=False)
 
 
 def load_config(path: str | Path | None, start: Path | None = None) -> LoadedConfig:
