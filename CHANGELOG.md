@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+### Notable: first runtime dependency
+
+- **PyYAML is now a runtime dependency** — the first this project has had. It is used exclusively through `yaml.safe_load`, which does not construct arbitrary Python objects, and every YAML read is additionally bounded by a document size limit, a nesting-depth cap, a node budget that stops anchor/alias expansion, and a `RecursionError` guard. A security tool acquiring a dependency is worth stating plainly rather than leaving in a diff. It paid for deleting a hand-rolled YAML parser in `kubernetes.py` in which an audit had found a stack overflow, and for correctly resolving anchors and aliases that the old parser silently mis-parsed.
+
+### Added
+
+- `.reachability.yml` configuration, so options are declared once and shared between local runs and CI instead of being retyped as flags. Values resolve through layers: built-in defaults, an organization baseline via `extends:`, the repository file, then CLI flags. `extends:` resolves only from a relative path or an installed package, never over the network.
+- `reachability-advisor init` — inspects the repository and writes a `.reachability.yml` declaring what is actually present, marking everything else with the exact command that produces it. Non-interactive, so a platform team can script it across many repositories. It never rewrites an existing config; `--refresh` writes `.reachability.detected.yml` alongside for manual merge.
+- `reachability-advisor doctor` — reports what evidence is missing and the command that produces it, exits non-zero until the gate is satisfiable, and emits the same data as JSON for tracking onboarding across repositories.
+- `reachability-advisor config explain` / `config validate` — prints each resolved value with the layer that set it, so "why did this gate fire" is answerable without archaeology.
+- `compare --config`, and a `config` input on the composite GitHub Action.
+
+### Changed
+
+- Onboarding is three commands — `init`, `doctor`, `scan` — replacing the previous flow of running three `*-plan` commands, copying their printed output, and assembling roughly twenty flags by hand.
+- `scan` accepts a configuration file, so `--sbom` and `--vuln-in` are no longer required as flags. With no configuration file present, behaviour is unchanged.
+- Kubernetes manifests are parsed by the shared bounded loader instead of a hand-rolled parser. Manifests using YAML anchors and aliases now resolve correctly; they were previously mis-parsed without error.
+
+### Fixed
+
+- A malformed configuration now stops the run instead of being coerced into a weaker one. Unknown keys are rejected at every level, an out-of-range gate threshold is refused, and a configuration file that is not a readable regular file is an error rather than being silently treated as absent.
+- Terraform plan loading now fails closed on deeply nested input instead of raising an uncaught `RecursionError`, matching the other input loaders.
+- `scan` fails closed with exit code 2 on an unreadable input file instead of crashing with a traceback.
+
 ## 1.2.0 - 2026-05-15
 
 - v1.2: replaced per-finding attack-path cards with a unified attack graph that starts from a shared Internet/attacker node and branches into route, workload, and finding nodes.
