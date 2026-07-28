@@ -810,6 +810,41 @@ def run_init_policy(args: argparse.Namespace) -> int:
     return 0
 
 
+# `gate.thresholds` keys are validated by config_schema.py as *any* string (see its own
+# tests, which deliberately use placeholder names like "min_x" to test type/range checking
+# independent of key semantics) -- config_schema.py has no knowledge of argparse or of
+# which names are real `--min-*` flags, by design, so it cannot enforce this set itself.
+# That means the enforcement that a threshold key actually corresponds to something scan
+# will read belongs here, at the one place that *does* know the real flag names: a
+# threshold key outside this set is rejected below rather than silently doing nothing,
+# which is exactly the "validated but inert" failure this dict exists to prevent for a
+# typo'd key (e.g. `min_artifcat_match_coverage`) the same way an unknown top-level key
+# already is.
+_THRESHOLD_ATTRS = frozenset({
+    "min_artifact_match_coverage",
+    "min_strong_artifact_identity_coverage",
+    "min_source_rule_coverage",
+    "min_external_evidence_usable_ratio",
+    "min_critical_external_source_coverage",
+    "min_critical_query_family_coverage",
+    "min_critical_proven_query_family_coverage",
+    "min_critical_security_profile_coverage",
+})
+
+# output.formats -> (scan's dest attribute, filename under output.dir). Filenames follow
+# the `reachability-*` convention action.yml already established for its own --output-dir,
+# so a config-driven scan and the GitHub Action produce consistently-named files.
+_OUTPUT_FORMAT_TARGETS: dict[str, tuple[str, str]] = {
+    "json": ("out", "reachability-findings.json"),
+    "sarif": ("sarif_out", "reachability.sarif"),
+    "markdown": ("markdown_out", "reachability-summary.md"),
+    "html": ("html_out", "reachability-graph.html"),
+    "diagnostics": ("diagnostics_out", "reachability-diagnostics.json"),
+    "annotations": ("annotations_out", "reachability-annotations.txt"),
+    "baseline": ("baseline_out", "reachability-baseline.json"),
+}
+
+
 def apply_config_defaults(args: argparse.Namespace, loaded: LoadedConfig) -> argparse.Namespace:
     """Fill unset `scan` arguments from configuration. An explicitly passed flag always wins.
 
@@ -817,13 +852,16 @@ def apply_config_defaults(args: argparse.Namespace, loaded: LoadedConfig) -> arg
     was found -- `load_config` returns the schema's built-in defaults in that case, with
     `loaded.path` left `None` to signal that nothing real was loaded. Most of those built-in
     defaults (empty artifacts, empty evidence, no iac paths) are harmless no-ops here either
-    way. `gate.fail_on` is the one exception: it defaults to `"high"` in the schema -- a
-    reasonable default *for a config file that exists* -- but before this feature, omitting
-    `--fail-on-tier` (and `--policy`) meant no gate at all. Filling it unconditionally would
-    silently turn every existing no-config invocation into an enforced high-tier gate, which
-    is the exact silent-strengthening-by-surprise this project treats as a bug. So it is only
-    filled when a real config file was found; every other field stays safe to fill either way
-    because its "no file" value already matches the pre-config-support default.
+    way. `gate.fail_on` and `output.*` are the exceptions: `gate.fail_on` defaults to
+    `"high"` in the schema and `output.dir`/`output.formats` default to `"outputs"` and
+    `["json", "markdown"]` -- reasonable defaults *for a config file that exists*, but before
+    this feature, omitting `--fail-on-tier` (and `--policy`) meant no gate at all, and
+    omitting every `--*-out` flag meant no file was ever written. Filling either
+    unconditionally would silently turn every existing no-config invocation into an
+    enforced gate, or into one that starts writing files to disk it never wrote before --
+    both exactly the silent-strengthening-by-surprise this project treats as a bug. So both
+    are only filled when a real config file was found; every other field stays safe to fill
+    either way because its "no file" value already matches the pre-config-support default.
     """
     explicit: set[str] = getattr(args, "_explicit", set())
     config = loaded.config
@@ -837,6 +875,9 @@ def apply_config_defaults(args: argparse.Namespace, loaded: LoadedConfig) -> arg
 
     if loaded.path is not None:
         fill("fail_on_tier", config.gate.fail_on)
+        for fmt in config.output.formats:
+            attribute, filename = _OUTPUT_FORMAT_TARGETS[fmt]
+            fill(attribute, str(Path(config.output.dir) / filename))
     fill("analysis_profile", config.gate.profile)
     fill("sbom", [item.sbom for item in config.artifacts.values() if item.sbom])
     fill(
@@ -847,16 +888,53 @@ def apply_config_defaults(args: argparse.Namespace, loaded: LoadedConfig) -> arg
         "artifact_alias",
         [f"{name}={item.image}" for name, item in config.artifacts.items() if item.image],
     )
+    fill(
+        "artifact_manifest",
+        [item.manifest for item in config.artifacts.values() if item.manifest],
+    )
     fill("vulns", list(config.evidence.get("vulnerabilities", ())))
     fill("sast_in", list(config.evidence.get("sast", ())))
     fill("dast_in", list(config.evidence.get("dast", ())))
     fill("cspm_in", list(config.evidence.get("cspm", ())))
+    fill("source_evidence_in", list(config.evidence.get("source", ())))
     fill("terraform_plan", config.iac.get("terraform"))
     fill("terraform_source", config.iac.get("terraform_source"))
     fill(
         "kubernetes_manifest",
         [config.iac["kubernetes"]] if config.iac.get("kubernetes") else [],
     )
+
+    unknown_thresholds = sorted(set(config.gate.thresholds) - _THRESHOLD_ATTRS)
+    if unknown_thresholds:
+        raise UserFacingError(
+            f"gate.thresholds: unknown key(s) {', '.join(repr(key) for key in unknown_thresholds)}; "
+            f"recognized keys are {', '.join(sorted(_THRESHOLD_ATTRS))}. A threshold key that does "
+            "not match a real --min-* flag would otherwise validate but never apply.",
+            2,
+        )
+    for attribute in _THRESHOLD_ATTRS:
+        fill(attribute, config.gate.thresholds.get(attribute))
+    return args
+
+
+def apply_compare_config_defaults(args: argparse.Namespace, loaded: LoadedConfig) -> argparse.Namespace:
+    """Fill `compare --fail-on-new-tier` from `gate.fail_on_new` when not explicitly passed.
+
+    Unlike `gate.fail_on` (consumed by `scan`, above), `gate.fail_on_new`'s schema default
+    is `None`, not a real tier -- so, unlike `apply_config_defaults`'s guard on
+    `loaded.path`, no such guard is needed here: a config file that does not set
+    `gate.fail_on_new` at all leaves this value `None` regardless of whether a file was
+    found, so filling naturally no-ops and an existing no-config `compare` invocation is
+    unaffected either way.
+    """
+    explicit: set[str] = getattr(args, "_explicit", set())
+    fail_on_new = loaded.config.gate.fail_on_new
+    if (
+        fail_on_new is not None
+        and "fail_on_new_tier" not in explicit
+        and not getattr(args, "fail_on_new_tier", None)
+    ):
+        args.fail_on_new_tier = fail_on_new
     return args
 
 
@@ -1070,6 +1148,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "explain":
             return run_explain(args)
         if args.command == "compare":
+            loaded = load_config(getattr(args, "config", None))
+            args = apply_compare_config_defaults(args, loaded)
             return run_compare(args)
         if args.command == "evidence-profile":
             return run_evidence_profile(args)

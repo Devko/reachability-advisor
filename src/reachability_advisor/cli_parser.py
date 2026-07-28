@@ -22,7 +22,18 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--sbom", action="append", default=[], help="CycloneDX JSON SBOM for one deployable artifact. Repeat for multiple artifacts. Not required on the command line if artifacts.<name>.sbom is set in .reachability.yml.")
     scan.add_argument("--vuln-in", dest="vulns", action="append", default=[], help="Vulnerability input: local JSON, Grype JSON, or OSV-Scanner-style JSON. Repeatable. Not required on the command line if evidence.vulnerabilities is set in .reachability.yml.")
     scan.add_argument("--source-root", action="append", default=[], help="Source mapping in artifact=path form, for example payments-api=src/payments. Repeatable.")
-    scan.add_argument("--context", help="Context JSON keyed by artifact name. Use it for owner, environment, exposure, privilege, or manual evidence overrides.")
+    # "--con" is registered as an explicit alias, not left to argparse's abbreviation
+    # resolution: before --config existed, "--con" unambiguously abbreviated --context
+    # (the only "--con*"-prefixed option), and existing scripts may rely on that. Adding
+    # --config made "--con" ambiguous between --context and --config under abbreviation
+    # resolution alone (argparse would now reject it with "ambiguous option"). Registering
+    # it as a literal option string on --context restores the old behaviour: argparse
+    # checks for an exact option-string match *before* attempting prefix/abbreviation
+    # resolution (see _resolve_option_dest's docstring), so "--con" now resolves to
+    # --context directly and is never even considered a prefix of --config. This is also
+    # more future-proof than relying on abbreviation staying unambiguous: it stays
+    # unambiguous even if another "--con*" flag is ever added later.
+    scan.add_argument("--context", "--con", help="Context JSON keyed by artifact name. Use it for owner, environment, exposure, privilege, or manual evidence overrides.")
     scan.add_argument("--terraform-plan", help="Rendered Terraform plan JSON from `terraform show -json`. Use this for release-grade Terraform deployment evidence.")
     scan.add_argument("--terraform-source", help="Terraform .tf source directory for conservative advisory fallback when no rendered plan is available.")
     scan.add_argument("--terraform-coverage-out", help="Write Terraform resource accounting and visibility-gap report JSON.")
@@ -117,6 +128,11 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--markdown-out")
     compare.add_argument("--only-new-or-worsened", action="store_true", help="Emit only new and worsened findings in JSON and Markdown output.")
     compare.add_argument("--fail-on-new-tier", choices=[tier.value for tier in Tier])
+    compare.add_argument(
+        "--config",
+        help=f"Path to {CONFIG_FILENAME}. Fills --fail-on-new-tier from gate.fail_on_new "
+        "when not passed on the command line. Defaults to the nearest one up to the git root.",
+    )
 
     readiness = sub.add_parser("evidence-profile", help="Check whether existing scan outputs are complete enough for a release gate.")
     readiness.add_argument("--mapping", required=True, help="Mapping report JSON from --mapping-out.")

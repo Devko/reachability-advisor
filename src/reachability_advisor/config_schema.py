@@ -20,7 +20,16 @@ THRESHOLD_MAX = 1.0
 
 TOP_LEVEL_KEYS = frozenset({"version", "extends", "artifacts", "evidence", "iac", "gate", "output"})
 ARTIFACT_KEYS = frozenset({"sbom", "source", "image", "manifest"})
-EVIDENCE_KEYS = frozenset({"vulnerabilities", "sast", "dast", "cspm", "posture", "source"})
+# "posture" was accepted here but had no consumer anywhere (no CLI flag imports "posture"
+# evidence -- native cloud-posture records are always computed from rendered Terraform/
+# Kubernetes evidence, never read from a declared file) and no design intent ever
+# documented one (see docs/superpowers/specs/2026-07-27-config-and-onboarding-design.md's
+# schema example, which lists vulnerabilities/sast/dast/cspm only). A validated-but-inert
+# key is worse than not offering it, so it is removed rather than wired to nothing; a typo'd
+# `evidence.posture` now fails loudly with "unknown key" instead of silently validating and
+# doing nothing. "source" stays: it maps 1:1 onto `--source-evidence-in`, the same way
+# "sast"/"dast"/"cspm" map onto their own `--*-in` flags (see apply_config_defaults).
+EVIDENCE_KEYS = frozenset({"vulnerabilities", "sast", "dast", "cspm", "source"})
 IAC_KEYS = frozenset({"terraform", "terraform_source", "kubernetes"})
 GATE_KEYS = frozenset({"profile", "fail_on", "fail_on_new", "thresholds"})
 OUTPUT_KEYS = frozenset({"dir", "formats"})
