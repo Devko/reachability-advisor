@@ -1,10 +1,11 @@
 # tests/test_config_cli.py
 from __future__ import annotations
 
+import argparse
 import io
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from reachability_advisor.cli import main
@@ -80,6 +81,198 @@ class ScanUsesConfigTests(unittest.TestCase):
         from reachability_advisor.cli_parser import build_parser
 
         self.assertNotIn("fail_on_tier", explicit_dests(build_parser(), ["scan", "--no-table"]))
+
+
+class AbbreviatedFlagDetectionTests(unittest.TestCase):
+    """argparse accepts unambiguous abbreviated long options by default
+    (`allow_abbrev=True`, which this project deliberately does not disable -- that would
+    change user-facing CLI behaviour and could break scripts that rely on abbreviations).
+    `explicit_dests` must recognise every form argparse itself parses, or an abbreviated
+    gate flag on the command line is silently overridden by configuration -- the same
+    class of silent weakening this project refuses everywhere else.
+    """
+
+    def test_exact_long_form_is_detected_with_space_and_with_equals(self) -> None:
+        from reachability_advisor.cli import explicit_dests
+        from reachability_advisor.cli_parser import build_parser
+
+        parser = build_parser()
+        for argv in (
+            ["scan", "--fail-on-tier", "urgent"],
+            ["scan", "--fail-on-tier=urgent"],
+        ):
+            with self.subTest(argv=argv):
+                self.assertIn("fail_on_tier", explicit_dests(parser, argv))
+
+    def test_unambiguous_abbreviation_is_detected_with_space_and_with_equals(self) -> None:
+        # --fail-on-ti is a prefix of exactly one scan option, --fail-on-tier (the others
+        # sharing the --fail-on- prefix are --fail-on-mapping-warnings and
+        # --fail-on-readiness-warnings, neither of which --fail-on-ti is a prefix of).
+        from reachability_advisor.cli import explicit_dests
+        from reachability_advisor.cli_parser import build_parser
+
+        parser = build_parser()
+        for argv in (
+            ["scan", "--fail-on-ti", "urgent"],
+            ["scan", "--fail-on-ti=urgent"],
+        ):
+            with self.subTest(argv=argv):
+                self.assertIn("fail_on_tier", explicit_dests(parser, argv))
+
+    def test_ambiguous_prefix_is_not_reported_and_argparse_itself_rejects_it(self) -> None:
+        # --fail-on- is a prefix of --fail-on-mapping-warnings, --fail-on-readiness-
+        # warnings, and --fail-on-tier all at once, so argparse itself refuses to guess
+        # and exits 2 rather than parsing it as any one of them. explicit_dests must not
+        # guess either: report no match, exactly as if the flag were never passed.
+        from reachability_advisor.cli import explicit_dests
+        from reachability_advisor.cli_parser import build_parser
+
+        argv = ["scan", "--fail-on-", "urgent"]
+
+        parser = build_parser()
+        self.assertNotIn("fail_on_tier", explicit_dests(parser, argv))
+        self.assertEqual(explicit_dests(parser, argv) & {
+            "fail_on_mapping_warnings",
+            "fail_on_readiness_warnings",
+            "fail_on_tier",
+        }, set())
+
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as ctx:
+            build_parser().parse_args(argv)
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_flag_not_passed_at_all_is_not_reported(self) -> None:
+        from reachability_advisor.cli import explicit_dests
+        from reachability_advisor.cli_parser import build_parser
+
+        parser = build_parser()
+        self.assertNotIn("fail_on_tier", explicit_dests(parser, ["scan", "--no-table"]))
+
+    def test_repeated_flag_is_reported_once(self) -> None:
+        from reachability_advisor.cli import explicit_dests
+        from reachability_advisor.cli_parser import build_parser
+
+        parser = build_parser()
+        argv = ["scan", "--fail-on-tier", "urgent", "--fail-on-tier", "high"]
+        self.assertEqual(explicit_dests(parser, argv), {"fail_on_tier"})
+
+    def test_subcommand_flag_is_detected(self) -> None:
+        # `--config` on `config explain` is an action of the nested `explain` subparser,
+        # two levels below the top-level parser (top -> config -> explain). A previous
+        # defect here inspected only the top-level parser's actions and found nothing for
+        # any subcommand flag at all.
+        from reachability_advisor.cli import explicit_dests
+        from reachability_advisor.cli_parser import build_parser
+
+        parser = build_parser()
+        argv = ["config", "explain", "--config", "reachability.yml"]
+        self.assertIn("config", explicit_dests(parser, argv))
+
+    def test_short_options_match_exactly(self) -> None:
+        # The production parser defines no short options besides the auto-added -h/
+        # --help, so this exercises the general mechanism directly against a small
+        # standalone parser rather than reaching into cli_parser.
+        from reachability_advisor.cli import explicit_dests
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument("-v", "--verbose", action="store_true")
+        parser.add_argument("-x", action="store_true")
+
+        self.assertEqual(explicit_dests(parser, ["-v"]), {"verbose"})
+        self.assertEqual(explicit_dests(parser, ["-x"]), {"x"})
+        # An unrelated single-dash token must not match anything.
+        self.assertEqual(explicit_dests(parser, ["-z"]), set())
+
+    def test_single_character_short_options_are_not_abbreviation_targets(self) -> None:
+        # argparse *does* prefix-match single-dash multi-character option strings, such
+        # as "-xray", against a shorter token like "-x" -- a separate, older argparse
+        # mechanism that is not gated by `allow_abbrev` at all (verified directly against
+        # argparse: `ArgumentParser(allow_abbrev=False)` still resolves "-x" to "-xray").
+        # This project's parsers define no such single-dash multi-character options --
+        # only single-character ones plus the auto-added -h/--help -- so resolving that
+        # form is deliberately out of scope; "-x" must only ever match itself exactly.
+        from reachability_advisor.cli import explicit_dests
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument("-xray", action="store_true")
+
+        self.assertEqual(explicit_dests(parser, ["-xray"]), {"xray"})
+        self.assertEqual(explicit_dests(parser, ["-x"]), set())
+
+    def test_exact_match_wins_even_when_also_a_prefix_of_a_sibling_option(self) -> None:
+        # argparse checks for an exact option-string match before ever attempting prefix
+        # (abbreviation) resolution (verified directly: a parser with both --fail-on-tier
+        # and --fail-on-tier-extra parses "--fail-on-tier" as the former, not as
+        # "ambiguous option"). So typing the full "--fail-on-tier" must resolve to
+        # --fail-on-tier itself even though it is *also* a textual prefix of the sibling
+        # --fail-on-tier-extra, rather than being reported ambiguous between the two.
+        from reachability_advisor.cli import explicit_dests
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--fail-on-tier")
+        parser.add_argument("--fail-on-tier-extra")
+
+        self.assertEqual(explicit_dests(parser, ["--fail-on-tier", "urgent"]), {"fail_on_tier"})
+
+    def test_bare_double_dash_never_resolves_to_an_option(self) -> None:
+        # "--" is argparse's own end-of-options marker, not an abbreviation of anything.
+        # Every long option string starts with "--", so treating the bare token as a name
+        # to prefix-match would make it match any single-long-option parser's one option.
+        from reachability_advisor.cli import explicit_dests
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--only", action="store_true")
+
+        self.assertEqual(explicit_dests(parser, ["--"]), set())
+
+    def test_help_is_never_reported_as_explicit(self) -> None:
+        # -h/--help is auto-added by argparse to every parser and is excluded from
+        # `_explicit`; nothing in configuration is ever named "help", but this guards the
+        # exclusion itself, including through an unambiguous abbreviation of --help.
+        from reachability_advisor.cli import explicit_dests
+        from reachability_advisor.cli_parser import build_parser
+
+        parser = build_parser()
+        for argv in (["scan", "--help"], ["scan", "--hel"], ["scan", "-h"]):
+            with self.subTest(argv=argv):
+                self.assertNotIn("help", explicit_dests(parser, argv))
+
+    def test_chain_closure_is_not_reopened_by_a_later_matching_token(self) -> None:
+        # Once a positional token fails to match the subcommand choices available at that
+        # point, no later token may re-open subcommand navigation, even if it happens to
+        # spell a valid deeper subcommand name -- argparse itself would already have
+        # exited with "invalid choice" before parsing got that far (verified: `config
+        # bogus` alone exits 2), so this is a defensive check against explicit_dests
+        # wrongly guessing dests from a deeper subparser it was never actually routed to.
+        from reachability_advisor.cli import explicit_dests
+        from reachability_advisor.cli_parser import build_parser
+
+        parser = build_parser()
+        argv = ["config", "bogus", "explain", "--config", "reachability.yml"]
+        self.assertNotIn("config", explicit_dests(parser, argv))
+
+    def test_abbreviated_cli_flag_beats_a_configured_gate_end_to_end(self) -> None:
+        # The behaviour the user actually cares about: an abbreviated --fail-on-tier on
+        # the command line must win over .reachability.yml's gate.fail_on, exactly like
+        # the unabbreviated flag already does in
+        # ScanEndToEndConfigTests.test_explicit_fail_on_tier_overrides_a_configured_gate.
+        # If explicit_dests failed to recognise the abbreviation, apply_config_defaults
+        # would treat fail_on_tier as unset and silently fill it from the configured
+        # "medium" gate, which fails this exact scan (see
+        # test_scan_with_no_flags_uses_config_and_a_configured_gate_is_enforced).
+        config_text = (
+            "version: 1\n"
+            "artifacts:\n"
+            f"  audit-api:\n    sbom: {ROOT / 'samples/sboms/audit-api.cdx.json'}\n"
+            "evidence:\n"
+            f"  vulnerabilities: [{ROOT / 'samples/vulnerabilities.json'}]\n"
+            "gate:\n  fail_on: medium\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".reachability.yml"
+            path.write_text(config_text, encoding="utf-8")
+            code = main(["scan", "--no-table", "--config", str(path), "--fail-on-ti=urgent"])
+        self.assertEqual(code, 0)
 
 
 class ApplyConfigDefaultsRegressionTests(unittest.TestCase):

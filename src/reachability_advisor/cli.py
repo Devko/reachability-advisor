@@ -857,28 +857,80 @@ def apply_config_defaults(args: argparse.Namespace, loaded: LoadedConfig) -> arg
     return args
 
 
+def _resolve_option_dest(parser: argparse.ArgumentParser, name: str) -> str | None:
+    """Resolve one flag token's option string (`name`, already split off any `=value`)
+    to the dest argparse's own parsing would assign it, for `parser`'s actions.
+
+    An exact option-string match wins outright, for both long (`--flag`) and short
+    (`-f`) forms. For long options only, argparse also accepts any unambiguous prefix by
+    default (`allow_abbrev=True`, which this project deliberately does not disable -- see
+    `explicit_dests`): if `name` is a prefix of exactly one of the parser's option
+    strings, that option is the unambiguous abbreviation argparse itself would accept.
+
+    A prefix matching two or more option strings is ambiguous. This mirrors argparse's
+    own `_get_option_tuples`, which counts matching *option strings*, not distinct
+    actions/dests -- so an action with two long spellings that both match the prefix is
+    ambiguous too. argparse raises `error: ambiguous option` for that input before
+    `parse_args` ever returns a value, so it never reaches this function with something
+    to report; simply not matching here is correct, not a gap.
+    """
+    is_long = name.startswith("--")
+    prefix_hits: list[str] = []
+    for action in parser._actions:
+        if action.dest == "help":
+            continue
+        for option in action.option_strings:
+            if option == name:
+                return action.dest
+            if is_long and option.startswith(name):
+                prefix_hits.append(action.dest)
+    return prefix_hits[0] if len(prefix_hits) == 1 else None
+
+
 def explicit_dests(parser: argparse.ArgumentParser, argv: list[str]) -> set[str]:
     """Return the dests of options actually present in argv.
 
-    Both `--flag value` and `--flag=value` must be detected. Missing the second form
-    would let configuration silently override an explicitly passed gate value, which is
-    the same class of silent weakening this project refuses everywhere else.
+    Every form argparse itself accepts must be detected, or configuration silently
+    overrides a gate value the user did set on the command line -- the same class of
+    silent weakening this project refuses everywhere else. That includes:
+
+    - `--flag value` and `--flag=value` alike (missing the `=` form was one prior defect
+      here);
+    - unambiguous abbreviations of long options, e.g. `--fail-on-ti` for
+      `--fail-on-tier`, since argparse parses those by default (`allow_abbrev=True`,
+      which this project does not turn off -- that would change user-facing CLI
+      behaviour and could break scripts that already rely on abbreviations). Resolution
+      is delegated to `_resolve_option_dest`, called with whichever parser (top-level or
+      subparser) is active at that token's position -- an abbreviation is only unambiguous
+      or not *within one parser's own options*, exactly as argparse itself resolves it.
 
     A flag's `Action` lives on the subparser that defines it -- `scan`'s `--fail-on-tier`
     is an action of the `scan` subparser, not of the top-level parser -- so this walks the
     same subcommand chain argparse itself resolves (following each positional token that
-    names a subparsers choice, e.g. `scan`, or `config` then `explain`) and unions every
-    level's `_actions`. Checking only the top-level parser's `_actions` would silently find
-    nothing for any subcommand flag at all.
+    names a subparsers choice, e.g. `scan`, or `config` then `explain`), tracking which
+    parser is "current" as it goes, exactly like argparse's own dispatch. Checking only
+    the top-level parser's actions would silently find nothing for any subcommand flag at
+    all (a second prior defect here); resolving every flag against a single pooled set of
+    every level's options -- instead of the one parser active at that point in argv --
+    would let a name that is ambiguous only when levels are pooled together wrongly go
+    undetected, or an abbreviation from a sibling subcommand's option set wrongly match.
 
     `_actions` is private but stable across every supported CPython; argparse exposes no
     public way to map argv tokens back to destinations.
     """
-    passed = {token.split("=", 1)[0] for token in argv if token.startswith("-")}
-    probes = [parser]
+    dests: set[str] = set()
     current: argparse.ArgumentParser = parser
+    chain_open = True
     for token in argv:
         if token.startswith("-"):
+            # Bare "-"/"--" never resolve to an option (and "--" would wrongly prefix-
+            # match every long option, since every long option starts with "--").
+            if token not in ("-", "--"):
+                dest = _resolve_option_dest(current, token.split("=", 1)[0])
+                if dest is not None:
+                    dests.add(dest)
+            continue
+        if not chain_open:
             continue
         subparsers_action = next(
             (
@@ -889,15 +941,10 @@ def explicit_dests(parser: argparse.ArgumentParser, argv: list[str]) -> set[str]
             None,
         )
         if subparsers_action is None or token not in subparsers_action.choices:
-            break
+            chain_open = False
+            continue
         current = subparsers_action.choices[token]
-        probes.append(current)
-    return {
-        action.dest
-        for probe in probes
-        for action in probe._actions
-        if action.dest != "help" and passed.intersection(action.option_strings)
-    }
+    return dests
 
 
 def _dotted_lookup(node: Any, dotted: str) -> Any:
