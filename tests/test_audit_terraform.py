@@ -16,6 +16,7 @@ from reachability_advisor.hcl_static import (
 from reachability_advisor.models import Artifact
 from reachability_advisor.terraform import (
     TerraformAnalyzer,
+    TerraformContextError,
     TerraformNetworkGraph,
     _aws_security_group_ingress_exposure,
     _gcp_firewall_exposure,
@@ -24,6 +25,7 @@ from reachability_advisor.terraform import (
     exposure_for_resource,
     extract_resources,
     is_public_exposure,
+    load_terraform_plan,
 )
 from reachability_advisor.terraform_exposure import (
     cap_exposure,
@@ -499,6 +501,36 @@ class EffectiveAccessDeterminismTests(unittest.TestCase):
         ]
         self.assertEqual(runs[0], runs[1])
         self.assertEqual(runs[1], runs[2])
+
+
+class DeeplyNestedJsonTests(unittest.TestCase):
+    """RecursionError guard: deeply nested JSON should raise TerraformContextError."""
+
+    def test_deeply_nested_plan_raises_controlled_error(self) -> None:
+        """Deeply nested Terraform plan raises TerraformContextError, not uncaught
+        RecursionError. Assert that __cause__ is a RecursionError to confirm the
+        guard caught it.
+        """
+        # Build deeply nested JSON string that exceeds CPython's recursion limit
+        # (1000 frames). Depth 10000 ensures RecursionError on json.loads.
+        # Build as string to avoid json.dump's own recursion limit.
+        depth = 10000
+        json_str = "[" * depth + "]" * depth
+        # Write to temp file and load
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        ) as f:
+            f.write(json_str)
+            temp_path = f.name
+        try:
+            with self.assertRaises(TerraformContextError) as context:
+                load_terraform_plan(temp_path)
+            # Verify the error was raised from a RecursionError
+            self.assertIsInstance(context.exception.__cause__, RecursionError)
+            # Verify error message indicates nesting depth issue
+            self.assertIn("nesting exceeds", str(context.exception).lower())
+        finally:
+            Path(temp_path).unlink(missing_ok=True)
 
 
 if __name__ == "__main__":  # pragma: no cover

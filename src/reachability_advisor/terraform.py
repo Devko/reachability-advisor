@@ -1046,6 +1046,13 @@ def load_terraform_plan(path: str | Path) -> dict[str, Any]:
         data = json.loads(read_text_limited(plan_path, "Terraform plan"))
     except InputSizeError as exc:
         raise TerraformContextError(str(exc)) from exc
+    except RecursionError as exc:
+        # CPython's JSON scanner raises RecursionError (not JSONDecodeError) on deeply
+        # nested documents. Surface it as a normal input error instead of an uncaught
+        # crash.
+        raise TerraformContextError(
+            f"{plan_path}: Terraform plan JSON nesting exceeds the supported depth"
+        ) from exc
     except json.JSONDecodeError as exc:
         raise TerraformContextError(f"{plan_path}: invalid JSON: {exc}") from exc
     if not isinstance(data, dict):
