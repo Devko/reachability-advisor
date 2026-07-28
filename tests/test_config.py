@@ -1,6 +1,8 @@
 # tests/test_config.py
 from __future__ import annotations
 
+import importlib
+import sys
 import tempfile
 import unittest
 import unittest.mock
@@ -138,6 +140,22 @@ class ExtendsTests(unittest.TestCase):
         with self.assertRaises(ConfigError) as error:
             load_config(root / CONFIG_FILENAME)
         self.assertIn("path or an installed package", str(error.exception))
+
+    def test_bare_filename_extends_target_is_treated_as_a_path(self) -> None:
+        # `target.startswith((".", "/")) or target.endswith((".yml", ".yaml"))` decides
+        # path-form vs. package-form. A bare filename like "base.yml" -- no leading "./"
+        # or "/" -- starts with neither "." nor "/", so only the `endswith` half routes
+        # it into the path branch. If that half were ever dropped, this would instead be
+        # looked up as an installed package named "base.yml", which is not a valid
+        # module name and would fail; this pins the correct routing by asserting the
+        # extension-only shape resolves (and inherits) exactly like an explicit path.
+        root = _tree({
+            "base.yml": BASE,
+            CONFIG_FILENAME: "version: 1\nextends: base.yml\ngate:\n  fail_on: medium\n",
+        })
+        loaded = load_config(root / CONFIG_FILENAME)
+        self.assertEqual(loaded.config.gate.fail_on, "medium")
+        self.assertEqual(loaded.config.gate.profile, "production")  # inherited from base.yml
 
 
 class DepthCapTests(unittest.TestCase):
@@ -278,6 +296,208 @@ class TraversalTests(unittest.TestCase):
         with self.assertRaises(ConfigError) as error:
             load_config(root / CONFIG_FILENAME)
         self.assertIn("outside the repository", str(error.exception))
+
+
+class _SysPathIsolationMixin:
+    """Adds a temp directory to `sys.path` for one test and removes it afterward.
+
+    Package-form `extends` targets must be genuinely importable to exercise
+    `importlib.util.find_spec` the way it behaves for a real installed package, so
+    these tests plant one on `sys.path` rather than mocking module discovery.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()  # type: ignore[misc]
+        self._sys_path_entries: list[str] = []
+        self._modules_to_clean: list[str] = []
+        self.addCleanup(self._restore_sys_path)  # type: ignore[attr-defined]
+
+    def _restore_sys_path(self) -> None:
+        for entry in self._sys_path_entries:
+            if entry in sys.path:
+                sys.path.remove(entry)
+        for name in self._modules_to_clean:
+            sys.modules.pop(name, None)
+        importlib.invalidate_caches()
+
+    def _add_to_sys_path(self, directory: Path) -> None:
+        sys.path.insert(0, str(directory))
+        self._sys_path_entries.append(str(directory))
+        importlib.invalidate_caches()
+
+
+class PackageExtendsTests(_SysPathIsolationMixin, unittest.TestCase):
+    """Package-form `extends` must keep working for a genuine, single-segment,
+    installed package -- only the resolution mechanism changed, not what is accepted.
+    """
+
+    def test_extends_a_single_segment_installed_package(self) -> None:
+        package_root = Path(tempfile.mkdtemp())
+        pkg_name = "reachability_advisor_test_pkg_ok"
+        pkg_dir = package_root / pkg_name
+        pkg_dir.mkdir()
+        (pkg_dir / "__init__.py").write_text("", encoding="utf-8")
+        (pkg_dir / CONFIG_FILENAME).write_text(BASE, encoding="utf-8")
+        self._add_to_sys_path(package_root)
+        self._modules_to_clean.append(pkg_name)
+
+        root = _tree({
+            CONFIG_FILENAME: f"version: 1\nextends: {pkg_name}\ngate:\n  fail_on: medium\n",
+        })
+        loaded = load_config(root / CONFIG_FILENAME)
+        self.assertEqual(loaded.config.gate.fail_on, "medium")
+        self.assertEqual(loaded.config.gate.profile, "production")  # inherited
+        self.assertNotIn(pkg_name, sys.modules)  # resolved without ever importing it
+
+    def test_package_form_extends_is_exempt_from_the_repository_boundary_check(self) -> None:
+        # Path-form extends cannot leave the repository (see TraversalTests below);
+        # package-form must remain exempt, since installed packages legitimately live
+        # outside the tree that is doing the scanning.
+        package_root = Path(tempfile.mkdtemp())
+        pkg_name = "reachability_advisor_test_pkg_boundary"
+        pkg_dir = package_root / pkg_name
+        pkg_dir.mkdir()
+        (pkg_dir / "__init__.py").write_text("", encoding="utf-8")
+        (pkg_dir / CONFIG_FILENAME).write_text(BASE, encoding="utf-8")
+        self._add_to_sys_path(package_root)
+        self._modules_to_clean.append(pkg_name)
+
+        root = _tree({
+            ".git/HEAD": "ref: refs/heads/main\n",
+            CONFIG_FILENAME: f"version: 1\nextends: {pkg_name}\n",
+        })
+        loaded = load_config(root / CONFIG_FILENAME)
+        self.assertEqual(loaded.config.gate.profile, "production")
+
+    def test_rejects_a_dotted_extends_target(self) -> None:
+        # importlib.util.find_spec imports parent packages to resolve a dotted
+        # (submodule) name -- see the docstring on _resolve_package_extends -- which
+        # would reopen the exact execution path this module exists to close. Dotted
+        # names must be rejected before find_spec is ever called.
+        root = _tree({CONFIG_FILENAME: "version: 1\nextends: acme.baseline\n"})
+        with self.assertRaises(ConfigError) as error:
+            load_config(root / CONFIG_FILENAME)
+        self.assertIn("dotted", str(error.exception).lower())
+
+    def test_rejects_a_single_module_extends_target_that_is_not_a_package(self) -> None:
+        # A single-module .py file has no `submodule_search_locations` and cannot
+        # contain a .reachability.yml. Requiring an actual package is what keeps a
+        # repo-local `evil.py` from being treated as a baseline candidate at all.
+        module_root = Path(tempfile.mkdtemp())
+        module_name = "reachability_advisor_test_bare_module"
+        (module_root / f"{module_name}.py").write_text("value = 1\n", encoding="utf-8")
+        self._add_to_sys_path(module_root)
+        self._modules_to_clean.append(module_name)
+
+        root = _tree({CONFIG_FILENAME: f"version: 1\nextends: {module_name}\n"})
+        with self.assertRaises(ConfigError) as error:
+            load_config(root / CONFIG_FILENAME)
+        self.assertIn("not an installed package", str(error.exception))
+        self.assertNotIn(module_name, sys.modules)
+
+    def test_rejects_a_package_missing_the_config_file(self) -> None:
+        package_root = Path(tempfile.mkdtemp())
+        pkg_name = "reachability_advisor_test_pkg_empty"
+        pkg_dir = package_root / pkg_name
+        pkg_dir.mkdir()
+        (pkg_dir / "__init__.py").write_text("", encoding="utf-8")
+        self._add_to_sys_path(package_root)
+        self._modules_to_clean.append(pkg_name)
+
+        root = _tree({CONFIG_FILENAME: f"version: 1\nextends: {pkg_name}\n"})
+        with self.assertRaises(ConfigError) as error:
+            load_config(root / CONFIG_FILENAME)
+        self.assertIn("does not contain", str(error.exception))
+
+    def test_rejects_an_extends_target_that_is_not_an_installed_package(self) -> None:
+        root = _tree({
+            CONFIG_FILENAME: "version: 1\nextends: reachability_advisor_no_such_pkg_xyz\n",
+        })
+        with self.assertRaises(ConfigError) as error:
+            load_config(root / CONFIG_FILENAME)
+        self.assertIn("not an installed package", str(error.exception))
+
+
+class PackageExtendsSecurityTests(_SysPathIsolationMixin, unittest.TestCase):
+    """Regression coverage for the critical defect: a package-form `extends` target
+    used to be resolved with `importlib.resources.files`, which imports (and therefore
+    executes) the named module before anything about its contents is checked. A config
+    file is attacker-influenceable the same way scanner input is -- a pull request can
+    add or edit one -- so this was full arbitrary code execution reachable by having
+    anyone run the scanner.
+    """
+
+    def test_package_form_extends_never_executes_the_target_module(self) -> None:
+        module_root = Path(tempfile.mkdtemp())
+        marker = module_root / "side_effect_marker.txt"
+        module_name = "reachability_advisor_test_evil_module"
+        (module_root / f"{module_name}.py").write_text(
+            "from pathlib import Path\n"
+            f"Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n",
+            encoding="utf-8",
+        )
+        self._add_to_sys_path(module_root)
+        self._modules_to_clean.append(module_name)
+
+        root = _tree({CONFIG_FILENAME: f"version: 1\nextends: {module_name}\n"})
+
+        with self.assertRaises(ConfigError) as error:
+            load_config(root / CONFIG_FILENAME)
+
+        # Both must hold: the original bug raised an error *and* ran the attacker's
+        # code, so asserting only the exception would not catch a regression back to
+        # importlib.resources.files/import_module.
+        self.assertIn("not an installed package", str(error.exception))
+        self.assertFalse(marker.exists(), "extends must resolve without executing the module")
+        self.assertNotIn(module_name, sys.modules)
+
+
+class PackageExtendsExceptionHandlingTests(unittest.TestCase):
+    """`importlib.util.find_spec` can raise several different exceptions for hostile
+    input (a real `__main__` raises `ValueError`; the old `importlib.resources.files`
+    path left `AttributeError` for `__main__` uncaught entirely). All of them must be
+    converted to `ConfigError`, never left to crash the process.
+    """
+
+    def _assert_find_spec_exception_becomes_config_error(
+        self, exc_type: type[BaseException]
+    ) -> None:
+        root = _tree({CONFIG_FILENAME: "version: 1\nextends: whatever_target\n"})
+        with (
+            unittest.mock.patch(
+                "reachability_advisor.config.importlib.util.find_spec",
+                side_effect=exc_type("boom"),
+            ),
+            self.assertRaises(ConfigError),
+        ):
+            load_config(root / CONFIG_FILENAME)
+
+    def test_catches_module_not_found_error(self) -> None:
+        self._assert_find_spec_exception_becomes_config_error(ModuleNotFoundError)
+
+    def test_catches_import_error(self) -> None:
+        self._assert_find_spec_exception_becomes_config_error(ImportError)
+
+    def test_catches_value_error(self) -> None:
+        # This is what a real "__main__" (no __spec__, e.g. a plain script) raises.
+        self._assert_find_spec_exception_becomes_config_error(ValueError)
+
+    def test_catches_attribute_error(self) -> None:
+        # This is the exception the old importlib.resources.files-based
+        # implementation left uncaught for "__main__" and similar odd names.
+        self._assert_find_spec_exception_becomes_config_error(AttributeError)
+
+    def test_catches_type_error(self) -> None:
+        self._assert_find_spec_exception_becomes_config_error(TypeError)
+
+    def test_extends_dunder_main_fails_closed_with_a_config_error(self) -> None:
+        # End-to-end, without mocking: whatever find_spec("__main__") does in the
+        # running interpreter (raise, or return a non-package spec), the process must
+        # not die with a raw traceback the way the old importlib.resources.files
+        # implementation did.
+        root = _tree({CONFIG_FILENAME: "version: 1\nextends: __main__\n"})
+        with self.assertRaises(ConfigError):
+            load_config(root / CONFIG_FILENAME)
 
 
 if __name__ == "__main__":

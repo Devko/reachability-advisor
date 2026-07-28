@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-import importlib.resources
+import importlib.util
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -82,14 +82,48 @@ def _resolve_extends(target: str, source: Path) -> Path:
         if not candidate.is_file():
             raise ConfigError(f"{source}: extends target {target!r} does not exist at {candidate}")
         return candidate
+    return _resolve_package_extends(target, source)
+
+
+def _resolve_package_extends(target: str, source: Path) -> Path:
+    """Resolve a package-form `extends` target without executing its code.
+
+    `importlib.resources.files(name)` (and `importlib.import_module(name)`, which it
+    calls internally) executes the named module's top-level code before anything about
+    its contents is inspected. A config file is attacker-influenceable the same way
+    scanner input is -- a pull request can add or edit one -- so an attacker who names a
+    module here could get arbitrary code to run merely by having someone scan the
+    repository. `importlib.util.find_spec` locates a module without executing it, so it
+    is used here instead.
+
+    Dotted names (e.g. `acme.baseline`) are rejected outright: per `find_spec`'s own
+    documentation, resolving a submodule name still imports its parent packages first,
+    which reopens the exact execution path this function exists to close. A
+    single-segment package name is sufficient to distribute an organization baseline.
+
+    The target must be an actual package -- `spec.submodule_search_locations` is
+    present and non-empty -- not a single-module `.py` file: a bare module cannot
+    contain a `.reachability.yml`, and requiring a package is what keeps a repo-local
+    `evil.py` from being treated as a baseline at all.
+    """
+    if "." in target:
+        raise ConfigError(
+            f"{source}: extends target {target!r} is a dotted package name, which is not "
+            "supported: resolving one imports its parent packages first, and this project "
+            "never imports attacker-influenceable names. Use a single-segment package name "
+            "for an organization baseline, or a relative path."
+        )
     try:
-        package = importlib.resources.files(target)
-    except (ModuleNotFoundError, TypeError):
+        spec = importlib.util.find_spec(target)
+    except (ModuleNotFoundError, ImportError, ValueError, AttributeError, TypeError):
+        spec = None
+    if spec is None or not spec.submodule_search_locations:
         raise ConfigError(
             f"{source}: extends target {target!r} is not an installed package and not a path. "
             "Install the package that provides your organization baseline, or use a relative path."
-        ) from None
-    candidate = Path(str(package)) / CONFIG_FILENAME
+        )
+    location = next(iter(spec.submodule_search_locations))
+    candidate = Path(location) / CONFIG_FILENAME
     if not candidate.is_file():
         raise ConfigError(f"{source}: package {target!r} does not contain {CONFIG_FILENAME}")
     return candidate

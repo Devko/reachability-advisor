@@ -77,7 +77,10 @@ built-in defaults  ->  org baseline (extends:)  ->  repo .reachability.yml  ->  
 
 `extends:` resolves **offline only**, two ways:
 - a relative path — `extends: ./shared/base.yml`
-- an installed Python package via `importlib.resources` — `extends: acme_baseline`
+- an installed Python package via `importlib.util.find_spec` — `extends: acme_baseline`
+  (never `importlib.resources`/`import_module`, which execute the module's top-level
+  code before anything about its contents is checked; `find_spec` locates it without
+  executing it, and only single-segment package names are accepted)
 
 The platform team distributes the baseline through the pip channel they already operate.
 Nothing is fetched at scan time, preserving the local-first guarantee. Chains are followed
