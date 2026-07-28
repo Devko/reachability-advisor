@@ -128,6 +128,10 @@ inputs:
     description: Runtime policy JSON path.
     required: false
     default: ""
+  config:
+    description: Path to .reachability.yml. When set, other inputs override individual values.
+    required: false
+    default: ""
   output-dir:
     description: Directory for generated Reachability Advisor outputs.
     required: false
@@ -236,6 +240,7 @@ runs:
         RA_INPUT_REQUIRE_RELEASE_READY: ${{ inputs.require-release-ready }}
         RA_INPUT_FAIL_ON_READINESS_WARNINGS: ${{ inputs.fail-on-readiness-warnings }}
         RA_INPUT_POLICY: ${{ inputs.policy }}
+        RA_INPUT_CONFIG: ${{ inputs.config }}
         RA_INPUT_OUTPUT_DIR: ${{ inputs.output-dir }}
         RA_INPUT_BASELINE: ${{ inputs.baseline }}
         RA_INPUT_FAIL_ON_TIER: ${{ inputs.fail-on-tier }}
@@ -303,6 +308,7 @@ runs:
         if [[ -n "$RA_INPUT_CONTEXT" ]]; then args+=(--context "$RA_INPUT_CONTEXT"); fi
         if [[ -n "$RA_INPUT_REACHABILITY_RULES" ]]; then args+=(--reachability-rules "$RA_INPUT_REACHABILITY_RULES"); fi
         if [[ -n "$RA_INPUT_POLICY" ]]; then args+=(--policy "$RA_INPUT_POLICY"); fi
+        if [[ -n "$RA_INPUT_CONFIG" ]]; then args+=(--config "$RA_INPUT_CONFIG"); fi
         if [[ -n "$RA_INPUT_TERRAFORM_PLAN" ]]; then args+=(--terraform-plan "$RA_INPUT_TERRAFORM_PLAN" --terraform-coverage-out "$terraform_coverage"); fi
         if [[ -n "$RA_INPUT_TERRAFORM_SOURCE" ]]; then args+=(--terraform-source "$RA_INPUT_TERRAFORM_SOURCE" --terraform-coverage-out "$terraform_coverage"); fi
         if [[ -n "$RA_INPUT_KUBERNETES_MANIFEST" ]]; then args+=(--kubernetes-coverage-out "$kubernetes_coverage"); fi

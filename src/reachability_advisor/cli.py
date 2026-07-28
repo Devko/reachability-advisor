@@ -38,6 +38,7 @@ from .config_render import render_config
 from .context import ContextError, load_context_file
 from .correlation import apply_correlations
 from .demo_assets import write_demo_inputs
+from .doctor import diagnose, readiness_to_dict, render_text
 from .effective_exposure import enrich_context_map_with_effective_exposure
 from .evidence_graph import build_evidence_graph
 from .finding_types import (
@@ -1034,6 +1035,27 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """Report what `scan` needs, what is missing, and the command that produces it.
+
+    Discovery must follow `--root`, not the process's current working directory: a
+    platform team runs `doctor` across many checked-out repositories from one fixed
+    working directory (see `doctor.py`'s module docstring), so `load_config` is told to
+    start its search at `root` rather than defaulting to `Path.cwd()`.
+    """
+    root = Path(args.root).resolve()
+    if not root.is_dir():
+        raise ValueError(f"{root}: --root is not a directory")
+    loaded = load_config(getattr(args, "config", None), start=root)
+    readiness = diagnose(loaded, root)
+    print(render_text(readiness))
+    if args.json_out:
+        out = Path(args.json_out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(readiness_to_dict(readiness), indent=2) + "\n", encoding="utf-8")
+    return 0 if readiness.ready else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1079,6 +1101,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_config(args)
         if args.command == "init":
             return cmd_init(args)
+        if args.command == "doctor":
+            return cmd_doctor(args)
         if args.command == "version":
             print(__version__)
             return 0

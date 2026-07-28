@@ -36,6 +36,16 @@ Key outputs:
 
 See [Quickstart](docs/quickstart.md) for install steps, sample scans, release gates, and common workflow commands.
 
+## Set Up Your Own Repository
+
+```bash
+reachability-advisor init      # writes .reachability.yml from what is in the repo
+reachability-advisor doctor    # what is missing, and the command that produces it
+reachability-advisor scan      # no flags; reads the config
+```
+
+See [Quickstart](docs/quickstart.md#set-up-your-own-repository) for the full flow, including configuration layers and `config explain`.
+
 ## Common Workflows
 
 - **Dependency prioritization:** combine SBOM and Grype/OSV/local vulnerability data.

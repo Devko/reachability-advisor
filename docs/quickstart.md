@@ -31,7 +31,28 @@ The command writes the report set to `outputs/demo/`, including:
 - `outputs/demo/source-coverage.json`
 - `outputs/demo/kubernetes-coverage.json`
 
+## Set Up Your Own Repository
+
+Three commands, in order:
+
+```bash
+reachability-advisor init      # writes .reachability.yml from what is in the repo
+reachability-advisor doctor    # what is missing, and the command that produces it
+reachability-advisor scan      # no flags; reads the config
+```
+
+`init` only declares what it finds, and marks everything else with `# TODO`. `doctor` is
+re-runnable: work through its output until it reports `gate: ready`. It exits non-zero until
+then, so CI can use it directly, and `--json` gives a machine-readable report for tracking
+onboarding across many repositories.
+
+Configuration layers, lowest precedence first: built-in defaults, an organization baseline via
+`extends:`, the repository's `.reachability.yml`, then any CLI flag. `reachability-advisor
+config explain` prints each resolved value and the layer that set it.
+
 ## Common Workflows
+
+Without a config file, or to override individual values for a one-off run, pass flags directly:
 
 Dependency-only prioritization:
 

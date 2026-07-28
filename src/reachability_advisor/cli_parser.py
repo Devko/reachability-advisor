@@ -244,6 +244,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write newly detected values to .reachability.detected.yml instead of failing.",
     )
 
+    doctor = sub.add_parser(
+        "doctor", help="Report missing evidence and the exact command that produces it."
+    )
+    doctor.add_argument("--config", help=f"Path to {CONFIG_FILENAME}.")
+    doctor.add_argument(
+        "--root", default=".", help="Repository root. Defaults to the working directory."
+    )
+    doctor.add_argument(
+        "--json", dest="json_out", help="Write the readiness report as JSON to this path."
+    )
+
     sub.add_parser("version", help="Print version.")
     return parser
 
