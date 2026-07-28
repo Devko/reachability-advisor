@@ -445,10 +445,14 @@ def detect_repo(root: Path) -> Detection:
                 + command_template.format(path=source_rel, out=f"sboms/{name}.cdx.json")
             )
 
-    terraform_files = [path for path in files if path.suffix == ".tf"]
-    if terraform_files:
-        detection.terraform_source = _relative(terraform_files[0].parent, root)
-
+    # `iac.terraform` and `iac.terraform_source` are mutually exclusive to `scan` itself
+    # (cli.py's run_scan rejects both being set at once: "Choose one Terraform input").
+    # Detection must never emit both, or `init` writes a config `scan` immediately refuses
+    # -- `init` would exit 0 and `scan` would exit 2 on the very config `init` just wrote.
+    # A rendered plan is checked for first and, when present, is always preferred: it is
+    # strictly stronger evidence than static `.tf` source (see the note below for the
+    # reverse case), so a repository that happens to have both never loses anything by
+    # `terraform_source` being left unset here.
     plan_candidates = [
         path for path in files if path.suffix == ".json" and "plan" in path.name.lower()
     ]
@@ -457,7 +461,23 @@ def detect_repo(root: Path) -> Detection:
             detection.terraform = _relative(path, root)
             break
 
-    if detection.terraform_source and not detection.terraform:
+    terraform_files = [path for path in files if path.suffix == ".tf"]
+    if terraform_files:
+        source_rel = _relative(terraform_files[0].parent, root)
+        if detection.terraform:
+            # Declare only what will actually be used -- see the module docstring's
+            # governing principle -- but a human reading the generated config still
+            # deserves to know the source tree exists and why it was not chosen.
+            detection.notes.append(
+                f"Terraform source also found in {source_rel}, but a rendered plan is "
+                f"present ({detection.terraform}) and is stronger evidence, so "
+                "iac.terraform_source was not set. `scan` accepts only one Terraform "
+                "input at a time."
+            )
+        else:
+            detection.terraform_source = source_rel
+
+    if detection.terraform_source:
         tf_dir = detection.terraform_source
         detection.notes.append(
             f"Terraform source found in {tf_dir}. A plan gives far better exposure "

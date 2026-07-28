@@ -71,7 +71,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from .config import LoadedConfig
 from .kubernetes import _manifest_files, load_kubernetes_resources
@@ -122,11 +122,17 @@ def _record(readiness: Readiness, issues: list[ValidationIssue], *, context: str
         bucket.append(message)
 
 
-def _check_content(issues: list[ValidationIssue], label: str, loader: Callable[[], object]) -> None:
+_T = TypeVar("_T")
+
+
+def _load_content(issues: list[ValidationIssue], label: str, loader: Callable[[], _T]) -> _T | None:
     """Parse a file exactly the way `scan`'s own loader will, once the file-level check
     above already found nothing wrong -- turning a parse failure `scan` would hit into the
     same kind of blocker a missing or empty file already gets, with the loader's own
-    message.
+    message. Returns the loaded value on success (so a caller that needs more than a
+    pass/fail check -- see `diagnose`'s SBOM handling, which needs each SBOM's own
+    artifact name to check declared `image` aliases -- does not have to parse the file a
+    second time), or `None` once the failure has already been filed as an issue.
 
     Reuses `scan`'s loader instead of re-implementing "is this valid JSON/YAML" here, so the
     two checks cannot silently drift apart the way `Path.exists()` once did (see the module
@@ -142,9 +148,17 @@ def _check_content(issues: list[ValidationIssue], label: str, loader: Callable[[
     doctor's "never crash" requirement.
     """
     try:
-        loader()
+        return loader()
     except (ValueError, OSError, RecursionError) as exc:
         issues.append(ValidationIssue("error", label, str(exc)))
+        return None
+
+
+def _check_content(issues: list[ValidationIssue], label: str, loader: Callable[[], object]) -> None:
+    """`_load_content`, for the common case where the caller only needs pass/fail and has
+    no use for the loaded value itself.
+    """
+    _load_content(issues, label, loader)
 
 
 def _load_kubernetes_content(path: Path) -> None:
@@ -183,6 +197,10 @@ def diagnose(loaded: LoadedConfig, root: Path) -> Readiness:
     if not config.artifacts:
         readiness.blockers.append("No artifacts declared. Run `reachability-advisor init`.")
 
+    # Populated below as each artifact's own SBOM is loaded, then consulted once every
+    # artifact has been processed -- see the alias-resolution pass right after this loop.
+    loaded_sbom_artifact_names: set[str] = set()
+
     for name, artifact in sorted(config.artifacts.items()):
         present: dict[str, bool] = {}
         missing: list[str] = []
@@ -193,8 +211,13 @@ def diagnose(loaded: LoadedConfig, root: Path) -> Readiness:
         else:
             sbom_issues: list[ValidationIssue] = []
             _validate_file(str(root / artifact.sbom), "sbom", sbom_issues)
+            sbom_document = None
             if not has_errors(sbom_issues):
-                _check_content(sbom_issues, "sbom", partial(load_sbom, root / artifact.sbom))
+                sbom_document = _load_content(
+                    sbom_issues, "sbom", partial(load_sbom, root / artifact.sbom)
+                )
+            if sbom_document is not None:
+                loaded_sbom_artifact_names.add(sbom_document.artifact.name)
             present["sbom"] = not sbom_issues
             if sbom_issues:
                 missing.append("sbom")
@@ -217,6 +240,33 @@ def diagnose(loaded: LoadedConfig, root: Path) -> Readiness:
                 + SYFT_COMMAND.format(path=artifact.source or ".", out=f"sboms/{name}.cdx.json")
             )
         readiness.artifacts.append(ArtifactReadiness(name=name, present=present, missing=missing))
+
+    # `apply_config_defaults` (cli.py) turns every artifact's `image` into a `scan
+    # --artifact-alias {name}={image}` flag, and `_apply_artifact_aliases` (cli.py) then
+    # matches `{name}` against each *loaded SBOM's own* `artifact.name` (its CycloneDX
+    # `metadata.component.name`, not the config's artifact key) across every SBOM `scan`
+    # loaded -- not just this artifact's own. If nothing matches, `scan` fails outright
+    # ("Artifact alias refers to an SBOM artifact that was not loaded"). Before this
+    # check, doctor never looked past "does the sbom file parse" -- a config where the
+    # artifact key and the SBOM's own component name disagree (the common case for a
+    # detected artifact named after its directory, e.g. `init` on this project's own
+    # tree: an SBOM component named "sbom" but a config key derived from the containing
+    # directory) reported `ready` while `scan` hard-failed on the very next input. This
+    # is deliberately a second pass over every artifact, not folded into the loop above:
+    # `loaded_sbom_artifact_names` must be fully populated (a match can come from *any*
+    # artifact's SBOM, exactly as `_apply_artifact_aliases` checks against the full,
+    # flattened `sboms` list) before any artifact's `image` can be checked against it.
+    for name, artifact in sorted(config.artifacts.items()):
+        if artifact.image and name not in loaded_sbom_artifact_names:
+            readiness.blockers.append(
+                f"{name}: image is declared ({artifact.image!r}) but no loaded SBOM's own "
+                f"component name matches the artifact key {name!r}. `scan` maps "
+                f"`--artifact-alias {name}={artifact.image}` (derived from `image`) against "
+                "each SBOM's own `metadata.component.name`, not the config key, and fails "
+                f"outright when nothing matches. Rename this artifact block's key to match "
+                f"the SBOM's own component name, or change the SBOM's component name to "
+                f"match {name!r}."
+            )
 
     # A source-only artifact (no `sbom` key at all) is exactly what `init` scaffolds for a
     # repository that has a lockfile but no SBOM yet -- the loop above does not flag it,

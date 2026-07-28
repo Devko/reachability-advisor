@@ -184,6 +184,95 @@ evidence:
         self.assertTrue(any("production" in item for item in readiness.blockers))
 
 
+class DoctorArtifactAliasResolutionTests(unittest.TestCase):
+    """Final-review blocker 3(b): `init` can emit an `image:` value that becomes a
+    `--artifact-alias` `scan` cannot actually resolve -- `_apply_artifact_aliases`
+    (cli.py) matches the config's artifact *key* against each loaded SBOM's own
+    `metadata.component.name`, not the config key itself, and fails outright
+    ("Artifact alias refers to an SBOM artifact that was not loaded") when nothing
+    matches. Before this fix, `doctor.py` never looked past "does the sbom file parse",
+    so it reported `ready` on exactly this shape while a real `scan` hard-failed.
+    """
+
+    IMAGE_CONFIG = """version: 1
+artifacts:
+  app:
+    sbom: sboms/app.cdx.json
+    image: registry.example.com/team/app:1.0
+evidence:
+  vulnerabilities: [grype.json]
+"""
+
+    def _sbom(self, component_name: str) -> str:
+        return json.dumps({
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.4",
+            "metadata": {"component": {"name": component_name}},
+            "components": [],
+        })
+
+    def test_mismatched_artifact_key_and_sbom_component_name_is_a_blocker(self) -> None:
+        root = _repo({
+            CONFIG_FILENAME: self.IMAGE_CONFIG,
+            "sboms/app.cdx.json": self._sbom("a-completely-different-name"),
+            "grype.json": "{}",
+        })
+        readiness = diagnose(load_config(root / CONFIG_FILENAME), root)
+        self.assertFalse(readiness.ready)
+        self.assertTrue(
+            any("component name matches" in item for item in readiness.blockers),
+            readiness.blockers,
+        )
+        self.assertTrue(any("app" in item for item in readiness.blockers))
+
+    def test_mismatched_artifact_key_and_sbom_component_name_matches_a_real_scan_failure(
+        self,
+    ) -> None:
+        root = _repo({
+            CONFIG_FILENAME: self.IMAGE_CONFIG,
+            "sboms/app.cdx.json": self._sbom("a-completely-different-name"),
+            "grype.json": "{}",
+        })
+        config_path = root / CONFIG_FILENAME
+        readiness = diagnose(load_config(config_path), root)
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(root)
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as captured:
+                scan_code = main(["scan", "--config", str(config_path), "--no-table"])
+        finally:
+            os.chdir(old_cwd)
+        self.assertFalse(readiness.ready)
+        self.assertEqual(scan_code, 2)
+        self.assertIn("Artifact alias refers to an SBOM artifact that was not loaded", captured.getvalue())
+
+    def test_matching_artifact_key_and_sbom_component_name_is_not_flagged(self) -> None:
+        # The alias check must not over-flag: when the SBOM's own component name really
+        # does equal the config's artifact key, `scan`'s alias matching succeeds and
+        # doctor must not invent a blocker for it.
+        root = _repo({
+            CONFIG_FILENAME: self.IMAGE_CONFIG,
+            "sboms/app.cdx.json": self._sbom("app"),
+            "grype.json": "{}",
+        })
+        readiness = diagnose(load_config(root / CONFIG_FILENAME), root)
+        self.assertFalse(any("component name matches" in item for item in readiness.blockers))
+
+    def test_artifact_with_no_image_declared_is_never_checked_for_alias_resolution(self) -> None:
+        # COMPLETE declares no `image` at all; the alias-resolution pass must not fire
+        # for artifacts that never asked for one.
+        root = _repo(
+            {
+                CONFIG_FILENAME: COMPLETE,
+                "sboms/api.cdx.json": self._sbom("some-other-name"),
+                "grype.json": "{}",
+                "src/api/.keep": "",
+            }
+        )
+        readiness = diagnose(load_config(root / CONFIG_FILENAME), root)
+        self.assertFalse(any("component name matches" in item for item in readiness.blockers))
+
+
 class DoctorContentValidationTests(unittest.TestCase):
     """Every input `doctor` reports on is checked by the loader `scan` will later use for
     it -- `_check_content` (doctor.py) calls that loader directly and files whatever it
@@ -576,7 +665,38 @@ iac:
   kubernetes: k8s.txt
 """
 
+    # Blocker 3(a): detect_repo could emit both keys at once; a hand-authored config can
+    # still do the same thing, and doctor's own conflict check (independent of detection)
+    # must agree with scan on it.
+    TERRAFORM_CONFLICT_CONFIG = """version: 1
+artifacts:
+  api:
+    sbom: sboms/api.cdx.json
+evidence:
+  vulnerabilities: [grype.json]
+iac:
+  terraform: tfplan.json
+  terraform_source: infra
+"""
+
+    # Blocker 3(b): an `image` whose config artifact key does not match any loaded SBOM's
+    # own component name.
+    ALIAS_MISMATCH_CONFIG = """version: 1
+artifacts:
+  app:
+    sbom: sboms/app.cdx.json
+    image: registry.example.com/team/app:1.0
+evidence:
+  vulnerabilities: [grype.json]
+"""
+
     VALID_SBOM = json.dumps({"bomFormat": "CycloneDX", "specVersion": "1.4", "components": []})
+    MISMATCHED_NAME_SBOM = json.dumps({
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.4",
+        "metadata": {"component": {"name": "a-completely-different-name"}},
+        "components": [],
+    })
 
     def _diagnose_and_scan(self, root: Path, config_text: str) -> tuple[bool, int]:
         config_path = root / CONFIG_FILENAME
@@ -656,6 +776,37 @@ iac:
             # `doctor._check_content` catches the same way it catches invalid JSON. `scan`
             # fails closed with a clear message (exit 2) rather than an unhandled traceback
             # -- see the OSError handling in cli.main and tests/test_cli_outputs.py.
+            self.assertFalse(ready)
+            self.assertEqual(scan_code, 2)
+
+        with self.subTest("terraform_both_declared"):
+            # Blocker 3(a): iac.terraform and iac.terraform_source both set. detect_repo
+            # itself no longer produces this shape (see test_config_detect.py), but a
+            # hand-authored config still can, and doctor's own conflict check -- kept as
+            # defense in depth -- must agree with scan's on it.
+            root = _repo({
+                "grype.json": "{}",
+                "sboms/api.cdx.json": self.VALID_SBOM,
+                "tfplan.json": '{"format_version": "1.2", "planned_values": {}}',
+                "infra/main.tf": 'resource "x" "y" {}\n',
+            })
+            ready, scan_code = record(
+                "terraform_both_declared", root, self.TERRAFORM_CONFLICT_CONFIG
+            )
+            self.assertFalse(ready)
+            self.assertEqual(scan_code, 2)
+
+        with self.subTest("artifact_alias_mismatch"):
+            # Blocker 3(b): a declared `image` whose config artifact key does not match
+            # any loaded SBOM's own component name -- `scan`'s alias resolution fails
+            # outright even though the sbom file itself parses cleanly.
+            root = _repo({
+                "grype.json": "{}",
+                "sboms/app.cdx.json": self.MISMATCHED_NAME_SBOM,
+            })
+            ready, scan_code = record(
+                "artifact_alias_mismatch", root, self.ALIAS_MISMATCH_CONFIG
+            )
             self.assertFalse(ready)
             self.assertEqual(scan_code, 2)
 

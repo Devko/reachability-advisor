@@ -254,8 +254,48 @@ class DetectRepoTerraformPlanTests(unittest.TestCase):
         })
         detection = detect_repo(root)
         self.assertEqual(detection.terraform, "tfplan.json")
-        self.assertEqual(detection.terraform_source, "infra")
         self.assertFalse(any("plan gives far better" in note for note in detection.notes))
+
+    def test_terraform_source_is_not_set_when_a_rendered_plan_is_also_present(self) -> None:
+        # Final-review blocker: detect_repo used to set BOTH iac.terraform and
+        # iac.terraform_source whenever a repository had a rendered plan alongside `.tf`
+        # source -- a completely ordinary shape (checked-in plan + the source it was
+        # rendered from). `init` wrote that as a valid-looking config, and `scan` (cli.py:
+        # "Choose one Terraform input") immediately refused it: `init` exit 0, `scan`
+        # exit 2 on the very config `init` just wrote. A rendered plan is strictly
+        # stronger evidence than static HCL, so it is always preferred; terraform_source
+        # must stay unset, not merely deprioritized, and the config the schema/CLI would
+        # actually reject must never be producible by `init` in the first place.
+        root = _tree({
+            "infra/main.tf": 'resource "x" "y" {}\n',
+            "tfplan.json": '{"format_version": "1.2", "planned_values": {}}',
+        })
+        detection = detect_repo(root)
+        self.assertEqual(detection.terraform, "tfplan.json")
+        self.assertIsNone(detection.terraform_source)
+        # The user still deserves to know the source tree exists and why it was skipped.
+        self.assertTrue(
+            any("Terraform source also found in infra" in note for note in detection.notes),
+            detection.notes,
+        )
+
+    def test_init_never_writes_both_terraform_keys_and_the_resulting_config_loads(self) -> None:
+        # End-to-end version of the test above, through `init` and `load_config`: pins
+        # that the *written config* -- not just the in-memory Detection -- never contains
+        # both keys, and that config_schema/cli would accept it (scan's own conflict
+        # check, mirrored in doctor.py, is exercised separately in test_doctor.py's
+        # DiagnoseTests.test_terraform_plan_and_terraform_source_both_declared_is_a_conflict).
+        from reachability_advisor.cli import main
+        from reachability_advisor.config import CONFIG_FILENAME, load_config
+
+        root = _tree({
+            "infra/main.tf": 'resource "x" "y" {}\n',
+            "tfplan.json": '{"format_version": "1.2", "planned_values": {}}',
+        })
+        self.assertEqual(main(["init", "--root", str(root)]), 0)
+        loaded = load_config(root / CONFIG_FILENAME)
+        self.assertIn("terraform", loaded.config.iac)
+        self.assertNotIn("terraform_source", loaded.config.iac)
 
     def test_suggests_generating_a_plan_when_only_source_exists(self) -> None:
         root = _tree({"infra/main.tf": 'resource "x" "y" {}\n'})
