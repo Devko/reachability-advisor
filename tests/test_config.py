@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 import sys
 import tempfile
 import unittest
@@ -79,6 +80,298 @@ class DiscoveryTests(unittest.TestCase):
             "repo/services/api/.keep": "",
         })
         self.assertIsNone(discover_config_path(root / "repo" / "services" / "api"))
+
+
+class NonRegularConfigEntryTests(unittest.TestCase):
+    """A `.reachability.yml` that exists but is not a readable regular file must stop the
+    discovery walk with a loud `ConfigError`, never be silently treated the same as no
+    config file at all -- see `discover_config_path`'s docstring. A previous defect here
+    asked only `candidate.is_file()`, which is `False` for every one of these shapes,
+    indistinguishable from "nothing here yet" -- so the walk continued past the broken
+    entry and `load_config` fell back to built-in defaults with `path=None`, which every
+    consumer (the gate, `config validate`, `doctor`) reports as "no config file found"
+    even though one is sitting right there, broken. Reproduced directly against a real
+    gate below in `SilentGateDisablementReproductionTests`.
+    """
+
+    def test_dangling_symlink_raises_a_config_error_naming_the_path(self) -> None:
+        root = _tree({})
+        target = root / "nonexistent-target.yml"
+        (root / CONFIG_FILENAME).symlink_to(target)
+        with self.assertRaises(ConfigError) as error:
+            discover_config_path(root)
+        message = str(error.exception)
+        self.assertIn(str(root / CONFIG_FILENAME), message)
+        self.assertIn("dangling symlink", message)
+
+    def test_symlink_to_a_directory_raises_a_config_error(self) -> None:
+        root = _tree({"real-directory/.keep": ""})
+        (root / CONFIG_FILENAME).symlink_to(root / "real-directory")
+        with self.assertRaises(ConfigError) as error:
+            discover_config_path(root)
+        self.assertIn("directory", str(error.exception))
+
+    def test_directory_named_like_the_config_raises_a_config_error(self) -> None:
+        root = _tree({f"{CONFIG_FILENAME}/.keep": ""})
+        with self.assertRaises(ConfigError) as error:
+            discover_config_path(root)
+        self.assertIn("directory", str(error.exception))
+
+    def test_fifo_raises_a_config_error_and_is_never_opened(self) -> None:
+        # A FIFO would block forever on open(); discover_config_path must reject it by
+        # stat shape alone, never attempt to read it.
+        root = _tree({})
+        os.mkfifo(root / CONFIG_FILENAME)
+        with self.assertRaises(ConfigError) as error:
+            discover_config_path(root)
+        self.assertIn("not a regular file", str(error.exception))
+
+    def test_unreadable_file_raises_a_config_error(self) -> None:
+        root = _tree({CONFIG_FILENAME: BASE})
+        (root / CONFIG_FILENAME).chmod(0o000)
+        try:
+            with self.assertRaises(ConfigError) as error:
+                discover_config_path(root)
+        finally:
+            (root / CONFIG_FILENAME).chmod(0o644)
+        self.assertIn("not readable", str(error.exception))
+
+    def test_symlink_to_a_readable_regular_file_still_works(self) -> None:
+        # The positive case a fix here must not break: a config file replaced by a
+        # symlink to another *readable regular file* is a completely ordinary setup
+        # (e.g. a shared config symlinked into several checkouts) and must still load.
+        root = _tree({"real-config.yml": BASE})
+        (root / CONFIG_FILENAME).symlink_to(root / "real-config.yml")
+        found = discover_config_path(root)
+        self.assertEqual(found, root / CONFIG_FILENAME)
+        loaded = load_config(found)
+        self.assertEqual(loaded.config.gate.fail_on, "high")
+
+    def test_walk_does_not_continue_past_a_broken_entry_to_a_config_further_up(self) -> None:
+        # The walk must stop and raise right at the broken entry, not silently skip it
+        # and find a decoy config sitting higher up the tree.
+        root = _tree({CONFIG_FILENAME: BASE, "services/api/.keep": ""})
+        target = root / "services" / "api" / "nonexistent.yml"
+        (root / "services" / "api" / CONFIG_FILENAME).symlink_to(target)
+        with self.assertRaises(ConfigError) as error:
+            discover_config_path(root / "services" / "api")
+        self.assertIn(str(root / "services" / "api" / CONFIG_FILENAME), str(error.exception))
+
+    def test_explicit_config_path_pointing_at_a_broken_symlink_also_fails_closed(self) -> None:
+        # load_config's explicit-path branch (used by --config) must apply the same
+        # check, not just the discovery walk.
+        root = _tree({})
+        (root / CONFIG_FILENAME).symlink_to(root / "nonexistent.yml")
+        with self.assertRaises(ConfigError) as error:
+            load_config(root / CONFIG_FILENAME)
+        self.assertIn("dangling symlink", str(error.exception))
+
+    def test_explicit_config_path_that_is_a_directory_fails_closed_with_an_accurate_message(
+        self,
+    ) -> None:
+        # Before this fix, a directory at the explicit --config path produced the
+        # misleading "configuration file does not exist" (it does exist, just as the
+        # wrong kind of thing); this pins the corrected, accurate message.
+        root = _tree({f"{CONFIG_FILENAME}/.keep": ""})
+        with self.assertRaises(ConfigError) as error:
+            load_config(root / CONFIG_FILENAME)
+        message = str(error.exception)
+        self.assertIn("directory", message)
+        self.assertNotIn("does not exist", message)
+
+
+class SilentGateDisablementReproductionTests(unittest.TestCase):
+    """End-to-end reproduction of the exact defect described in the final review: a real
+    config with `gate.fail_on: low` enforces a gate (scan exits 10); replacing that same
+    file with a dangling symlink used to make the gate silently vanish (scan exits 0)
+    instead of failing closed. Also reproduces `config validate` and `doctor` each
+    falsely claiming "no config file found" while one sits right there, broken.
+    """
+
+    ROOT_DIR = Path(__file__).resolve().parents[1]
+
+    def _config_text(self) -> str:
+        return (
+            "version: 1\n"
+            "artifacts:\n"
+            f"  audit-api:\n    sbom: {self.ROOT_DIR / 'samples/sboms/audit-api.cdx.json'}\n"
+            "evidence:\n"
+            f"  vulnerabilities: [{self.ROOT_DIR / 'samples/vulnerabilities.json'}]\n"
+            "gate:\n  fail_on: low\n"
+        )
+
+    def test_a_dangling_symlink_config_does_not_silently_disable_the_gate(self) -> None:
+        from contextlib import redirect_stderr, redirect_stdout
+        from io import StringIO
+
+        from reachability_advisor.cli import main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / CONFIG_FILENAME
+            config_path.write_text(self._config_text(), encoding="utf-8")
+            with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                real_config_code = main(["scan", "--no-table", "--config", str(config_path)])
+            self.assertEqual(real_config_code, 10)  # gate fires, as expected
+
+            config_path.unlink()
+            config_path.symlink_to(Path(tmp) / "nonexistent-target.yml")
+            with redirect_stdout(StringIO()), redirect_stderr(StringIO()) as captured_err:
+                broken_symlink_code = main(["scan", "--no-table", "--config", str(config_path)])
+            # Before the fix: 0 (the gate silently vanished). Now: 2, fail closed, with a
+            # clear message -- never a quiet return to "no gate at all".
+            self.assertEqual(broken_symlink_code, 2)
+            self.assertIn("dangling symlink", captured_err.getvalue())
+
+    def test_config_validate_does_not_falsely_report_no_config_found(self) -> None:
+        from contextlib import redirect_stderr, redirect_stdout
+        from io import StringIO
+
+        from reachability_advisor.cli import main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / CONFIG_FILENAME
+            config_path.symlink_to(Path(tmp) / "nonexistent-target.yml")
+            with redirect_stdout(StringIO()) as out, redirect_stderr(StringIO()) as err:
+                code = main(["config", "validate", "--config", str(config_path)])
+            self.assertEqual(code, 2)
+            self.assertNotIn("no config file found", out.getvalue().lower())
+            self.assertIn("dangling symlink", err.getvalue())
+
+    def test_doctor_does_not_falsely_report_no_config_found(self) -> None:
+        from contextlib import redirect_stderr, redirect_stdout
+        from io import StringIO
+
+        from reachability_advisor.cli import main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / CONFIG_FILENAME
+            config_path.symlink_to(Path(tmp) / "nonexistent-target.yml")
+            with redirect_stdout(StringIO()) as out, redirect_stderr(StringIO()) as err:
+                code = main(["doctor", "--config", str(config_path), "--root", tmp])
+            self.assertEqual(code, 2)
+            self.assertNotIn("No .reachability.yml found", out.getvalue())
+            self.assertIn("dangling symlink", err.getvalue())
+
+
+class PathValuedFieldBoundaryTests(unittest.TestCase):
+    """`extends` cannot climb out of the repository it was declared in; every other
+    path-valued config field (artifacts.*, evidence.*, iac.*, output.dir) must be bound
+    the same way for a *relative* escape -- see `_check_declared_path_boundaries`.
+    Scoped to relative paths only: an absolute path has exactly the reach an equivalent
+    CLI flag already has (see the function's own docstring for why).
+    """
+
+    def test_rejects_a_relative_kubernetes_path_that_escapes_the_repository(self) -> None:
+        outer = Path(tempfile.mkdtemp())
+        secret = outer / "secrets.yaml"
+        secret.write_text("password: hunter2\n", encoding="utf-8")
+        root = outer / "repo"
+        (root / ".git").mkdir(parents=True)
+        (root / CONFIG_FILENAME).write_text(
+            "version: 1\n"
+            "artifacts:\n  api:\n    sbom: sboms/api.cdx.json\n"
+            "iac:\n  kubernetes: ../secrets.yaml\n",
+            encoding="utf-8",
+        )
+        with self.assertRaises(ConfigError) as error:
+            load_config(root / CONFIG_FILENAME)
+        message = str(error.exception)
+        self.assertIn("iac.kubernetes", message)
+        self.assertIn("outside the repository", message)
+
+    def test_rejects_an_escaping_relative_sbom_path(self) -> None:
+        outer = Path(tempfile.mkdtemp())
+        root = outer / "repo"
+        root.mkdir()
+        (root / CONFIG_FILENAME).write_text(
+            "version: 1\nartifacts:\n  api:\n    sbom: ../../outside/sbom.json\n",
+            encoding="utf-8",
+        )
+        with self.assertRaises(ConfigError) as error:
+            load_config(root / CONFIG_FILENAME)
+        self.assertIn("artifacts.api.sbom", str(error.exception))
+
+    def test_rejects_an_escaping_relative_evidence_entry(self) -> None:
+        outer = Path(tempfile.mkdtemp())
+        root = outer / "repo"
+        root.mkdir()
+        (root / CONFIG_FILENAME).write_text(
+            "version: 1\n"
+            "artifacts:\n  api:\n    sbom: sboms/api.cdx.json\n"
+            "evidence:\n  vulnerabilities: [../../etc/somewhere.json]\n",
+            encoding="utf-8",
+        )
+        with self.assertRaises(ConfigError) as error:
+            load_config(root / CONFIG_FILENAME)
+        self.assertIn("evidence.vulnerabilities", str(error.exception))
+
+    def test_rejects_an_escaping_output_dir(self) -> None:
+        outer = Path(tempfile.mkdtemp())
+        root = outer / "repo"
+        root.mkdir()
+        (root / CONFIG_FILENAME).write_text(
+            "version: 1\noutput:\n  dir: ../../elsewhere\n", encoding="utf-8"
+        )
+        with self.assertRaises(ConfigError) as error:
+            load_config(root / CONFIG_FILENAME)
+        self.assertIn("output.dir", str(error.exception))
+
+    def test_absolute_paths_are_exempt_from_the_boundary_check(self) -> None:
+        # An absolute path has exactly the reach an equivalent CLI flag already has and
+        # has never been restricted; this must keep working unchanged.
+        outer = Path(tempfile.mkdtemp())
+        elsewhere = outer / "elsewhere" / "sbom.json"
+        elsewhere.parent.mkdir(parents=True)
+        elsewhere.write_text("{}", encoding="utf-8")
+        root = outer / "repo"
+        root.mkdir()
+        (root / CONFIG_FILENAME).write_text(
+            f"version: 1\nartifacts:\n  api:\n    sbom: {elsewhere}\n", encoding="utf-8"
+        )
+        loaded = load_config(root / CONFIG_FILENAME)
+        self.assertEqual(loaded.config.artifacts["api"].sbom, str(elsewhere))
+
+    def test_in_bounds_relative_paths_are_unaffected(self) -> None:
+        root = _tree({
+            CONFIG_FILENAME: (
+                "version: 1\n"
+                "artifacts:\n  api:\n    sbom: sboms/api.cdx.json\n    manifest: m.json\n"
+                "evidence:\n  sast: [semgrep.json]\n"
+                "iac:\n  kubernetes: k8s\n"
+                "output:\n  dir: outputs\n"
+            ),
+        })
+        loaded = load_config(root / CONFIG_FILENAME)
+        self.assertEqual(loaded.config.artifacts["api"].sbom, "sboms/api.cdx.json")
+
+
+class YamlErrorDoesNotEchoFileContentTests(unittest.TestCase):
+    """A YAML parse failure must report where and what went wrong, never the surrounding
+    document text -- a config-declared path can name a file this process can open but
+    should not disclose the contents of (for example a secrets file reached by a relative
+    path before the boundary check above existed, or one legitimately outside the
+    boundary via an absolute path). See `yaml_loader._safe_yaml_error_detail`.
+    """
+
+    def test_malformed_yaml_error_does_not_contain_the_offending_line(self) -> None:
+        root = _tree({
+            CONFIG_FILENAME: (
+                "version: 1\n"
+                "artifacts:\n"
+                "  api:\n"
+                "    sbom: [unclosed\n"
+                "    secret_token: sk-supersecrettoken12345\n"
+            ),
+        })
+        with self.assertRaises(ConfigError) as error:
+            load_config(root / CONFIG_FILENAME)
+        message = str(error.exception)
+        self.assertIn("invalid YAML", message)
+        self.assertNotIn("sk-supersecrettoken12345", message)
+        self.assertNotIn("secret_token", message)
+        # The location is still reported, so a real user can still find and fix it.
+        self.assertIn("line", message)
+        self.assertIn("column", message)
 
 
 class ExtendsTests(unittest.TestCase):

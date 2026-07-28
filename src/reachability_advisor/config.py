@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -23,15 +25,70 @@ class LoadedConfig:
     provenance: dict[str, str] = field(default_factory=dict)
 
 
+def _existing_config_problem(candidate: Path) -> str | None:
+    """Describe why `candidate` cannot be used as a configuration file.
+
+    Returns `None` in exactly two cases that a caller should treat very differently:
+    nothing at all exists at `candidate` (an absent path is not a problem -- a discovery
+    walk should keep looking further up the tree), or `candidate` is a readable regular
+    file (or a symlink chain that ultimately resolves to one) -- a genuinely usable config.
+
+    Every other outcome describes a real problem: a dangling symlink, a symlink to a
+    directory, a symlink to anything else that is not a regular file, a plain directory, a
+    FIFO/socket/device, or a regular file this process cannot read. Before this existed,
+    `discover_config_path` asked only `candidate.is_file()`, which is `False` for every one
+    of those cases -- indistinguishable from "nothing here, keep walking up." A
+    `.reachability.yml` replaced by a dangling symlink (a legitimate git blob: mode
+    `120000`) therefore made the walk silently continue past it and fall back to built-in
+    defaults, `path=None` -- which every consumer (the gate, `config validate`, `doctor`)
+    reads as "no config file found," even though one is sitting right there, broken. This
+    is used both by `discover_config_path` (which must fail loudly here, not walk past a
+    broken entry) and by `load_config`'s explicit-`--config`-path branch (for the same
+    reason, with a more accurate message than a bare "does not exist").
+    """
+    try:
+        info = candidate.lstat()
+    except OSError:
+        return None  # Nothing here at all; not a problem, just absent.
+    if stat.S_ISLNK(info.st_mode):
+        try:
+            target_info = candidate.stat()  # Follows the whole symlink chain.
+        except OSError:
+            return "a symlink whose target does not exist (a dangling symlink)"
+        if stat.S_ISDIR(target_info.st_mode):
+            return "a symlink to a directory, not a file"
+        if not stat.S_ISREG(target_info.st_mode):
+            return "a symlink to something that is not a regular file"
+        # Resolves to a real regular file: fall through to the readability check below,
+        # exactly as for a plain (non-symlink) regular file.
+    elif stat.S_ISDIR(info.st_mode):
+        return "a directory, not a file"
+    elif not stat.S_ISREG(info.st_mode):
+        return "not a regular file (for example a FIFO, socket, or device)"
+    if not os.access(candidate, os.R_OK):
+        return "not readable (permission denied)"
+    return None
+
+
 def discover_config_path(start: Path) -> Path | None:
     """Find the nearest config, walking up no further than the git root.
 
     A config outside the repository is not reviewable in that repository's pull requests,
     so the search stops at the repo boundary rather than reaching into the home directory.
+
+    An entry that exists but is not a usable config file (see `_existing_config_problem`)
+    stops the walk with a loud `ConfigError` rather than being silently treated as absent:
+    walking past it would fall back to built-in defaults with no config file loaded at
+    all, which is a silently *weaker* outcome than the broken file the repository actually
+    contains -- exactly the "gate that silently stops gating" failure mode this project
+    treats as a defect everywhere else.
     """
     current = start.resolve()
     for directory in (current, *current.parents):
         candidate = directory / CONFIG_FILENAME
+        problem = _existing_config_problem(candidate)
+        if problem is not None:
+            raise ConfigError(f"{candidate}: {problem}; not usable as a configuration file")
         if candidate.is_file():
             return candidate
         if (directory / ".git").exists():
@@ -196,6 +253,59 @@ def _flatten(block: dict[str, Any], prefix: str = "") -> list[str]:
     return keys
 
 
+def _check_declared_path_boundaries(config: ReachabilityConfig, config_path: Path) -> None:
+    """Reject a relative, path-valued config field that resolves outside the repository.
+
+    `extends` already cannot climb out of the repository it was declared in (see
+    `_repo_boundary`/`_resolve_extends`); every other path-valued field -- an artifact's
+    `sbom`/`source`/`manifest`, an `evidence.*` entry, an `iac.*` path, `output.dir` -- was
+    not checked at all. A relative path with enough `../` segments still names a file
+    outside the repository, for example `iac.kubernetes: ../../secrets.yaml`; a parse
+    failure on that file used to echo its content into the error message (see
+    `yaml_loader`'s safe error formatting), which together let a PR-controlled config
+    disclose a file this repository does not own -- for example in a CI log a pull request
+    author can read.
+
+    Deliberately scoped to *relative* paths only: an absolute path here has exactly the
+    reach an equivalent CLI flag already has and has never been restricted (`--sbom
+    /anywhere`, `--kubernetes-manifest /anywhere`, ...) -- these config fields are direct
+    stand-ins for those flags, not a new, more powerful primitive the way `extends` is
+    (which pulls in and merges a whole second config document, offline, from a location
+    the repository does not otherwise reference at all). Boundary-checking relative
+    escapes closes the concrete `../` disclosure path without changing what an absolute
+    path can already do today, or requiring every legitimate absolute-path config in use
+    today to be rewritten.
+    """
+    boundary = _repo_boundary(config_path)
+    base = config_path.parent.resolve()
+
+    def check(value: str, label: str) -> None:
+        candidate = Path(value)
+        if candidate.is_absolute():
+            return
+        resolved = (base / candidate).resolve()
+        if not resolved.is_relative_to(boundary):
+            raise ConfigError(
+                f"{config_path}: {label} {value!r} resolves outside the repository root. "
+                "A relative config path may not leave the project; use an absolute path, "
+                "or move the referenced file into the repository."
+            )
+
+    for name, artifact in config.artifacts.items():
+        if artifact.sbom:
+            check(artifact.sbom, f"artifacts.{name}.sbom")
+        if artifact.source:
+            check(artifact.source, f"artifacts.{name}.source")
+        if artifact.manifest:
+            check(artifact.manifest, f"artifacts.{name}.manifest")
+    for key, values in config.evidence.items():
+        for value in values:
+            check(value, f"evidence.{key}")
+    for key, value in config.iac.items():
+        check(value, f"iac.{key}")
+    check(config.output.dir, "output.dir")
+
+
 def load_config(path: str | Path | None, start: Path | None = None) -> LoadedConfig:
     """Load and validate configuration, or return defaults when none exists."""
     if path is None:
@@ -204,12 +314,17 @@ def load_config(path: str | Path | None, start: Path | None = None) -> LoadedCon
             return LoadedConfig(config=validate_config({"version": 1}, "defaults"))
         path = found
     config_path = Path(path)
+    problem = _existing_config_problem(config_path)
+    if problem is not None:
+        raise ConfigError(f"{config_path}: {problem}; not usable as a configuration file")
     if not config_path.is_file():
         raise ConfigError(f"{config_path}: configuration file does not exist")
     layers = resolve_layers(config_path)
     merged = merge_layers(layers)
+    resolved = validate_config(merged, str(config_path))
+    _check_declared_path_boundaries(resolved, config_path)
     return LoadedConfig(
-        config=validate_config(merged, str(config_path)),
+        config=resolved,
         path=config_path,
         provenance=_provenance(layers),
     )

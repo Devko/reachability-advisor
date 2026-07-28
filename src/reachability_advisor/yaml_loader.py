@@ -22,6 +22,41 @@ class YamlError(ValueError):
     """
 
 
+def _safe_yaml_error_detail(exc: yaml.YAMLError) -> str:
+    """Describe a YAML parse failure by location and problem only, never by quoting the
+    surrounding document text.
+
+    `str()` on a `yaml.error.MarkedYAMLError` (the base class of every error `safe_load`
+    actually raises for malformed syntax -- `ScannerError`, `ParserError`,
+    `ComposerError`, `ConstructorError`) renders a snippet of the source around the
+    failure, via `Mark.__str__`/`get_snippet()` -- for example a whole line reading
+    `secret: sk-supersecrettoken12345`. That is useful for a human debugging their own
+    file locally, but every caller of this loader reads attacker-influenceable input: a
+    pull request can edit `.reachability.yml`, and a config-declared relative path can
+    (even after the repository-boundary check on it) still name a file this process can
+    open but should not disclose the contents of. Echoing the parse failure verbatim into
+    a CI log would hand back exactly the content that made it worth checking the boundary
+    in the first place. This instead reports only the error's own structured fields --
+    `context`, `problem`, and the failing mark's line/column -- which describe *where* and
+    *what* went wrong without repeating any of the document's own text.
+    """
+    if isinstance(exc, yaml.error.MarkedYAMLError):
+        parts = [
+            str(part).strip()
+            for part in (exc.context, exc.problem)
+            if part
+        ]
+        detail = "; ".join(parts) or exc.__class__.__name__
+        mark = exc.problem_mark or exc.context_mark
+        if mark is not None:
+            detail = f"{detail} (line {mark.line + 1}, column {mark.column + 1})"
+        return detail
+    # A non-marked YAMLError (e.g. `ReaderError`, raised for an unacceptable character) --
+    # its own `__str__` already reports only a position and a codepoint/reason, never a
+    # rendered snippet of surrounding text, so it is safe to use as-is.
+    return str(exc)
+
+
 def _check_bounds(value: Any, label: str, depth: int = 0, budget: list[int] | None = None) -> None:
     """Reject documents that are too deep or that expand to too many nodes.
 
@@ -66,7 +101,7 @@ def load_yaml_text(text: str, label: str) -> Any:
         # loader error instead of an uncaught crash.
         raise YamlError(f"{label}: nesting too deep for the YAML parser") from exc
     except yaml.YAMLError as exc:
-        raise YamlError(f"{label}: invalid YAML: {exc}") from None
+        raise YamlError(f"{label}: invalid YAML: {_safe_yaml_error_detail(exc)}") from None
     _check_bounds(parsed, label)
     return parsed
 
@@ -78,7 +113,7 @@ def load_yaml_documents(text: str, label: str) -> list[Any]:
         # See load_yaml_text: safe_load_all's parser recurses the same way while iterating.
         raise YamlError(f"{label}: nesting too deep for the YAML parser") from exc
     except yaml.YAMLError as exc:
-        raise YamlError(f"{label}: invalid YAML: {exc}") from None
+        raise YamlError(f"{label}: invalid YAML: {_safe_yaml_error_detail(exc)}") from None
     for document in documents:
         _check_bounds(document, label)
     return documents
