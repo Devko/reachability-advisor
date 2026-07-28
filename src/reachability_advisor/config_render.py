@@ -51,6 +51,11 @@ def _scalar(value: str) -> str:
     the whole scalar on one physical line, which this renderer's plain
     line-by-line assembly always supports.
 
+    Similarly, NEL (U+0085, NEXT LINE) corrupts silently in single quotes:
+    PyYAML's single-quoted scalar folding treats it as a line break, folding it
+    to a space, causing the value to round-trip as a different string. This is
+    forced to double-quoted style where it can be escaped.
+
     `width` is set far past anything this ever produces for the same reason:
     PyYAML wraps a long scalar at its default 80-column width even without
     any control character present, by inserting a line-fold at an existing
@@ -62,7 +67,11 @@ def _scalar(value: str) -> str:
     but it does not save the surrounding document's structure when that value
     is a key, so this is not treated as a narrower, value-only fix.
     """
-    style = '"' if any(ord(char) < 0x20 for char in value) else None
+    # Force double-quoting for control chars (< 0x20) or NEL (U+0085), which
+    # corrupts in single quotes due to PyYAML treating it as a line break.
+    style = '"' if any(
+        ord(char) < 0x20 or ord(char) == 0x85 for char in value
+    ) else None
     dumped = yaml.safe_dump(
         value, default_flow_style=True, allow_unicode=True, default_style=style, width=1_000_000
     ).rstrip("\n")
@@ -133,13 +142,16 @@ def _comment(text: str) -> str:
       line and could break the document, or at best silently vanish as a stray
       scalar. (\\r\\n and lone \\r are handled the same way, before the general pass
       below, so a Windows-style line ending collapses to one space, not two.)
+      NEL (U+0085, NEXT LINE) also acts as a line break and must be flattened.
     - Any other character YAML does not consider printable (most importantly a raw
       control character like \\x01) is replaced the same way: it cannot be escaped in
       a comment, and left as-is it does not just corrupt this one line -- PyYAML
       refuses to parse a document containing it *anywhere*, so the entire file fails
       to load, not just this comment.
     """
+    # Handle characters that act as line breaks in comments: CR, LF, NEL (U+0085)
     text = text.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+    text = text.replace("\x85", " ")
     return "".join(" " if _is_yaml_forbidden(char) else char for char in text)
 
 

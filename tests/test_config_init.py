@@ -486,6 +486,37 @@ class RenderConfigGateBlockTests(unittest.TestCase):
         self.assertEqual(raw["gate"], {"profile": "advisory", "fail_on": "high"})
 
 
+class ScalarQuotingTests(unittest.TestCase):
+    """Regression tests for characters that corrupt in single quotes."""
+
+    def test_nel_character_round_trips_through_scalar(self) -> None:
+        # NEL (U+0085, NEXT LINE) corrupts silently in single quotes: PyYAML folds it
+        # to a space, causing 'svc\x85name' to parse as 'svc name'. The fix uses
+        # double quotes for NEL-containing values.
+        nel_value = "svc\x85name"
+        scalar = config_render._scalar(nel_value)
+        parsed = yaml.safe_load(scalar)
+        self.assertEqual(parsed, nel_value, f"NEL char corrupted: got {repr(parsed)}")
+
+    def test_nel_as_artifact_path(self) -> None:
+        # End-to-end test: a detected path containing NEL survives init and load.
+        nel_dir = "path\x85with\x85nel"
+        root = _repo({f"sboms/{nel_dir}/api.cdx.json": "{}"})
+        self.assertEqual(main(["init", "--root", str(root)]), 0)
+        loaded = load_config(root / CONFIG_FILENAME)
+        artifact = next(iter(loaded.config.artifacts.values()))
+        self.assertEqual(artifact.sbom, f"sboms/{nel_dir}/api.cdx.json")
+
+    def test_nel_as_artifact_name(self) -> None:
+        # NEL in an artifact name (which becomes a YAML mapping key).
+        nel_dir = "api\x85service"
+        root = _repo({f"{nel_dir}/package-lock.json": "{}"})
+        self.assertEqual(main(["init", "--root", str(root)]), 0)
+        loaded = load_config(root / CONFIG_FILENAME)
+        self.assertIn(nel_dir, loaded.config.artifacts)
+        self.assertEqual(loaded.config.artifacts[nel_dir].source, nel_dir)
+
+
 class RenderConfigRoundTripGuardTests(unittest.TestCase):
     """The general guard: render_config must refuse to return a document it cannot
     load and validate back, rather than hand back something broken with no error.
