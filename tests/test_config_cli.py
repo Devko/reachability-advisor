@@ -428,5 +428,77 @@ class ScanEndToEndConfigTests(unittest.TestCase):
         self.assertEqual(code, 2)
 
 
+class ConAbbreviationBackwardCompatibilityTests(unittest.TestCase):
+    """Final-review should-fix 6: before `--config` existed, `--con` was the only
+    "--con*"-prefixed option on `scan`, so argparse's own abbreviation resolution
+    accepted it unambiguously as `--context`. Adding `--config` made "--con" a prefix of
+    *two* option strings (--context, --config), so argparse's abbreviation resolution
+    alone now rejects it outright ("ambiguous option: --con could match --context,
+    --config") -- a real backward-compatibility break for any existing script that relied
+    on the old, unambiguous abbreviation.
+
+    Resolution: `--con` is registered as an explicit, literal alias for `--context` (see
+    cli_parser.py), not left to abbreviation resolution. argparse checks for an exact
+    option-string match *before* ever attempting prefix/abbreviation resolution (pinned
+    directly by `test_exact_match_wins_even_when_also_a_prefix_of_a_sibling_option` in
+    `AbbreviatedFlagDetectionTests`, above), so a literal "--con" now resolves to
+    --context immediately and is never even considered as a prefix of --config. This is
+    also more future-proof than relying on abbreviation staying unambiguous forever: it
+    stays unambiguous even if another "--con*"-prefixed flag is ever added later.
+    """
+
+    def test_bare_con_resolves_to_context_not_ambiguous(self) -> None:
+        from reachability_advisor.cli_parser import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["scan", "--con", "ctx.json", "--sbom", "x.json"])
+        self.assertEqual(args.context, "ctx.json")
+        self.assertIsNone(args.config)
+
+    def test_con_equals_form_also_resolves_to_context(self) -> None:
+        from reachability_advisor.cli_parser import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["scan", "--con=ctx.json", "--sbom", "x.json"])
+        self.assertEqual(args.context, "ctx.json")
+
+    def test_con_is_detected_as_an_explicit_dest_for_context(self) -> None:
+        # explicit_dests (cli.py) must recognise the alias too, or a `--con`-supplied
+        # context on the command line would be silently treated as unset by
+        # apply_config_defaults-style filling (context has no config equivalent today,
+        # but this is the same mechanism relied on for every other flag).
+        from reachability_advisor.cli import explicit_dests
+        from reachability_advisor.cli_parser import build_parser
+
+        parser = build_parser()
+        self.assertIn("context", explicit_dests(parser, ["scan", "--con", "ctx.json"]))
+
+    def test_full_context_flag_still_works_unaffected(self) -> None:
+        from reachability_advisor.cli_parser import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["scan", "--context", "ctx.json", "--sbom", "x.json"])
+        self.assertEqual(args.context, "ctx.json")
+
+    def test_full_config_flag_is_unambiguous_and_unaffected_by_the_alias(self) -> None:
+        from reachability_advisor.cli_parser import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["scan", "--config", "cfg.yml", "--sbom", "x.json"])
+        self.assertEqual(args.config, "cfg.yml")
+        self.assertIsNone(args.context)
+
+    def test_an_unambiguous_partial_abbreviation_of_config_still_works(self) -> None:
+        # "--conf" is a prefix of --config only (not of the literal "--con" alias, which
+        # is an exact option string, not a prefix target) -- argparse's own abbreviation
+        # resolution still applies normally to every option string that isn't a fixed
+        # alias itself.
+        from reachability_advisor.cli_parser import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["scan", "--conf", "cfg.yml", "--sbom", "x.json"])
+        self.assertEqual(args.config, "cfg.yml")
+
+
 if __name__ == "__main__":
     unittest.main()
