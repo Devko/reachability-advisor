@@ -10,24 +10,42 @@ checks that could silently drift from what `scan` actually enforces. The remaini
 (a required flag, an input combination `scan` explicitly rejects) mirror a real requirement
 inside `run_scan` / `apply_config_defaults` (cli.py) directly, for the same reason.
 
-Doctor stops at the same layer `validate_paths` does: does the declared path exist, is it
+Doctor starts at the same layer `validate_paths` does: does the declared path exist, is it
 the right kind of thing (a file, not a directory; a directory, not a file; YAML/JSON for a
-Kubernetes manifest), and is it non-empty. Neither doctor nor `validate_paths` opens a file
-to check whether its *content* parses (valid JSON/YAML, valid CycloneDX) or whether the
-process can actually read it (file permissions). That gap is intentional and shared: a file
-that exists, is the right kind, and is non-empty but contains garbage, or one `scan` cannot
-open because of filesystem permissions, passes both `doctor` and `validate_paths` and is
-only caught once `scan`'s own loaders try to parse or open it -- which fails closed with a
-clear, specific error (e.g. "invalid JSON", or a permission error), never a silent success
-and never an unhandled traceback. Doing that check here too would require doctor to
-duplicate every loader's parsing logic, which is exactly the kind of drift-prone
-reimplementation this module exists to avoid; "does it exist and is it usable as a file"
-is doctor's remit, "is it valid" stays `scan`'s.
+Kubernetes manifest), and is it non-empty. A bare `Path.exists()`/`is_file()` check stops
+there -- but a file that exists, is the right kind, and is non-empty can still contain
+garbage a report saying "ready" should not paper over: a `scan` run against it fails anyway,
+just two steps later than doctor could have caught it. So once a declared input clears the
+`validate_paths`-level check, doctor takes one more step for every input that has a cheap
+one: it calls the *exact same loader* `scan` itself calls on that input -- `sbom.load_sbom`,
+`vulnerability.load_vulnerabilities`, `terraform.load_terraform_plan`,
+`kubernetes.load_kubernetes_resources` (via `_manifest_files`, for a single file or a
+directory), `security_evidence_adapters.load_security_evidence` -- and reports whatever error
+that loader raises as a blocker, in the loader's own words. This is reuse, not
+reimplementation: doctor never parses JSON or YAML itself, it only calls the function that
+already does, so a parse failure doctor misses is a parse failure `scan` would not have hit
+either, by construction. `_check_content` (below) is the one place this happens, and it is
+deliberately narrow -- it calls the loader and catches what the loader raises, nothing more.
+
+One input is deliberately left unchecked past the `validate_paths` layer:
+`iac.terraform_source`. Unlike every JSON/YAML loader above, `scan`'s HCL "loader"
+(`hcl_static.audit_hcl_project`) is regex extraction, not a parser with a fail state -- it
+never raises on malformed `.tf` syntax, a garbage body just yields zero extracted blocks, and
+`scan` still exits 0. There is no "invalid HCL" error to reuse the way `load_sbom` raises on
+invalid JSON, so calling it from doctor would add a real parsing cost (a full regex pass plus
+tfvars resolution over every `.tf` file) to catch nothing `_validate_terraform_source` does
+not already catch. See the inline comment at that check.
+
+A file the process cannot open because of filesystem permissions is not a separate case to
+handle: it surfaces as the same `OSError` `_check_content` already catches when the loader
+tries to read it, so it becomes a blocker the same way malformed content does, with no
+extra code.
 
 Two independent kinds of problem are reported. `blockers` are what stop `scan` from
 running at all, or from producing a trustworthy result: a required path that is missing,
-the wrong kind, or empty (an `error`-severity issue in `validate_paths`); at least one
-artifact must declare an `sbom` (`run_scan` raises without one); at least one vulnerability
+the wrong kind, or empty (an `error`-severity issue in `validate_paths`); a required path
+whose *content* fails to parse (an error `_check_content` catches from `scan`'s own loader);
+at least one artifact must declare an `sbom` (`run_scan` raises without one); at least one vulnerability
 input must be declared; and `iac.terraform` / `iac.terraform_source` must never both be set
 (`scan` rejects that combination outright). `warnings` are gaps `validate_paths` itself
 only rates `warning` severity: `scan` still runs and still exits 0, just against weaker
@@ -49,18 +67,26 @@ a generic "nothing is declared".
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 from .config import LoadedConfig
+from .kubernetes import _manifest_files, load_kubernetes_resources
+from .sbom import load_sbom
+from .security_evidence_adapters import load_security_evidence
+from .terraform import load_terraform_plan
 from .validators import (
     ValidationIssue,
     _validate_file,
     _validate_kubernetes_manifest,
     _validate_source_root,
     _validate_terraform_source,
+    has_errors,
 )
+from .vulnerability import load_vulnerabilities
 
 GRYPE_COMMAND = "grype sbom:{sbom} -o json > {out}"
 SYFT_COMMAND = "syft dir:{path} -o cyclonedx-json > {out}"
@@ -96,11 +122,49 @@ def _record(readiness: Readiness, issues: list[ValidationIssue], *, context: str
         bucket.append(message)
 
 
+def _check_content(issues: list[ValidationIssue], label: str, loader: Callable[[], object]) -> None:
+    """Parse a file exactly the way `scan`'s own loader will, once the file-level check
+    above already found nothing wrong -- turning a parse failure `scan` would hit into the
+    same kind of blocker a missing or empty file already gets, with the loader's own
+    message.
+
+    Reuses `scan`'s loader instead of re-implementing "is this valid JSON/YAML" here, so the
+    two checks cannot silently drift apart the way `Path.exists()` once did (see the module
+    docstring, and the fix that closed that gap). `ValueError` catches every loader's own
+    error type -- `SbomError`, `VulnerabilityError`, `TerraformContextError`,
+    `KubernetesManifestError`, and `SecurityEvidenceError` all subclass it -- plus stdlib
+    `json.JSONDecodeError` and `UnicodeDecodeError`, which are also `ValueError`. `OSError`
+    catches a permission or other filesystem failure a loader does not itself convert to its
+    own error type (an unreadable file that slipped past the file-level existence/type/size
+    check above). `RecursionError` guards deeply nested input for the one loader
+    (`load_terraform_plan`) that does not already convert it to a controlled error the way
+    its siblings do. None of these can reach the caller as an unhandled traceback -- exactly
+    doctor's "never crash" requirement.
+    """
+    try:
+        loader()
+    except (ValueError, OSError, RecursionError) as exc:
+        issues.append(ValidationIssue("error", label, str(exc)))
+
+
+def _load_kubernetes_content(path: Path) -> None:
+    """Parse every manifest file `scan` would find under `path` -- a single file or a
+    directory -- using the exact file-discovery (`_manifest_files`) and per-file parser
+    (`load_kubernetes_resources`) `analyze_kubernetes_manifests` uses internally.
+    Deliberately stops there: the context-matching and coverage-report computation
+    `analyze_kubernetes_manifests` also does needs a real artifact list and belongs to
+    `scan`, not to a content-parses check.
+    """
+    for manifest_file in _manifest_files([path]):
+        load_kubernetes_resources(manifest_file)
+
+
 def diagnose(loaded: LoadedConfig, root: Path) -> Readiness:
     """Check every declared input the same way `scan` will, and that `scan` can run at all.
 
-    See the module docstring for how blockers and warnings are told apart, and why content
-    validity and file readability are out of scope for both doctor and `validate_paths`.
+    See the module docstring for how blockers and warnings are told apart, how content
+    validity is checked by calling `scan`'s own loaders via `_check_content`, and why
+    `iac.terraform_source` is the one input left at the existence/type/size layer only.
     """
     readiness = Readiness()
     root = root.resolve()
@@ -129,6 +193,8 @@ def diagnose(loaded: LoadedConfig, root: Path) -> Readiness:
         else:
             sbom_issues: list[ValidationIssue] = []
             _validate_file(str(root / artifact.sbom), "sbom", sbom_issues)
+            if not has_errors(sbom_issues):
+                _check_content(sbom_issues, "sbom", partial(load_sbom, root / artifact.sbom))
             present["sbom"] = not sbom_issues
             if sbom_issues:
                 missing.append("sbom")
@@ -175,6 +241,8 @@ def diagnose(loaded: LoadedConfig, root: Path) -> Readiness:
     for item in vulnerabilities:
         vuln_issues: list[ValidationIssue] = []
         _validate_file(str(root / item), "vuln-in", vuln_issues)
+        if not has_errors(vuln_issues):
+            _check_content(vuln_issues, "vuln-in", partial(load_vulnerabilities, root / item))
         if vuln_issues:
             readiness.next_actions.append(
                 GRYPE_COMMAND.format(sbom="sboms/<artifact>.cdx.json", out=item)
@@ -191,6 +259,12 @@ def diagnose(loaded: LoadedConfig, root: Path) -> Readiness:
         for item in config.evidence.get(category, ()):
             category_issues: list[ValidationIssue] = []
             _validate_file(str(root / item), category, category_issues)
+            if not has_errors(category_issues):
+                _check_content(
+                    category_issues,
+                    category,
+                    partial(load_security_evidence, [root / item], default_scanner_type=category),
+                )
             _record(readiness, category_issues, context=f"{category} evidence")
 
     terraform = config.iac.get("terraform")
@@ -204,18 +278,33 @@ def diagnose(loaded: LoadedConfig, root: Path) -> Readiness:
     if terraform:
         terraform_issues: list[ValidationIssue] = []
         _validate_file(str(root / terraform), "terraform-plan", terraform_issues)
+        if not has_errors(terraform_issues):
+            _check_content(
+                terraform_issues, "terraform-plan", partial(load_terraform_plan, root / terraform)
+            )
         if terraform_issues:
             readiness.next_actions.append(TERRAFORM_COMMAND.format(out=terraform))
         _record(readiness, terraform_issues, context="Terraform plan")
     if terraform_source:
         terraform_source_issues: list[ValidationIssue] = []
         _validate_terraform_source(str(root / terraform_source), terraform_source_issues)
+        # No content-loader call here, unlike every other input above: see the module
+        # docstring for why `iac.terraform_source` has no analogous "invalid content" error
+        # to reuse -- `scan`'s HCL extraction never fails closed on malformed `.tf` syntax,
+        # it just extracts fewer blocks, so there is nothing `_check_content` could catch
+        # that `_validate_terraform_source` above does not already catch.
         _record(readiness, terraform_source_issues)
 
     kubernetes = config.iac.get("kubernetes")
     if kubernetes:
         kubernetes_issues: list[ValidationIssue] = []
         _validate_kubernetes_manifest(str(root / kubernetes), kubernetes_issues)
+        if not has_errors(kubernetes_issues):
+            _check_content(
+                kubernetes_issues,
+                "kubernetes-manifest",
+                partial(_load_kubernetes_content, root / kubernetes),
+            )
         _record(readiness, kubernetes_issues)
 
     if config.gate.profile == "production" and readiness.blockers:

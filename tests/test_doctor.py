@@ -184,6 +184,169 @@ evidence:
         self.assertTrue(any("production" in item for item in readiness.blockers))
 
 
+class DoctorContentValidationTests(unittest.TestCase):
+    """Every input `doctor` reports on is checked by the loader `scan` will later use for
+    it -- `_check_content` (doctor.py) calls that loader directly and files whatever it
+    raises as a blocker, in the loader's own words. One test per input type, plus the one
+    input type deliberately left unchecked past existence/type/size (`iac.terraform_source`,
+    documented in the module docstring).
+    """
+
+    def test_malformed_sbom_json_is_a_blocker_with_the_loaders_message(self) -> None:
+        root = _repo(
+            {
+                CONFIG_FILENAME: COMPLETE,
+                "sboms/api.cdx.json": "{not valid json",
+                "grype.json": "{}",
+                "src/api/.keep": "",
+            }
+        )
+        readiness = diagnose(load_config(root / CONFIG_FILENAME), root)
+        self.assertFalse(readiness.ready)
+        self.assertTrue(any("invalid JSON" in item for item in readiness.blockers), readiness.blockers)
+
+    def test_malformed_vulnerability_json_is_a_blocker_with_the_loaders_message(self) -> None:
+        root = _repo(
+            {
+                CONFIG_FILENAME: COMPLETE,
+                "sboms/api.cdx.json": "{}",
+                "grype.json": "{not valid json",
+                "src/api/.keep": "",
+            }
+        )
+        readiness = diagnose(load_config(root / CONFIG_FILENAME), root)
+        self.assertFalse(readiness.ready)
+        self.assertTrue(any("invalid JSON" in item for item in readiness.blockers), readiness.blockers)
+
+    def test_malformed_terraform_plan_json_is_a_blocker_with_the_loaders_message(self) -> None:
+        config = """version: 1
+artifacts:
+  api:
+    sbom: sboms/api.cdx.json
+evidence:
+  vulnerabilities: [grype.json]
+iac:
+  terraform: tfplan.json
+"""
+        root = _repo(
+            {
+                CONFIG_FILENAME: config,
+                "sboms/api.cdx.json": "{}",
+                "grype.json": "{}",
+                "tfplan.json": "{not valid json",
+            }
+        )
+        readiness = diagnose(load_config(root / CONFIG_FILENAME), root)
+        self.assertFalse(readiness.ready)
+        self.assertTrue(any("invalid JSON" in item for item in readiness.blockers), readiness.blockers)
+
+    def test_malformed_kubernetes_manifest_is_a_blocker_with_the_loaders_message(self) -> None:
+        config = """version: 1
+artifacts:
+  api:
+    sbom: sboms/api.cdx.json
+evidence:
+  vulnerabilities: [grype.json]
+iac:
+  kubernetes: k8s.yaml
+"""
+        root = _repo(
+            {
+                CONFIG_FILENAME: config,
+                "sboms/api.cdx.json": "{}",
+                "grype.json": "{}",
+                "k8s.yaml": "apiVersion: v1\nkind: [unterminated\n",
+            }
+        )
+        readiness = diagnose(load_config(root / CONFIG_FILENAME), root)
+        self.assertFalse(readiness.ready)
+        self.assertTrue(any("invalid YAML" in item for item in readiness.blockers), readiness.blockers)
+
+    def test_malformed_kubernetes_manifest_directory_is_a_blocker(self) -> None:
+        # `iac.kubernetes` can be a directory of rendered manifests, not just one file --
+        # doctor must walk it (via `_manifest_files`, the same discovery `scan` uses) rather
+        # than only checking a single declared path.
+        config = """version: 1
+artifacts:
+  api:
+    sbom: sboms/api.cdx.json
+evidence:
+  vulnerabilities: [grype.json]
+iac:
+  kubernetes: rendered
+"""
+        root = _repo(
+            {
+                CONFIG_FILENAME: config,
+                "sboms/api.cdx.json": "{}",
+                "grype.json": "{}",
+                "rendered/deployment.yaml": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\n",
+                "rendered/broken.yaml": "kind: [unterminated\n",
+            }
+        )
+        readiness = diagnose(load_config(root / CONFIG_FILENAME), root)
+        self.assertFalse(readiness.ready)
+        self.assertTrue(any("invalid YAML" in item for item in readiness.blockers), readiness.blockers)
+
+    def test_malformed_sast_evidence_json_is_a_blocker_with_the_loaders_message(self) -> None:
+        config = """version: 1
+artifacts:
+  api:
+    sbom: sboms/api.cdx.json
+evidence:
+  vulnerabilities: [grype.json]
+  sast: [semgrep.json]
+"""
+        root = _repo(
+            {
+                CONFIG_FILENAME: config,
+                "sboms/api.cdx.json": "{}",
+                "grype.json": "{}",
+                "semgrep.json": "{not valid json",
+            }
+        )
+        readiness = diagnose(load_config(root / CONFIG_FILENAME), root)
+        self.assertFalse(readiness.ready)
+        self.assertTrue(any("invalid JSON" in item for item in readiness.blockers), readiness.blockers)
+
+    def test_terraform_source_malformed_hcl_is_not_a_content_blocker(self) -> None:
+        # Documented, deliberate divergence (see doctor.py's module docstring): `scan`'s
+        # HCL extraction never fails closed on malformed `.tf` syntax -- a garbage body
+        # just yields zero extracted resource/data/module blocks, and `scan` still exits 0.
+        # There is no "invalid HCL" error for doctor to reuse, so a `.tf` file that exists,
+        # is the right extension, and is non-empty stays `ready`, matching what a real
+        # `scan` against the same input actually does.
+        config = """version: 1
+artifacts:
+  api:
+    sbom: sboms/api.cdx.json
+evidence:
+  vulnerabilities: [grype.json]
+iac:
+  terraform_source: infra
+"""
+        root = _repo(
+            {
+                CONFIG_FILENAME: config,
+                "sboms/api.cdx.json": "{}",
+                "grype.json": "{}",
+                "infra/main.tf": "resource !!! not even close to valid hcl {{{",
+            }
+        )
+        readiness = diagnose(load_config(root / CONFIG_FILENAME), root)
+        self.assertTrue(readiness.ready, render_text(readiness))
+
+        old_cwd = Path.cwd()
+        config_path = root / CONFIG_FILENAME
+        try:
+            os.chdir(root)
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                scan_code = main(["scan", "--config", str(config_path), "--no-table"])
+        finally:
+            os.chdir(old_cwd)
+        self.assertEqual(scan_code, 0)
+
+
 class DoctorCommandTests(unittest.TestCase):
     def test_exits_non_zero_when_not_ready(self) -> None:
         root = _repo({CONFIG_FILENAME: COMPLETE})
@@ -383,13 +546,16 @@ evidence:
 class DoctorScanAgreementMatrixTests(unittest.TestCase):
     """Doctor's `ready` verdict must agree with whether `scan` actually succeeds.
 
-    Every row is a config shape a real repository can end up in. For every shape except
-    the two this project has deliberately chosen not to detect at the `doctor`/
-    `validate_paths` layer -- malformed file *content*, and a file the process cannot
-    read -- `doctor.ready` must exactly predict whether `scan` exits 0. Those two shapes
-    are asserted explicitly as the documented exception, not silently skipped: see
-    `doctor.py`'s module docstring for why doctor stops at existence/type/size/extension
-    and never opens a file to check content validity or readability.
+    Every row is a config shape a real repository can end up in, and `doctor.ready` must
+    exactly predict whether `scan` exits 0. This used to have two documented exceptions --
+    malformed file *content*, and a file the process cannot read -- because `doctor` stopped
+    at existence/type/size/extension and never opened a file. Both are closed now: `doctor`
+    parses content by calling the same loader `scan` itself calls
+    (`doctor._check_content`), so a malformed-JSON SBOM and an unreadable one are caught the
+    same way a missing one always was, by construction -- not by a second, hand-written
+    parity check that could drift from the first. See `doctor.py`'s module docstring for
+    the one remaining, deliberate exception: `iac.terraform_source`, whose HCL extraction
+    has no analogous "invalid content" error to reuse.
     """
 
     VULN_CONFIG = """version: 1
@@ -472,11 +638,10 @@ iac:
         with self.subTest("malformed_content"):
             root = _repo({"grype.json": "{}", "sboms/api.cdx.json": "{not valid json"})
             ready, scan_code = record("malformed_content", root, self.VULN_CONFIG)
-            # Documented gap: doctor checks existence/type/size, never content validity.
-            # `scan` still fails -- the safe direction holds -- doctor just cannot predict
-            # it without duplicating every loader's parser (see the Minor finding this
-            # answers, and doctor.py's module docstring).
-            self.assertTrue(ready)
+            # Closed gap: `doctor` now calls `sbom.load_sbom` on any sbom that clears the
+            # file-level check, the same loader `scan` calls, so a malformed-JSON sbom is a
+            # blocker in `doctor` for the same reason `scan` fails on it.
+            self.assertFalse(ready)
             self.assertNotEqual(scan_code, 0)
 
         with self.subTest("unreadable"):
@@ -486,10 +651,12 @@ iac:
                 ready, scan_code = record("unreadable", root, self.VULN_CONFIG)
             finally:
                 (root / "sboms" / "api.cdx.json").chmod(0o644)
-            # Same documented gap as malformed_content. `scan` fails closed with a clear
-            # message (exit 2) rather than an unhandled traceback -- see the OSError
-            # handling in cli.main and tests/test_cli_outputs.py.
-            self.assertTrue(ready)
+            # Closed gap, same mechanism as malformed_content: `load_sbom` tries to read the
+            # file's content and raises `PermissionError` (an `OSError`), which
+            # `doctor._check_content` catches the same way it catches invalid JSON. `scan`
+            # fails closed with a clear message (exit 2) rather than an unhandled traceback
+            # -- see the OSError handling in cli.main and tests/test_cli_outputs.py.
+            self.assertFalse(ready)
             self.assertEqual(scan_code, 2)
 
         # Printed for a human reading test output, and pins the table shape so a change to
