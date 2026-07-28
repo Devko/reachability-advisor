@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import sys
 from pathlib import Path
@@ -31,6 +32,7 @@ from .cli_quality import (
     _scope_security_profile_coverage,
 )
 from .compare import compare_findings, delta_fails, pr_delta, write_delta, write_delta_markdown
+from .config import LoadedConfig, load_config
 from .context import ContextError, load_context_file
 from .correlation import apply_correlations
 from .demo_assets import write_demo_inputs
@@ -199,6 +201,21 @@ def _load_vulnerability_inputs(paths: list[str]) -> list[Any]:
 
 
 def run_scan(args: argparse.Namespace) -> int:
+    # --sbom and --vuln-in are no longer `required=True` at the parser level, since a
+    # .reachability.yml can supply them instead (see `apply_config_defaults`). Enforce the
+    # same "at least one of each" requirement here, after config has had a chance to fill
+    # them in, so a scan with neither a flag nor a config entry still fails closed instead
+    # of silently running against nothing.
+    if not args.sbom:
+        raise UserFacingError(
+            "At least one --sbom is required (or set artifacts.<name>.sbom in .reachability.yml).",
+            2,
+        )
+    if not args.vulns:
+        raise UserFacingError(
+            "At least one --vuln-in is required (or set evidence.vulnerabilities in .reachability.yml).",
+            2,
+        )
     vulnerability_inputs = list(args.vulns or [])
     security_evidence_inputs = [
         *list(args.security_evidence_in or []),
@@ -790,11 +807,137 @@ def run_init_policy(args: argparse.Namespace) -> int:
     return 0
 
 
+def apply_config_defaults(args: argparse.Namespace, loaded: LoadedConfig) -> argparse.Namespace:
+    """Fill unset `scan` arguments from configuration. An explicitly passed flag always wins.
+
+    `loaded.config` is a fully-validated `ReachabilityConfig` even when no `.reachability.yml`
+    was found -- `load_config` returns the schema's built-in defaults in that case, with
+    `loaded.path` left `None` to signal that nothing real was loaded. Most of those built-in
+    defaults (empty artifacts, empty evidence, no iac paths) are harmless no-ops here either
+    way. `gate.fail_on` is the one exception: it defaults to `"high"` in the schema -- a
+    reasonable default *for a config file that exists* -- but before this feature, omitting
+    `--fail-on-tier` (and `--policy`) meant no gate at all. Filling it unconditionally would
+    silently turn every existing no-config invocation into an enforced high-tier gate, which
+    is the exact silent-strengthening-by-surprise this project treats as a bug. So it is only
+    filled when a real config file was found; every other field stays safe to fill either way
+    because its "no file" value already matches the pre-config-support default.
+    """
+    explicit: set[str] = getattr(args, "_explicit", set())
+    config = loaded.config
+
+    def fill(attribute: str, value: Any) -> None:
+        if attribute in explicit or value in (None, (), []):
+            return
+        current = getattr(args, attribute, None)
+        if current in (None, [], ()):
+            setattr(args, attribute, value)
+
+    if loaded.path is not None:
+        fill("fail_on_tier", config.gate.fail_on)
+    fill("analysis_profile", config.gate.profile)
+    fill("sbom", [item.sbom for item in config.artifacts.values() if item.sbom])
+    fill(
+        "source_root",
+        [f"{name}={item.source}" for name, item in config.artifacts.items() if item.source],
+    )
+    fill(
+        "artifact_alias",
+        [f"{name}={item.image}" for name, item in config.artifacts.items() if item.image],
+    )
+    fill("vulns", list(config.evidence.get("vulnerabilities", ())))
+    fill("sast_in", list(config.evidence.get("sast", ())))
+    fill("dast_in", list(config.evidence.get("dast", ())))
+    fill("cspm_in", list(config.evidence.get("cspm", ())))
+    fill("terraform_plan", config.iac.get("terraform"))
+    fill("terraform_source", config.iac.get("terraform_source"))
+    fill(
+        "kubernetes_manifest",
+        [config.iac["kubernetes"]] if config.iac.get("kubernetes") else [],
+    )
+    return args
+
+
+def explicit_dests(parser: argparse.ArgumentParser, argv: list[str]) -> set[str]:
+    """Return the dests of options actually present in argv.
+
+    Both `--flag value` and `--flag=value` must be detected. Missing the second form
+    would let configuration silently override an explicitly passed gate value, which is
+    the same class of silent weakening this project refuses everywhere else.
+
+    A flag's `Action` lives on the subparser that defines it -- `scan`'s `--fail-on-tier`
+    is an action of the `scan` subparser, not of the top-level parser -- so this walks the
+    same subcommand chain argparse itself resolves (following each positional token that
+    names a subparsers choice, e.g. `scan`, or `config` then `explain`) and unions every
+    level's `_actions`. Checking only the top-level parser's `_actions` would silently find
+    nothing for any subcommand flag at all.
+
+    `_actions` is private but stable across every supported CPython; argparse exposes no
+    public way to map argv tokens back to destinations.
+    """
+    passed = {token.split("=", 1)[0] for token in argv if token.startswith("-")}
+    probes = [parser]
+    current: argparse.ArgumentParser = parser
+    for token in argv:
+        if token.startswith("-"):
+            continue
+        subparsers_action = next(
+            (
+                action
+                for action in current._actions
+                if isinstance(action, argparse._SubParsersAction)
+            ),
+            None,
+        )
+        if subparsers_action is None or token not in subparsers_action.choices:
+            break
+        current = subparsers_action.choices[token]
+        probes.append(current)
+    return {
+        action.dest
+        for probe in probes
+        for action in probe._actions
+        if action.dest != "help" and passed.intersection(action.option_strings)
+    }
+
+
+def _dotted_lookup(node: Any, dotted: str) -> Any:
+    """Walk a dotted key such as "gate.fail_on" through a nested dict to its value."""
+    for part in dotted.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node
+
+
+def cmd_config(args: argparse.Namespace) -> int:
+    loaded = load_config(getattr(args, "config", None))
+    if args.config_command == "validate":
+        print(f"Configuration valid: {loaded.path or 'defaults (no config file found)'}")
+        return 0
+    if not loaded.provenance:
+        print("No configuration file found; built-in defaults are in effect.")
+        return 0
+    # `loaded.provenance` maps each dotted key to the layer that set it, but not the
+    # resolved value itself -- "explain" is supposed to show both. `dataclasses.asdict`
+    # turns the validated, merged `ReachabilityConfig` back into a plain nested dict whose
+    # shape mirrors the dotted keys `_provenance` produced, so each key can be looked up
+    # directly instead of re-reading and re-merging the YAML layers a second time.
+    resolved = dataclasses.asdict(loaded.config)
+    width = max(len(key) for key in loaded.provenance)
+    for key in sorted(loaded.provenance):
+        value = _dotted_lookup(resolved, key)
+        print(f"{key.ljust(width)}  = {value!r}  <- {loaded.provenance[key]}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    args._explicit = explicit_dests(parser, list(argv) if argv is not None else sys.argv[1:])
     try:
         if args.command == "scan":
+            loaded = load_config(getattr(args, "config", None))
+            args = apply_config_defaults(args, loaded)
             return run_scan(args)
         if args.command == "validate":
             return run_validate(args)
@@ -828,6 +971,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_demo(args)
         if args.command == "export-semgrep-rules":
             return run_export_semgrep_rules(args)
+        if args.command == "config":
+            return cmd_config(args)
         if args.command == "version":
             print(__version__)
             return 0

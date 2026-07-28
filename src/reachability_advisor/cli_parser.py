@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 
+from .config import CONFIG_FILENAME
 from .models import Tier
 
 
@@ -18,8 +19,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     scan = sub.add_parser("scan", help="Analyze local evidence and write prioritized findings for CI, IDEs, and review.")
-    scan.add_argument("--sbom", action="append", required=True, help="CycloneDX JSON SBOM for one deployable artifact. Repeat for multiple artifacts.")
-    scan.add_argument("--vuln-in", dest="vulns", action="append", required=True, help="Vulnerability input: local JSON, Grype JSON, or OSV-Scanner-style JSON. Repeatable.")
+    scan.add_argument("--sbom", action="append", default=[], help="CycloneDX JSON SBOM for one deployable artifact. Repeat for multiple artifacts. Not required on the command line if artifacts.<name>.sbom is set in .reachability.yml.")
+    scan.add_argument("--vuln-in", dest="vulns", action="append", default=[], help="Vulnerability input: local JSON, Grype JSON, or OSV-Scanner-style JSON. Repeatable. Not required on the command line if evidence.vulnerabilities is set in .reachability.yml.")
     scan.add_argument("--source-root", action="append", default=[], help="Source mapping in artifact=path form, for example payments-api=src/payments. Repeatable.")
     scan.add_argument("--context", help="Context JSON keyed by artifact name. Use it for owner, environment, exposure, privilege, or manual evidence overrides.")
     scan.add_argument("--terraform-plan", help="Rendered Terraform plan JSON from `terraform show -json`. Use this for release-grade Terraform deployment evidence.")
@@ -43,8 +44,11 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument(
         "--analysis-profile",
         choices=["advisory", "production"],
-        default="advisory",
-        help="Use advisory for local triage. Use production for release gates; it requires external source evidence and rendered deployment evidence.",
+        help=(
+            "Use advisory for local triage. Use production for release gates; it requires "
+            "external source evidence and rendered deployment evidence. Defaults to advisory "
+            "(or gate.profile from .reachability.yml when a config file is present)."
+        ),
     )
     scan.add_argument("--min-artifact-match-coverage", type=float, help="Exit 10 when SBOM-to-deployment artifact match coverage is below this 0..1 ratio.")
     scan.add_argument("--min-strong-artifact-identity-coverage", type=float, help="Exit 10 when strong image/digest identity coverage is below this 0..1 ratio.")
@@ -72,6 +76,10 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--no-table", action="store_true", help="Do not print stdout table.")
     scan.add_argument("--fail-on-tier", choices=[tier.value for tier in Tier], help="Exit 10 when any non-excepted finding reaches this tier.")
     scan.add_argument("--skip-validation", action="store_true", help="Skip path validation before parsing.")
+    scan.add_argument(
+        "--config",
+        help=f"Path to {CONFIG_FILENAME}. Defaults to the nearest one up to the git root.",
+    )
 
     validate = sub.add_parser("validate", help="Validate paths and source-root syntax.")
     validate.add_argument("--sbom", action="append", required=True)
@@ -214,6 +222,15 @@ def build_parser() -> argparse.ArgumentParser:
     fixtures_run.add_argument("--fixture", help="Run only this fixture id.")
     fixtures_run.add_argument("--out", help="Write aggregate fixture report JSON.")
     fixtures_run.add_argument("--output-dir", help="Write per-fixture findings and coverage artifacts.")
+
+    config_cmd = sub.add_parser("config", help="Inspect resolved configuration.")
+    config_sub = config_cmd.add_subparsers(dest="config_command", required=True)
+    explain = config_sub.add_parser(
+        "explain", help="Print each resolved value and its source layer."
+    )
+    explain.add_argument("--config", help=f"Path to {CONFIG_FILENAME}.")
+    validate_cmd = config_sub.add_parser("validate", help="Validate configuration and exit.")
+    validate_cmd.add_argument("--config", help=f"Path to {CONFIG_FILENAME}.")
 
     sub.add_parser("version", help="Print version.")
     return parser
