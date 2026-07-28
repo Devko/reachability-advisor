@@ -32,7 +32,9 @@ from .cli_quality import (
     _scope_security_profile_coverage,
 )
 from .compare import compare_findings, delta_fails, pr_delta, write_delta, write_delta_markdown
-from .config import LoadedConfig, load_config
+from .config import CONFIG_FILENAME, LoadedConfig, load_config
+from .config_detect import detect_repo
+from .config_render import render_config
 from .context import ContextError, load_context_file
 from .correlation import apply_correlations
 from .demo_assets import write_demo_inputs
@@ -977,6 +979,39 @@ def cmd_config(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_init(args: argparse.Namespace) -> int:
+    """Scaffold `.reachability.yml` from what `detect_repo` finds under `--root`.
+
+    Never overwrites an existing config: PyYAML does not round-trip comments, so
+    a naive "regenerate in place" would silently strip every comment justifying a
+    gate the next time someone reruns `init`. `--refresh` writes the freshly
+    detected config to a side file instead, for the user to merge by hand. When
+    there is no existing config to protect, `--refresh` is a no-op flag and
+    `init` just writes `.reachability.yml` directly either way.
+    """
+    root = Path(args.root).resolve()
+    if not root.is_dir():
+        raise ValueError(f"{root}: --root is not a directory")
+    target = root / CONFIG_FILENAME
+    rendered = render_config(detect_repo(root))
+
+    if target.exists() and not args.refresh:
+        raise ValueError(
+            f"{target} already exists. `init` never rewrites it, because doing so would drop "
+            "your comments. Re-run with --refresh to write .reachability.detected.yml instead."
+        )
+    if target.exists():
+        side = root / ".reachability.detected.yml"
+        side.write_text(rendered, encoding="utf-8")
+        print(f"Wrote {side}. Merge anything you want into {target} by hand.")
+        return 0
+
+    target.write_text(rendered, encoding="utf-8")
+    print(f"Wrote {target}")
+    print("Next: reachability-advisor doctor")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1020,6 +1055,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_export_semgrep_rules(args)
         if args.command == "config":
             return cmd_config(args)
+        if args.command == "init":
+            return cmd_init(args)
         if args.command == "version":
             print(__version__)
             return 0

@@ -232,6 +232,18 @@ def build_parser() -> argparse.ArgumentParser:
     validate_cmd = config_sub.add_parser("validate", help="Validate configuration and exit.")
     validate_cmd.add_argument("--config", help=f"Path to {CONFIG_FILENAME}.")
 
+    init = sub.add_parser(
+        "init", help=f"Detect repository evidence and write {CONFIG_FILENAME}."
+    )
+    init.add_argument(
+        "--root", default=".", help="Repository root to inspect. Defaults to the working directory."
+    )
+    init.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Write newly detected values to .reachability.detected.yml instead of failing.",
+    )
+
     sub.add_parser("version", help="Print version.")
     return parser
 
