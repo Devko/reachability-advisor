@@ -2,11 +2,49 @@
 
 `doctor` exists to make one promise concrete: if it reports `ready`, `scan` will actually
 run against the declared configuration instead of failing on a missing file or a
-combination of inputs `scan` itself refuses. Every check here mirrors a real requirement
-inside `run_scan` / `apply_config_defaults` (cli.py) or `validate_paths` (validators.py) --
-a required flag, a file `scan` will try to open, or an input combination `scan` explicitly
-rejects -- rather than a heuristic about what "looks" complete. Anything doctor cannot
-verify, it says so; it never reports `ready` on evidence it has not actually checked.
+combination of inputs `scan` itself refuses. Every existence/type/size/extension check
+here calls the exact same functions `scan`'s own pre-flight `validate_paths` (validators.py)
+calls -- `_validate_file`, `_validate_kubernetes_manifest`, `_validate_terraform_source`,
+`_validate_source_root` -- rather than reimplementing `Path.exists()`/`Path.is_file()`
+checks that could silently drift from what `scan` actually enforces. The remaining checks
+(a required flag, an input combination `scan` explicitly rejects) mirror a real requirement
+inside `run_scan` / `apply_config_defaults` (cli.py) directly, for the same reason.
+
+Doctor stops at the same layer `validate_paths` does: does the declared path exist, is it
+the right kind of thing (a file, not a directory; a directory, not a file; YAML/JSON for a
+Kubernetes manifest), and is it non-empty. Neither doctor nor `validate_paths` opens a file
+to check whether its *content* parses (valid JSON/YAML, valid CycloneDX) or whether the
+process can actually read it (file permissions). That gap is intentional and shared: a file
+that exists, is the right kind, and is non-empty but contains garbage, or one `scan` cannot
+open because of filesystem permissions, passes both `doctor` and `validate_paths` and is
+only caught once `scan`'s own loaders try to parse or open it -- which fails closed with a
+clear, specific error (e.g. "invalid JSON", or a permission error), never a silent success
+and never an unhandled traceback. Doing that check here too would require doctor to
+duplicate every loader's parsing logic, which is exactly the kind of drift-prone
+reimplementation this module exists to avoid; "does it exist and is it usable as a file"
+is doctor's remit, "is it valid" stays `scan`'s.
+
+Two independent kinds of problem are reported. `blockers` are what stop `scan` from
+running at all, or from producing a trustworthy result: a required path that is missing,
+the wrong kind, or empty (an `error`-severity issue in `validate_paths`); at least one
+artifact must declare an `sbom` (`run_scan` raises without one); at least one vulnerability
+input must be declared; and `iac.terraform` / `iac.terraform_source` must never both be set
+(`scan` rejects that combination outright). `warnings` are gaps `validate_paths` itself
+only rates `warning` severity: `scan` still runs and still exits 0, just against weaker
+evidence -- a missing declared `source` root is the standing example, since `scan` falls
+back to SBOM/package-level evidence rather than failing. Doctor does not escalate a warning
+to a blocker just because `gate.profile` is `production`: `scan`'s own quality-gate
+thresholds under that profile (external evidence coverage, source-rule coverage, and so on)
+are computed from evidence content doctor cannot see without actually running `scan`, and
+inventing a static approximation of them here would be exactly the kind of guess this
+module exists to avoid making. The exit code reflects blockers only, so a repository that
+`scan` runs cleanly against is never reported "not ready" merely because its evidence is
+thin.
+
+No config file at all is reported as its own, first blocker rather than folded into
+"no artifacts declared": that is the first thing a new user hits running `doctor` before
+ever running `init`, and it deserves a message that names the actual next step instead of
+a generic "nothing is declared".
 """
 
 from __future__ import annotations
@@ -16,6 +54,13 @@ from pathlib import Path
 from typing import Any
 
 from .config import LoadedConfig
+from .validators import (
+    ValidationIssue,
+    _validate_file,
+    _validate_kubernetes_manifest,
+    _validate_source_root,
+    _validate_terraform_source,
+)
 
 GRYPE_COMMAND = "grype sbom:{sbom} -o json > {out}"
 SYFT_COMMAND = "syft dir:{path} -o cyclonedx-json > {out}"
@@ -34,33 +79,28 @@ class Readiness:
     ready: bool = False
     artifacts: list[ArtifactReadiness] = field(default_factory=list)
     blockers: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
     next_actions: list[str] = field(default_factory=list)
 
 
+def _record(readiness: Readiness, issues: list[ValidationIssue], *, context: str | None = None) -> None:
+    """File each issue `validate_paths`'s helpers raised as a doctor blocker or warning.
+
+    `error` severity means `validate_paths` would fail the scan (`has_errors` is true) --
+    that is a blocker. `warning` severity means `scan` runs anyway, just against weaker
+    evidence -- that stays a warning, never promoted to a blocker.
+    """
+    for issue in issues:
+        message = f"{context}: {issue.message}" if context else issue.message
+        bucket = readiness.blockers if issue.severity == "error" else readiness.warnings
+        bucket.append(message)
+
+
 def diagnose(loaded: LoadedConfig, root: Path) -> Readiness:
-    """Check every declared input actually exists, and that `scan` can run at all.
+    """Check every declared input the same way `scan` will, and that `scan` can run at all.
 
-    Two independent kinds of problem are reported, both as `blockers`, because both stop
-    `scan` from producing a trustworthy result:
-
-    - A path *declared* in `.reachability.yml` does not exist on disk. `scan` would either
-      fail to load it outright (an sbom or an evidence file) or silently degrade to weaker
-      evidence (a missing source root only warns in `validate_paths`) -- doctor treats both
-      the same way, because onboarding should surface every gap up front rather than lean
-      on `scan`'s own, more forgiving, per-input fault tolerance.
-    - The declared configuration cannot satisfy `scan`'s own structural requirements, even
-      if every path it names exists: at least one artifact must declare an `sbom`
-      (`run_scan` raises without one), at least one vulnerability input must be declared,
-      and `iac.terraform` and `iac.terraform_source` must never both be set (`scan` rejects
-      that combination outright -- and `config_detect.detect_repo` can produce exactly that
-      combination for a repository that has both a `.tf` source tree and a rendered plan
-      checked in, so this is reachable straight out of `init`, not just from a hand-edited
-      config).
-
-    No config file at all is reported as its own, first blocker rather than folded into
-    "no artifacts declared": that is the first thing a new user hits running `doctor`
-    before ever running `init`, and it deserves a message that names the actual next step
-    instead of a generic "nothing is declared".
+    See the module docstring for how blockers and warnings are told apart, and why content
+    validity and file readability are out of scope for both doctor and `validate_paths`.
     """
     readiness = Readiness()
     root = root.resolve()
@@ -82,16 +122,29 @@ def diagnose(loaded: LoadedConfig, root: Path) -> Readiness:
     for name, artifact in sorted(config.artifacts.items()):
         present: dict[str, bool] = {}
         missing: list[str] = []
-        for label, value in (("sbom", artifact.sbom), ("source", artifact.source)):
-            if value is None:
-                present[label] = False
-                missing.append(label)
-                continue
-            exists = (root / value).exists()
-            present[label] = exists
-            if not exists:
-                missing.append(label)
-                readiness.blockers.append(f"{name}: declared {label} {value!r} does not exist")
+
+        if artifact.sbom is None:
+            present["sbom"] = False
+            missing.append("sbom")
+        else:
+            sbom_issues: list[ValidationIssue] = []
+            _validate_file(str(root / artifact.sbom), "sbom", sbom_issues)
+            present["sbom"] = not sbom_issues
+            if sbom_issues:
+                missing.append("sbom")
+            _record(readiness, sbom_issues, context=f"{name}: sbom")
+
+        if artifact.source is None:
+            present["source"] = False
+            missing.append("source")
+        else:
+            source_issues: list[ValidationIssue] = []
+            _validate_source_root(str(root / artifact.source), f"{name}: source", source_issues)
+            present["source"] = not source_issues
+            if source_issues:
+                missing.append("source")
+            _record(readiness, source_issues, context=f"{name}: source")
+
         if artifact.sbom is None:
             readiness.next_actions.append(
                 f"{name}: "
@@ -120,22 +173,25 @@ def diagnose(loaded: LoadedConfig, root: Path) -> Readiness:
             GRYPE_COMMAND.format(sbom=sbom or "sboms/<artifact>.cdx.json", out="grype.json")
         )
     for item in vulnerabilities:
-        if not (root / item).exists():
-            readiness.blockers.append(f"declared vulnerability report {item!r} does not exist")
+        vuln_issues: list[ValidationIssue] = []
+        _validate_file(str(root / item), "vuln-in", vuln_issues)
+        if vuln_issues:
             readiness.next_actions.append(
                 GRYPE_COMMAND.format(sbom="sboms/<artifact>.cdx.json", out=item)
             )
+        _record(readiness, vuln_issues, context="vulnerability report")
 
     # sast/dast/cspm are optional evidence -- scan runs fine with none of them declared --
-    # but a *declared* path that does not exist is a hard failure in `validate_paths`
+    # but a *declared* path that fails `_validate_file` is a hard failure in `validate_paths`
     # ("error" severity), the same as a missing sbom. `evidence.posture` and
     # `evidence.source` are accepted by the schema but not yet wired into
     # `apply_config_defaults`/`run_scan` at all, so checking their existence here would
     # claim a relevance they do not currently have; they are deliberately left unchecked.
     for category in ("sast", "dast", "cspm"):
         for item in config.evidence.get(category, ()):
-            if not (root / item).exists():
-                readiness.blockers.append(f"declared {category} evidence {item!r} does not exist")
+            category_issues: list[ValidationIssue] = []
+            _validate_file(str(root / item), category, category_issues)
+            _record(readiness, category_issues, context=f"{category} evidence")
 
     terraform = config.iac.get("terraform")
     terraform_source = config.iac.get("terraform_source")
@@ -145,15 +201,22 @@ def diagnose(loaded: LoadedConfig, root: Path) -> Readiness:
             "Terraform input at a time. Keep iac.terraform (a rendered plan is stronger "
             "evidence) and remove iac.terraform_source, or the reverse."
         )
-    if terraform and not (root / terraform).exists():
-        readiness.blockers.append(f"declared Terraform plan {terraform!r} does not exist")
-        readiness.next_actions.append(TERRAFORM_COMMAND.format(out=terraform))
-    if terraform_source and not (root / terraform_source).exists():
-        readiness.blockers.append(f"declared Terraform source {terraform_source!r} does not exist")
+    if terraform:
+        terraform_issues: list[ValidationIssue] = []
+        _validate_file(str(root / terraform), "terraform-plan", terraform_issues)
+        if terraform_issues:
+            readiness.next_actions.append(TERRAFORM_COMMAND.format(out=terraform))
+        _record(readiness, terraform_issues, context="Terraform plan")
+    if terraform_source:
+        terraform_source_issues: list[ValidationIssue] = []
+        _validate_terraform_source(str(root / terraform_source), terraform_source_issues)
+        _record(readiness, terraform_source_issues)
 
     kubernetes = config.iac.get("kubernetes")
-    if kubernetes and not (root / kubernetes).exists():
-        readiness.blockers.append(f"declared Kubernetes manifest {kubernetes!r} does not exist")
+    if kubernetes:
+        kubernetes_issues: list[ValidationIssue] = []
+        _validate_kubernetes_manifest(str(root / kubernetes), kubernetes_issues)
+        _record(readiness, kubernetes_issues)
 
     if config.gate.profile == "production" and readiness.blockers:
         # This does not change `ready` -- it was already going to be False, since every
@@ -182,6 +245,10 @@ def render_text(readiness: Readiness) -> str:
         lines.append("")
         lines.append("Blockers:")
         lines.extend(f"  - {item}" for item in readiness.blockers)
+    if readiness.warnings:
+        lines.append("")
+        lines.append("Warnings:")
+        lines.extend(f"  - {item}" for item in readiness.warnings)
     if readiness.next_actions:
         lines.append("")
         lines.append("Next:")
@@ -199,5 +266,6 @@ def readiness_to_dict(readiness: Readiness) -> dict[str, Any]:
             for item in readiness.artifacts
         ],
         "blockers": list(readiness.blockers),
+        "warnings": list(readiness.warnings),
         "next_actions": list(readiness.next_actions),
     }

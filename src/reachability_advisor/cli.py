@@ -1111,6 +1111,16 @@ def main(argv: list[str] | None = None) -> int:
     except (UserFacingError, SbomError, VulnerabilityError, ContextError, FixtureError, HclAuditError, KubernetesManifestError, ArtifactManifestError, BenchmarkSnapshotError, SecurityEvidenceError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return exc.exit_code if isinstance(exc, UserFacingError) else 2
+    except OSError as exc:
+        # An input this project does not control the permissions of (an unreadable file,
+        # a broken symlink, a directory where a file was expected but slipped past the
+        # lighter-weight `validate_paths` pre-check) must still fail closed with a clear
+        # message, the same as every other hostile-or-unusual input handled above -- never
+        # an unhandled traceback. `OSError` is deliberately its own `except` clause, not
+        # folded into the tuple above: none of those exception types are ever raised for a
+        # filesystem-level failure, so this can only ever catch exactly that.
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

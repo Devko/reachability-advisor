@@ -57,6 +57,35 @@ class CliTests(unittest.TestCase):
         ])
         self.assertEqual(code, 2)
 
+    def test_scan_fails_closed_not_with_a_traceback_on_an_unreadable_input(self) -> None:
+        # Pre-existing bug, unrelated to `doctor`: an input file that exists, is a file,
+        # and is non-empty (so it clears `validate_paths`'s pre-flight checks) but that the
+        # process cannot open -- e.g. chmod 000 -- used to make `scan` crash with an
+        # unhandled `PermissionError` traceback and exit 1. This project's stated
+        # constraint is that hostile or unusual input always fails closed with a clear
+        # message, never a raw traceback. `cli.main`'s outermost exception handler now
+        # catches `OSError` alongside the other input-error types and reports exit 2.
+        with tempfile.TemporaryDirectory() as tmp:
+            sbom_path = Path(tmp) / "sbom.json"
+            sbom_path.write_text('{"bomFormat":"CycloneDX","components":[]}', encoding="utf-8")
+            sbom_path.chmod(0o000)
+            err = io.StringIO()
+            try:
+                with patch("sys.stderr", err):
+                    code = main([
+                        "scan",
+                        "--sbom", str(sbom_path),
+                        "--vuln-in", str(ROOT / "samples/vulnerabilities.json"),
+                        "--no-table",
+                    ])
+            finally:
+                sbom_path.chmod(0o644)
+            self.assertEqual(code, 2)
+            text = err.getvalue()
+            self.assertIn("error:", text)
+            self.assertNotIn("Traceback", text)
+            self.assertIn(str(sbom_path), text)
+
     def test_scan_writes_all_developer_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)

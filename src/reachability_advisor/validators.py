@@ -37,13 +37,7 @@ def validate_paths(
     if terraform_plan:
         _validate_file(terraform_plan, "terraform-plan", issues)
     for manifest in kubernetes_manifests or []:
-        manifest_path = Path(manifest)
-        if not manifest_path.exists():
-            issues.append(ValidationIssue("error", "kubernetes-manifest", f"Rendered Kubernetes manifest path was not found: {manifest}. Provide a rendered YAML/JSON file or directory."))
-        elif manifest_path.is_file() and manifest_path.suffix.lower() not in {".yaml", ".yml", ".json"}:
-            issues.append(ValidationIssue("error", "kubernetes-manifest", f"Kubernetes manifest must be YAML or JSON: {manifest}. Render Helm/Kustomize output before scanning."))
-        elif manifest_path.is_dir() and not any(item.suffix.lower() in {".yaml", ".yml", ".json"} for item in manifest_path.rglob("*") if item.is_file()):
-            issues.append(ValidationIssue("warning", "kubernetes-manifest", f"Kubernetes manifest directory contains no YAML or JSON files: {manifest}. No Kubernetes deployment evidence will be added."))
+        _validate_kubernetes_manifest(manifest, issues)
     if policy:
         _validate_file(policy, "policy", issues)
     if reachability_rules:
@@ -55,13 +49,7 @@ def validate_paths(
     for path in artifact_manifests or []:
         _validate_file(path, "artifact-manifest", issues)
     if terraform_source:
-        source_path = Path(terraform_source)
-        if not source_path.exists():
-            issues.append(ValidationIssue("error", "terraform-source", f"Terraform source path was not found: {terraform_source}. Provide a .tf file or directory."))
-        elif source_path.is_file() and source_path.suffix != ".tf":
-            issues.append(ValidationIssue("error", "terraform-source", f"Terraform source must be a .tf file or directory: {terraform_source}."))
-        elif source_path.is_dir() and not any(source_path.rglob("*.tf")):
-            issues.append(ValidationIssue("warning", "terraform-source", f"Terraform source directory contains no .tf files: {terraform_source}. No Terraform source evidence will be added."))
+        _validate_terraform_source(terraform_source, issues)
     for source_root in source_roots or []:
         if "=" not in source_root:
             issues.append(ValidationIssue("error", source_root, "Source root must use artifact=path syntax, for example payments-api=src/payments-api."))
@@ -69,11 +57,7 @@ def validate_paths(
         artifact, raw_path = source_root.split("=", 1)
         if not artifact.strip():
             issues.append(ValidationIssue("error", source_root, "Source root artifact name is empty. Put the SBOM artifact name before '='."))
-        root_path = Path(raw_path)
-        if not root_path.exists():
-            issues.append(ValidationIssue("warning", source_root, "Source root path was not found. Source reachability will fall back to SBOM/package evidence only."))
-        elif not root_path.is_dir():
-            issues.append(ValidationIssue("error", source_root, "Source root must point to a directory containing the artifact source code."))
+        _validate_source_root(raw_path, source_root, issues)
     return issues
 
 
@@ -93,6 +77,58 @@ def _validate_file(path: str, label: str, issues: list[ValidationIssue]) -> None
         issues.append(ValidationIssue("error", label, f"Expected a file but got a directory or special path: {path}."))
     elif file_path.stat().st_size == 0:
         issues.append(ValidationIssue("error", label, f"Input file is empty: {path}. Generate a valid JSON/YAML report before scanning."))
+
+
+def _validate_kubernetes_manifest(manifest: str, issues: list[ValidationIssue]) -> None:
+    """Check one declared Kubernetes manifest path the same way `scan` will use it.
+
+    Factored out of `validate_paths` (rather than left inline) so `doctor` can call this
+    exact function per declared `iac.kubernetes` path instead of reimplementing the
+    extension/content checks and risking the two silently drifting apart.
+    """
+    manifest_path = Path(manifest)
+    if not manifest_path.exists():
+        issues.append(ValidationIssue("error", "kubernetes-manifest", f"Rendered Kubernetes manifest path was not found: {manifest}. Provide a rendered YAML/JSON file or directory."))
+    elif manifest_path.is_file() and manifest_path.suffix.lower() not in {".yaml", ".yml", ".json"}:
+        issues.append(ValidationIssue("error", "kubernetes-manifest", f"Kubernetes manifest must be YAML or JSON: {manifest}. Render Helm/Kustomize output before scanning."))
+    elif manifest_path.is_dir() and not any(item.suffix.lower() in {".yaml", ".yml", ".json"} for item in manifest_path.rglob("*") if item.is_file()):
+        issues.append(ValidationIssue("warning", "kubernetes-manifest", f"Kubernetes manifest directory contains no YAML or JSON files: {manifest}. No Kubernetes deployment evidence will be added."))
+
+
+def _validate_terraform_source(terraform_source: str, issues: list[ValidationIssue]) -> None:
+    """Check one declared Terraform source path the same way `scan` will use it.
+
+    Factored out of `validate_paths` for the same reason as `_validate_kubernetes_manifest`:
+    `doctor` calls this directly for `iac.terraform_source` instead of reimplementing the
+    file-suffix/empty-directory checks.
+    """
+    source_path = Path(terraform_source)
+    if not source_path.exists():
+        issues.append(ValidationIssue("error", "terraform-source", f"Terraform source path was not found: {terraform_source}. Provide a .tf file or directory."))
+    elif source_path.is_file() and source_path.suffix != ".tf":
+        issues.append(ValidationIssue("error", "terraform-source", f"Terraform source must be a .tf file or directory: {terraform_source}."))
+    elif source_path.is_dir() and not any(source_path.rglob("*.tf")):
+        issues.append(ValidationIssue("warning", "terraform-source", f"Terraform source directory contains no .tf files: {terraform_source}. No Terraform source evidence will be added."))
+
+
+def _validate_source_root(raw_path: str, target: str, issues: list[ValidationIssue]) -> None:
+    """Check one already-parsed `artifact=path` source root the same way `scan` will use it.
+
+    Factored out of `validate_paths`'s `source_roots` loop (which still owns splitting
+    `artifact=path` and validating the artifact name) so `doctor` can run the identical
+    existence/directory check against `artifacts.<name>.source` from `.reachability.yml`,
+    where there is no `artifact=path` token to split -- only the already-known raw path and
+    a label to attach to any issue raised.
+
+    A missing source root is only a *warning*: `scan` still runs, falling back to
+    SBOM/package-level evidence. An existing-but-not-a-directory source root is an *error*:
+    `scan` cannot treat a file as a source tree to walk.
+    """
+    root_path = Path(raw_path)
+    if not root_path.exists():
+        issues.append(ValidationIssue("warning", target, "Source root path was not found. Source reachability will fall back to SBOM/package evidence only."))
+    elif not root_path.is_dir():
+        issues.append(ValidationIssue("error", target, "Source root must point to a directory containing the artifact source code."))
 
 
 def has_errors(issues: list[ValidationIssue]) -> bool:
