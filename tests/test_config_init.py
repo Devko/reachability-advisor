@@ -7,11 +7,15 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
+import yaml
+
+import reachability_advisor.config_render as config_render
 from reachability_advisor.cli import main
 from reachability_advisor.config import CONFIG_FILENAME, load_config
 from reachability_advisor.config_detect import DetectedArtifact, Detection, detect_repo
-from reachability_advisor.config_render import render_config
+from reachability_advisor.config_render import RenderConfigError, render_config
 
 
 def _repo(files: dict[str, str]) -> Path:
@@ -81,6 +85,41 @@ class InitTests(unittest.TestCase):
         root = _repo({})
         missing = root / "does-not-exist"
         self.assertEqual(main(["init", "--root", str(missing)]), 2)
+
+    # -- TOCTOU: a file appearing between the exists() check and the write --------
+
+    def test_a_file_created_between_the_exists_check_and_the_write_is_not_clobbered(
+        self,
+    ) -> None:
+        # Regression: the old code's final write was `target.write_text(rendered)`,
+        # unconditional after an earlier `target.exists()` check -- a file created in
+        # that window would be silently overwritten, exit 0, no warning. Patching
+        # Path.exists to always report False reproduces exactly that stale read
+        # (cmd_init's own checks now see "does not exist") without needing a second,
+        # real concurrent process; a real, pre-existing config file is still sitting
+        # on disk the whole time. Exclusive creation ("x" mode) is what must still
+        # refuse to overwrite it regardless of what the earlier check believed.
+        root = _repo({"sboms/api.cdx.json": "{}"})
+        target = root / CONFIG_FILENAME
+        target.write_text("version: 1\n# a real, pre-existing config\n", encoding="utf-8")
+
+        with mock.patch.object(Path, "exists", return_value=False):
+            code = main(["init", "--root", str(root)])
+
+        self.assertEqual(code, 2)
+        self.assertIn("# a real, pre-existing config", target.read_text(encoding="utf-8"))
+
+    # -- dangling symlink: refuse rather than write through it (Minor 6) ----------
+
+    def test_writing_through_a_dangling_symlink_refuses_rather_than_following_it(self) -> None:
+        root = _repo({"sboms/api.cdx.json": "{}"})
+        target = root / CONFIG_FILENAME
+        missing = root / "does-not-exist.yml"
+        target.symlink_to(missing)
+
+        self.assertEqual(main(["init", "--root", str(root)]), 2)
+        self.assertTrue(target.is_symlink(), "the symlink itself must be left alone")
+        self.assertFalse(missing.exists(), "must never silently create the resolved target")
 
     def test_successful_write_reports_the_next_step(self) -> None:
         root = _repo({"sboms/api.cdx.json": "{}"})
@@ -172,6 +211,56 @@ class InitTests(unittest.TestCase):
         text = (root / CONFIG_FILENAME).read_text(encoding="utf-8")
         self.assertNotIn("duplicate", text.lower())
 
+    def test_a_source_at_the_repository_root_is_flagged_against_a_same_named_sbom(
+        self,
+    ) -> None:
+        # Important 5 regression: for source == ".", detect_repo gives the artifact
+        # the real candidate root.name -- but the old config_render._natural_key
+        # independently recomputed PurePosixPath(".").name, which is always empty,
+        # and returned None instead, so a genuine duplicate that config_detect itself
+        # would flag went unflagged. Reproduced here with an SBOM whose stem equals
+        # the repository's own directory name, alongside a lockfile-derived artifact
+        # whose source is the repo root -- exactly the pairing that must now match.
+        root = _repo({})
+        (root / f"{root.name}.cdx.json").write_text("{}", encoding="utf-8")
+        (root / "package-lock.json").write_text("{}", encoding="utf-8")
+
+        detection = detect_repo(root)
+        self.assertEqual(detection.root_name, root.name)
+        self.assertEqual(len(detection.artifacts), 2)
+        sboms = [a for a in detection.artifacts if a.sbom]
+        sources = [a for a in detection.artifacts if a.source == "."]
+        self.assertEqual(len(sboms), 1)
+        self.assertEqual(len(sources), 1)
+
+        self.assertEqual(main(["init", "--root", str(root)]), 0)
+        text = (root / CONFIG_FILENAME).read_text(encoding="utf-8")
+        self.assertIn("duplicate", text.lower())
+        loaded = load_config(root / CONFIG_FILENAME)
+        self.assertEqual(len(loaded.config.artifacts), 2)
+
+    # -- YAML's 1024-character simple-key limit (Critical 1) --------------
+
+    def test_a_deeply_nested_duplicate_directory_still_produces_a_loadable_config(
+        self,
+    ) -> None:
+        # Reproduces the reviewer's exact repro end to end: two directories named
+        # "api", one nested 120 levels deep. The old fallback name
+        # (identity.replace("/", "-"), the full relative path) exceeded YAML's
+        # 1024-character implicit-mapping-key limit -- `init` still reported exit 0,
+        # and load_config then failed with "while scanning a simple key". This must
+        # now both succeed and load back cleanly.
+        root = _repo({"api/package-lock.json": "{}"})
+        deep = root
+        for i in range(120):
+            deep = deep / f"directory{i:03d}"
+        (deep / "api").mkdir(parents=True)
+        (deep / "api" / "package-lock.json").write_text("{}", encoding="utf-8")
+
+        self.assertEqual(main(["init", "--root", str(root)]), 0)
+        loaded = load_config(root / CONFIG_FILENAME)
+        self.assertEqual(len(loaded.config.artifacts), 2)
+
     # -- hostile-but-real paths must round-trip through load_config -------
 
     def test_hostile_characters_in_a_detected_path_round_trip(self) -> None:
@@ -209,6 +298,21 @@ class InitTests(unittest.TestCase):
         hostile_dir = "we\nird"
         root = _repo({f"{hostile_dir}/package-lock.json": "{}"})
         self.assertEqual(main(["init", "--root", str(root)]), 0)
+        loaded = load_config(root / CONFIG_FILENAME)
+        self.assertIn(hostile_dir, loaded.config.artifacts)
+
+    def test_control_character_in_a_detected_name_still_loads_back(self) -> None:
+        # Critical 2 regression, reproduced end to end: a name containing a raw
+        # control character (here \x01) used to land unescaped in a `# TODO`
+        # comment -- `_comment` only handled \r and \n. YAML forbids an unescaped
+        # control byte *anywhere* in a document, so the whole file failed to parse
+        # (confirmed directly: yaml.safe_load raised "special characters are not
+        # allowed"), while `init` still reported success. See config_render._comment.
+        hostile_dir = "we\x01ird"
+        root = _repo({f"{hostile_dir}/package-lock.json": "{}"})
+        self.assertEqual(main(["init", "--root", str(root)]), 0)
+        text = (root / CONFIG_FILENAME).read_text(encoding="utf-8")
+        self.assertNotIn("\x01", text)
         loaded = load_config(root / CONFIG_FILENAME)
         self.assertIn(hostile_dir, loaded.config.artifacts)
 
@@ -330,6 +434,102 @@ class RenderConfigDirectTests(unittest.TestCase):
         ])
         rendered = render_config(detection)
         self.assertNotIn("duplicate", rendered.lower())
+
+    def test_a_source_that_is_the_repository_root_is_flagged_when_root_name_is_known(
+        self,
+    ) -> None:
+        # Important 5 regression, at the render_config level directly (see
+        # InitTests.test_a_source_at_the_repository_root_is_flagged_against_a_same_named_sbom
+        # for the full detect_repo -> init -> load_config version). With a known
+        # `root_name` -- exactly what detect_repo always sets -- a source of "."
+        # shares its candidate name with an SBOM whose stem equals that root name,
+        # and must now be flagged, unlike the unknown-root_name case above.
+        detection = Detection(
+            root_name="myrepo",
+            artifacts=[
+                DetectedArtifact(name="myrepo", sbom="sboms/myrepo.cdx.json"),
+                DetectedArtifact(name="root-svc", source="."),
+            ],
+        )
+        rendered = render_config(detection)
+        self.assertIn("duplicate", rendered.lower())
+        self.assertIn("root-svc", rendered)
+
+
+class RenderConfigGateBlockTests(unittest.TestCase):
+    """Important 4: pin the `gate:` block actually being emitted.
+
+    Deleting all three `gate:`-emitting lines from `render_config` left all existing
+    tests green before this class existed: `GateConfig`'s dataclass defaults
+    coincidentally match the hardcoded values, and a missing `gate:` key degrades
+    cleanly to `{}` in validate_config. Asserting only on `loaded.config.gate.*`
+    cannot tell "explicitly written" apart from "defaulted because absent" -- so this
+    parses the *raw* YAML text directly (bypassing schema defaulting entirely) and
+    checks the key is actually there, in addition to checking the rendered text.
+    """
+
+    def test_gate_block_is_present_in_the_rendered_text(self) -> None:
+        rendered = render_config(Detection())
+        self.assertIn("\ngate:\n", rendered)
+        self.assertIn("  profile: advisory", rendered)
+        self.assertIn("  fail_on: high", rendered)
+
+    def test_gate_block_is_present_in_the_raw_parsed_yaml_not_just_schema_defaults(
+        self,
+    ) -> None:
+        rendered = render_config(Detection())
+        raw = yaml.safe_load(rendered)
+        # Parsed with plain yaml.safe_load, not load_config/validate_config: this
+        # mapping has no schema defaults applied at all, so "gate" in raw can only be
+        # true if render_config actually wrote the key.
+        self.assertIn("gate", raw)
+        self.assertEqual(raw["gate"], {"profile": "advisory", "fail_on": "high"})
+
+
+class RenderConfigRoundTripGuardTests(unittest.TestCase):
+    """The general guard: render_config must refuse to return a document it cannot
+    load and validate back, rather than hand back something broken with no error.
+    """
+
+    def test_guard_rejects_yaml_that_does_not_parse(self) -> None:
+        with self.assertRaises(RenderConfigError):
+            config_render._verify_round_trips("version: 1\n  bad: [1, 2\n")
+
+    def test_guard_rejects_a_document_that_fails_schema_validation(self) -> None:
+        with self.assertRaises(RenderConfigError):
+            config_render._verify_round_trips("gate:\n  profile: not-a-real-profile\n")
+
+    def test_guard_accepts_a_well_formed_document(self) -> None:
+        config_render._verify_round_trips("version: 1\n")  # must not raise
+
+    def test_render_config_raises_if_an_artifact_name_is_too_long_to_load_back(self) -> None:
+        # render_config is a public function accepting any Detection -- even one
+        # whose artifact name was never bounded by config_detect (e.g. a hand-built
+        # Detection, or some future detection code path that forgets to bound it).
+        # The guard must catch this class of defect regardless of which code path
+        # produced the too-long name, not only detect_repo's own fallback.
+        too_long_name = "x" * 1200
+        detection = Detection(artifacts=[DetectedArtifact(name=too_long_name, source="src")])
+        with self.assertRaises(RenderConfigError):
+            render_config(detection)
+
+    def test_render_config_raises_instead_of_returning_broken_yaml_if_comment_sanitizing_regresses(
+        self,
+    ) -> None:
+        # Simulates a future regression reintroducing exactly the Critical-2 defect
+        # (an unescaped control character reaching a comment) by neutering _comment
+        # itself. Proves the general guard is an independent safety net, not just a
+        # restatement of "the two known causes are fixed": render_config must fail
+        # loudly here even though the specific bug that motivated the guard no longer
+        # exists in _comment's real implementation.
+        detection = Detection(notes=["poisoned"])
+        original_comment = config_render._comment
+        config_render._comment = lambda text: text.replace("poisoned", "poi\x01soned")
+        try:
+            with self.assertRaises(RenderConfigError):
+                render_config(detection)
+        finally:
+            config_render._comment = original_comment
 
 
 if __name__ == "__main__":

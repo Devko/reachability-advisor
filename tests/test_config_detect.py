@@ -218,6 +218,26 @@ class DetectRepoCollisionTests(unittest.TestCase):
         self.assertEqual(len(names), len(set(names)), f"duplicate names: {names}")
         self.assertIn("sub-api-3", names)
 
+    def test_a_deeply_nested_collision_produces_a_bounded_unique_name(self) -> None:
+        # Regression: YAML limits an implicit mapping key to 1024 characters. The old
+        # fallback (identity.replace("/", "-")) used the *entire* relative path with
+        # no bound at all -- reproduced end to end: a 120-level-deep collision like
+        # this one used to produce a name over 1200 characters, which `init` would
+        # happily write and report success for, and `load_config` could never parse
+        # back ("while scanning a simple key"). See config_detect._bounded_fallback_name.
+        root = _tree({"api/package-lock.json": "{}"})
+        deep = root
+        for i in range(120):
+            deep = deep / f"directory{i:03d}"
+        (deep / "api").mkdir(parents=True)
+        (deep / "api" / "package-lock.json").write_text("{}", encoding="utf-8")
+
+        detection = detect_repo(root)
+        names = [item.name for item in detection.artifacts]
+        self.assertEqual(len(names), len(set(names)), f"duplicate names: {names}")
+        too_long = [name for name in names if len(name) > config_detect.MAX_ARTIFACT_NAME_LENGTH]
+        self.assertEqual(too_long, [], f"name(s) exceeded the bound: {too_long}")
+
 
 class DetectRepoTerraformPlanTests(unittest.TestCase):
     def test_detects_an_existing_terraform_plan_json(self) -> None:
@@ -408,6 +428,84 @@ class DetectRepoScaleTests(unittest.TestCase):
         finally:
             config_detect.MAX_FILES_SCANNED = original_cap
         self.assertTrue(any("stopped early" in note for note in detection.notes))
+
+
+class BoundedFallbackNameTests(unittest.TestCase):
+    """Direct unit tests for the truncate-plus-hash scheme fixing Critical 1."""
+
+    def test_a_short_name_is_left_untouched(self) -> None:
+        self.assertEqual(config_detect._bounded_fallback_name("services-api"), "services-api")
+
+    def test_a_name_at_exactly_the_limit_is_left_untouched(self) -> None:
+        name = "a" * config_detect.MAX_ARTIFACT_NAME_LENGTH
+        self.assertEqual(config_detect._bounded_fallback_name(name), name)
+
+    def test_a_name_one_over_the_limit_is_truncated(self) -> None:
+        name = "a" * (config_detect.MAX_ARTIFACT_NAME_LENGTH + 1)
+        bounded = config_detect._bounded_fallback_name(name)
+        self.assertLessEqual(len(bounded), config_detect.MAX_ARTIFACT_NAME_LENGTH)
+        self.assertNotEqual(bounded, name)
+
+    def test_two_long_names_sharing_a_prefix_do_not_collide_after_truncation(self) -> None:
+        # Without hashing the *whole* original string, two artifacts nested under a
+        # long shared ancestor path would truncate to the exact same fallback name.
+        prefix = "shared-ancestor-directory-" * 10
+        name_a = config_detect._bounded_fallback_name(prefix + "service-a")
+        name_b = config_detect._bounded_fallback_name(prefix + "service-b")
+        self.assertNotEqual(name_a, name_b)
+        self.assertLessEqual(len(name_a), config_detect.MAX_ARTIFACT_NAME_LENGTH)
+        self.assertLessEqual(len(name_b), config_detect.MAX_ARTIFACT_NAME_LENGTH)
+
+    def test_non_utf8_clean_names_are_bounded_without_crashing(self) -> None:
+        # A real, untrusted repository can produce a path containing a lone surrogate
+        # (os.walk decodes non-UTF8 filenames with surrogateescape). Hashing must not
+        # raise UnicodeEncodeError on that input.
+        name = "d\udcffir/" * 200 + "tail"
+        bounded = config_detect._bounded_fallback_name(name)
+        self.assertLessEqual(len(bounded), config_detect.MAX_ARTIFACT_NAME_LENGTH)
+
+
+class CandidateNameSharingTests(unittest.TestCase):
+    """config_render.py's duplicate-detection asks this module the exact question
+    detect_repo already answered (via artifact_candidate_name), instead of keeping
+    its own, independently-diverging copy of the algorithm -- see Important 5."""
+
+    def test_sbom_candidate_name_strips_a_known_suffix(self) -> None:
+        self.assertEqual(config_detect.sbom_candidate_name("sboms/api.cdx.json"), "api")
+
+    def test_sbom_candidate_name_falls_back_to_the_whole_stem_for_an_unknown_suffix(self) -> None:
+        self.assertEqual(config_detect.sbom_candidate_name("sboms/api.json"), "api.json")
+
+    def test_source_candidate_name_uses_the_directory_basename(self) -> None:
+        self.assertEqual(config_detect.source_candidate_name("services/api", "myrepo"), "api")
+
+    def test_source_candidate_name_falls_back_to_root_name_for_the_repository_root(self) -> None:
+        self.assertEqual(config_detect.source_candidate_name(".", "myrepo"), "myrepo")
+
+    def test_artifact_candidate_name_for_a_root_source_needs_a_known_root_name(self) -> None:
+        # Without a known root name (e.g. a hand-built Detection with root_name=""), a
+        # source of "." has no candidate to derive -- under-flagging a possible
+        # duplicate is the safe failure mode, not inventing a name.
+        self.assertIsNone(
+            config_detect.artifact_candidate_name(sbom=None, source=".", root_name="")
+        )
+        self.assertEqual(
+            config_detect.artifact_candidate_name(sbom=None, source=".", root_name="myrepo"),
+            "myrepo",
+        )
+
+    def test_artifact_candidate_name_prefers_sbom_over_source(self) -> None:
+        self.assertEqual(
+            config_detect.artifact_candidate_name(
+                sbom="sboms/api.cdx.json", source="services/other", root_name="myrepo"
+            ),
+            "api",
+        )
+
+    def test_artifact_candidate_name_is_none_with_neither_sbom_nor_source(self) -> None:
+        self.assertIsNone(
+            config_detect.artifact_candidate_name(sbom=None, source=None, root_name="myrepo")
+        )
 
 
 if __name__ == "__main__":

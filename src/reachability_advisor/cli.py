@@ -995,18 +995,40 @@ def cmd_init(args: argparse.Namespace) -> int:
     target = root / CONFIG_FILENAME
     rendered = render_config(detect_repo(root))
 
+    already_exists_message = (
+        f"{target} already exists. `init` never rewrites it, because doing so would drop "
+        "your comments. Re-run with --refresh to write .reachability.detected.yml instead."
+    )
+
     if target.exists() and not args.refresh:
-        raise ValueError(
-            f"{target} already exists. `init` never rewrites it, because doing so would drop "
-            "your comments. Re-run with --refresh to write .reachability.detected.yml instead."
-        )
+        raise ValueError(already_exists_message)
     if target.exists():
         side = root / ".reachability.detected.yml"
         side.write_text(rendered, encoding="utf-8")
         print(f"Wrote {side}. Merge anything you want into {target} by hand.")
         return 0
 
-    target.write_text(rendered, encoding="utf-8")
+    # The `exists()` checks above are a fast, cheap pre-check, not the actual guard:
+    # a file (or a broken symlink -- see below) could be created at `target` in the
+    # window between that check and this write. Opening with "x" (O_CREAT|O_EXCL) is
+    # what actually closes that race -- it creates the file atomically or fails, it
+    # never silently overwrites something that appeared in between.
+    #
+    # This also happens to resolve a separate, narrower oddity for free: POSIX
+    # mandates that O_CREAT|O_EXCL fails with EEXIST when the path names a symbolic
+    # link, even a dangling one whose target does not exist (verified directly).
+    # Without O_EXCL, `write_text` would follow a dangling `.reachability.yml`
+    # symlink and silently create the config at wherever the symlink pointed, not at
+    # the literal path the user showed us. Refusing here -- the same refusal as an
+    # ordinary already-existing config -- is the safer default: a symlink in that
+    # spot is unusual enough that guessing what the user meant is not this tool's
+    # call to make.
+    try:
+        with target.open("x", encoding="utf-8") as handle:
+            handle.write(rendered)
+    except FileExistsError:
+        raise ValueError(already_exists_message) from None
+
     print(f"Wrote {target}")
     print("Next: reachability-advisor doctor")
     return 0

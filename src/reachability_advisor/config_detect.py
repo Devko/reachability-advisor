@@ -19,11 +19,12 @@ degrade -- skip what it cannot read -- rather than raise or hang.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import stat
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 # Directories that are never descended into. This mirrors source_index.py's
 # ignored_dirs, plus a few extras relevant to what a repo *ships* (build
@@ -83,6 +84,20 @@ MAX_SBOM_IMAGE_SNIFF_BYTES = 2_000_000
 # `notes` rather than silently under-reporting.
 MAX_FILES_SCANNED = 200_000
 
+# YAML limits an implicit ("simple") mapping key to 1024 characters -- a limit of the
+# YAML 1.1 spec itself, which PyYAML's scanner enforces on load, not just a choice made
+# here. MAX_ARTIFACT_NAME_LENGTH is deliberately far below that: an artifact name is
+# also embedded in human-facing comments (a "possible duplicate of ..." TODO can name
+# several artifacts on one line), so a name anywhere near the hard limit would already
+# be unreadable long before it became unparseable. This only ever bounds the
+# *fallback* name computed from a full relative path in `_bounded_fallback_name` --
+# unlike a single filesystem path component (which the OS itself caps well under this),
+# a relative path has no such limit and can grow without bound in a sufficiently deep
+# monorepo (confirmed: a 120-level-deep collision produces a raw fallback over 1200
+# characters, well past YAML's own limit).
+MAX_ARTIFACT_NAME_LENGTH = 120
+_FALLBACK_HASH_LENGTH = 10
+
 
 @dataclass(frozen=True)
 class DetectedArtifact:
@@ -101,6 +116,13 @@ class Detection:
     terraform_source: str | None = None
     kubernetes: str | None = None
     notes: list[str] = field(default_factory=list)
+    # The scanned root directory's own basename, e.g. "myrepo". Used only by
+    # config_render.py's duplicate-detection (via `artifact_candidate_name`) to
+    # reconstruct the candidate name `detect_repo` would have tried for a
+    # `source == "."` artifact -- PurePosixPath(".").name is empty on its own.
+    # "" (never resolved, e.g. root is not a directory, or a Detection built by
+    # hand) is a legitimate, safe default: it means "unknown", not "empty name".
+    root_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -189,6 +211,30 @@ def _read_head(path: Path, max_bytes: int) -> str | None:
     return raw.decode("utf-8", errors="ignore")
 
 
+def _bounded_fallback_name(name: str) -> str:
+    """Truncate `name` to MAX_ARTIFACT_NAME_LENGTH, staying unique and recognisable.
+
+    A prefix of the original path-derived name is kept so a human can still recognise
+    it at a glance, plus a short hash of the *whole, untruncated* string appended so
+    that two different long names sharing a common prefix cannot silently collide
+    after truncation -- without the hash, two artifacts nested under a long-shared
+    ancestor path would both truncate to the exact same name. This is a fallback of a
+    fallback: `_unique_name`'s own numeric-suffix loop still runs on top of whatever
+    this returns, so even a hash collision is not fatal, only mildly more likely to
+    fall through to `-2`, `-3`, etc., same as any other collision.
+
+    The original, untruncated path is never lost: it stays recorded verbatim as the
+    artifact's own `sbom`/`source` value wherever this name is used as a mapping key
+    (see config_render.py) -- only the key itself is bounded.
+    """
+    if len(name) <= MAX_ARTIFACT_NAME_LENGTH:
+        return name
+    digest = hashlib.sha256(name.encode("utf-8", "surrogateescape")).hexdigest()
+    digest = digest[:_FALLBACK_HASH_LENGTH]
+    prefix_length = MAX_ARTIFACT_NAME_LENGTH - _FALLBACK_HASH_LENGTH - 1
+    return f"{name[:prefix_length]}-{digest}"
+
+
 def _unique_name(candidate: str, identity: str, claimed: set[str]) -> str:
     """Return a name not already in claimed, and reserve it.
 
@@ -205,6 +251,7 @@ def _unique_name(candidate: str, identity: str, claimed: set[str]) -> str:
         claimed.add(candidate)
         return candidate
     fallback = identity.replace("/", "-") or candidate or "artifact"
+    fallback = _bounded_fallback_name(fallback)
     if fallback not in claimed:
         claimed.add(fallback)
         return fallback
@@ -214,6 +261,61 @@ def _unique_name(candidate: str, identity: str, claimed: set[str]) -> str:
     unique = f"{fallback}-{index}"
     claimed.add(unique)
     return unique
+
+
+def sbom_candidate_name(sbom_path: str) -> str:
+    """The bare candidate name `detect_repo` tries first for an SBOM-derived artifact.
+
+    The file's own stem with a known SBOM suffix (SBOM_SUFFIXES, tried in order)
+    removed; falls back to the whole basename when no known suffix matches.
+
+    Exposed (alongside `source_candidate_name` and `artifact_candidate_name`) so any
+    other code that needs to answer "what name would detect_repo have tried here" --
+    currently config_render.py's duplicate-detection -- asks this module the question
+    directly instead of re-deriving its own, potentially diverging, copy of the answer.
+    """
+    stem = PurePosixPath(sbom_path).name
+    for suffix in SBOM_SUFFIXES:
+        if stem.endswith(suffix):
+            return stem[: -len(suffix)]
+    return stem
+
+
+def source_candidate_name(source_path: str, root_name: str) -> str:
+    """The bare candidate name `detect_repo` tries first for a source-derived artifact.
+
+    The source directory's own name, or `root_name` when the source *is* the
+    repository root -- a relative path of "." whose own PurePosixPath.name is empty
+    and would otherwise be lost. May return "" if both are empty (mirrors
+    `detect_repo`'s own pre-existing behaviour when the repository root itself has no
+    name, e.g. scanning the filesystem root "/"); `_unique_name` already treats an
+    empty candidate as unusable and falls through to its path-derived fallback.
+    """
+    name = PurePosixPath(source_path).name
+    return name or root_name
+
+
+def artifact_candidate_name(
+    *, sbom: str | None, source: str | None, root_name: str
+) -> str | None:
+    """The bare candidate name `detect_repo` would try first for this evidence.
+
+    Built from `sbom_candidate_name`/`source_candidate_name` -- the exact functions
+    `detect_repo` itself calls -- so a caller working only from a `DetectedArtifact`'s
+    public fields (no access to the filesystem `detect_repo` walked) can still ask the
+    exact question `detect_repo` already answered when it assigned `.name`, instead of
+    re-deriving its own notion of "natural name".
+
+    Returns None when there is no candidate to derive: neither `sbom` nor `source` is
+    present, or `source` is the repository root (".") and `root_name` is itself
+    unknown (empty) -- under-flagging a possible duplicate is the safe failure mode in
+    that case, not over-flagging one.
+    """
+    if sbom:
+        return sbom_candidate_name(sbom)
+    if source:
+        return source_candidate_name(source, root_name) or None
+    return None
 
 
 def _sbom_suffix(name: str) -> str | None:
@@ -290,6 +392,7 @@ def detect_repo(root: Path) -> Detection:
     if not root.is_dir():
         detection.notes.append(f"{root}: not a directory; nothing to detect.")
         return detection
+    detection.root_name = root.name
 
     walked = _walk(root)
     files = walked.files  # already sorted by path; see _walk's docstring
@@ -309,7 +412,7 @@ def detect_repo(root: Path) -> Detection:
     ]
     for path, suffix in sbom_entries:
         rel = _relative(path, root)
-        stem = path.name[: -len(suffix)]
+        stem = sbom_candidate_name(rel)
         identity = rel[: -len(suffix)] if rel.endswith(suffix) else rel
         name = _unique_name(stem, identity, claimed)
         detection.artifacts.append(
@@ -330,7 +433,7 @@ def detect_repo(root: Path) -> Detection:
             # record for the identical path.
             continue
         seen_source_dirs.add(source_rel)
-        candidate = source_dir.name if source_dir != root else root.name
+        candidate = source_candidate_name(source_rel, root.name)
         name = _unique_name(candidate, source_rel, claimed)
         detection.artifacts.append(
             DetectedArtifact(name=name, source=source_rel, ecosystem=ecosystem)
@@ -396,6 +499,7 @@ def detect_repo(root: Path) -> Detection:
 __all__ = [
     "HEAD_SNIFF_BYTES",
     "LOCKFILE_ECOSYSTEMS",
+    "MAX_ARTIFACT_NAME_LENGTH",
     "MAX_FILES_SCANNED",
     "MAX_SBOM_IMAGE_SNIFF_BYTES",
     "SBOM_COMMANDS",
@@ -404,5 +508,8 @@ __all__ = [
     "VULNERABILITY_REPORT_NAMES",
     "Detection",
     "DetectedArtifact",
+    "artifact_candidate_name",
     "detect_repo",
+    "sbom_candidate_name",
+    "source_candidate_name",
 ]
